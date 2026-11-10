@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>THE LAST SIGNAL - Act II: City of Wires (3D Prototype)</title>
+<link rel="stylesheet" href="styles.css">
+<script type="importmap">{"imports": {"three": "./three.module.js"}}</script>
+<style>
+/* Act II-only: pressure bars and feeder rows reuse the HUD bar style */
+.valve-row,.feeder-row{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:13px}
+.valve-row label,.feeder-row label{width:110px;color:#9fb8c8}
+.valve-row .bar,.feeder-row .bar{flex:1}
+.valve-row .val,.feeder-row .val{width:44px;text-align:right;color:#ffd166}
+.valve-row button,.feeder-row button{background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:14px}
+#valveStatus,#scadaStatus{font-size:13px;color:#7ac74f;margin:6px 0;min-height:18px}
+#bombVal{color:#ef476f;font-weight:bold}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="loading"><div class="load-box"><h2>THE LAST SIGNAL</h2><p id="loadingText">Loading characters...</p><p id="loadingError" class="hidden"></p><button id="loadingContinue" class="hidden">Continue without the missing characters</button></div></div>
+  <canvas id="scene"></canvas>
+  <div id="hud">
+    <div class="hud-title">THE LAST SIGNAL <span>- Act II: City of Wires</span></div>
+    <div class="hud-row">
+      <div class="meter"><label>Trust - Jade ↔ Caleb</label><div class="bar"><div id="trustBar" style="width:30%"></div></div><span id="trustVal">3 / 10</span></div>
+      <div class="meter"><label id="timerLabel">Mission clock</label><div class="bar"><div id="timerBar" style="width:100%"></div></div><span id="timerVal">--:--</span></div>
+    </div>
+    <div class="hud-row" id="integrity">
+      <div class="meter small"><label>Transit</label><div class="bar"><div id="intTransit" style="width:70%"></div></div></div>
+      <div class="meter small"><label>Water</label><div class="bar"><div id="intWater" style="width:80%"></div></div></div>
+      <div class="meter small"><label>Power</label><div class="bar"><div id="intPower" style="width:60%"></div></div></div>
+      <div class="meter small"><label>Comms</label><div class="bar"><div id="intComms" style="width:40%"></div></div></div>
+    </div>
+    <div id="objectives"><strong>Objectives</strong><ul id="objList"></ul></div>
+    <div id="inventory"><strong>Inventory</strong><span id="invList">- empty -</span></div>
+  </div>
+  <div id="dialogue" class="hidden">
+    <div id="dlgName"></div>
+    <div id="dlgText"></div>
+    <div id="dlgChoices"></div>
+    <button id="dlgNext">Continue ▸</button>
+  </div>
+  <div id="valveModal" class="hidden modal">
+    <h2>Delaware Aqueduct - Balance the Pressure</h2>
+    <p>Water pressure is dropping 2% an hour. The digital control keeps overcorrecting - a valve drops on its own every few seconds. Get all three lines to 70% or more and hold them there. Click + / - to turn a valve.</p>
+    <div class="valve-row"><label>Hospital Line</label><div class="bar"><div id="pressHosp" style="width:60%;background:#7ac74f"></div></div><span class="val" id="pressHospVal">60%</span><button data-line="hospital" data-d="-10">-</button><button data-line="hospital" data-d="10">+</button></div>
+    <div class="valve-row"><label>Residential Line</label><div class="bar"><div id="pressRes" style="width:60%;background:#4cc9f0"></div></div><span class="val" id="pressResVal">60%</span><button data-line="residential" data-d="-10">-</button><button data-line="residential" data-d="10">+</button></div>
+    <div class="valve-row"><label>Industrial Line</label><div class="bar"><div id="pressInd" style="width:60%;background:#ffd166"></div></div><span class="val" id="pressIndVal">60%</span><button data-line="industrial" data-d="-10">-</button><button data-line="industrial" data-d="10">+</button></div>
+    <div id="valveStatus">Hold all three lines at 70% or above.</div>
+    <button id="valveClose">Close</button>
+  </div>
+  <div id="scadaModal" class="hidden modal">
+    <h2>SCADA Terminal - Reroute the Load</h2>
+    <p>The logic bomb trips at 8:00 PM and cascades across the grid. Reroute the load across three feeders: total must be 100, no feeder over 60. Bomb timer: <span id="bombVal">90</span>s.</p>
+    <div class="feeder-row"><label>Feeder A</label><div class="bar"><div id="feedA" style="width:33%;background:#4cc9f0"></div></div><span class="val" id="feedAVal">33</span><button data-f="A" data-d="-5">-</button><button data-f="A" data-d="5">+</button></div>
+    <div class="feeder-row"><label>Feeder B</label><div class="bar"><div id="feedB" style="width:33%;background:#7ac74f"></div></div><span class="val" id="feedBVal">33</span><button data-f="B" data-d="-5">-</button><button data-f="B" data-d="5">+</button></div>
+    <div class="feeder-row"><label>Feeder C</label><div class="bar"><div id="feedC" style="width:34%;background:#ffd166"></div></div><span class="val" id="feedCVal">34</span><button data-f="C" data-d="-5">-</button><button data-f="C" data-d="5">+</button></div>
+    <div id="scadaStatus">Total must be 100, no feeder over 60.</div>
+    <button id="scadaSubmit">Disarm the logic bomb</button>
+    <button id="scadaClose">Close</button>
+  </div>
+  <div id="endCard" class="hidden">
+    <h1>THE LAST SIGNAL</h1>
+    <p class="tagline">“Repair is a moral act.”</p>
+    <div id="endSummary"></div>
+    <button onclick="location.href='index.html'">Play Act I Again</button>
+    <button onclick="location.reload()">Play Act II Again</button>
+  </div>
+  <div id="toast"></div>
+  <div id="vignette"></div>
+  <div id="grain"></div>
+  <div id="letterboxTop" class="letterbox hidden"></div>
+  <div id="letterboxBottom" class="letterbox hidden"></div>
+  <button id="cinemaBtn" title="Toggle cinematic letterbox">Cinema</button>
+  <button id="resetViewBtn" title="Reset camera view (or press R)">Reset view</button>
+  <div id="help">Drag to look around • Click glowing objects to inspect • WASD to move • R / Reset view to re-centre • Act II: three missions - the aqueduct, the substation, the bridge</div>
+</div>
+<script type="module" src="act2.js"></script>
+</body>
+</html>
