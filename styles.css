@@ -20,12 +20,23 @@
 #dlgChoices button:hover,#dlgNext:hover{background:#1d4a5f}
 #dlgNext{margin-top:10px}
 .hidden{display:none!important}
-.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#0a141b;border:1px solid #4cc9f0;border-radius:12px;padding:20px;z-index:20;width:min(520px,92vw);max-height:90vh;overflow-y:auto}
-@media (max-height:600px){.modal{padding:14px}#targetPattern,#repairGrid{grid-template-columns:repeat(4,36px);gap:5px;margin:8px 0}.tile{width:36px;height:36px}}
-#targetPattern,#repairGrid{display:grid;grid-template-columns:repeat(4,48px);gap:6px;margin:12px 0}
-.tile{width:48px;height:48px;border-radius:6px;background:#1a2a33;border:1px solid #4cc9f0;cursor:pointer}
+.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#0a141b;border:1px solid #4cc9f0;border-radius:12px;padding:14px 18px;z-index:20;width:min(480px,94vw);max-height:94vh;overflow-y:auto;pointer-events:auto}
+.modal h2{margin:0 0 4px;font-size:18px}
+.modal p{margin:0 0 8px;font-size:13px;line-height:1.4}
+.repair-grids{display:flex;gap:18px;justify-content:center;margin:6px 0}
+.repair-col{display:flex;flex-direction:column;align-items:center}
+.repair-label{font-size:11px;letter-spacing:1px;color:#9fb8c8;margin-bottom:6px}
+#repairProgress{font-size:13px;color:#ffd166;margin:6px 0 2px}
+#repairStatus{font-size:13px;color:#7ac74f;margin:2px 0 8px;min-height:18px}
+#repairClose{width:100%}
+@media (max-width:480px){.repair-grids{flex-direction:column;gap:8px}}
+@media (max-height:600px){.modal{padding:10px 14px}.modal h2{font-size:16px}#targetPattern,#repairGrid{grid-template-columns:repeat(4,30px);gap:4px;margin:0}.tile{width:30px;height:30px}}
+#targetPattern,#repairGrid{display:grid;grid-template-columns:repeat(4,34px);gap:5px;margin:0}
+.tile{width:34px;height:34px;border-radius:6px;background:#1a2a33;border:1px solid #4cc9f0;cursor:pointer;pointer-events:auto}
 .tile.lit{background:#ffd166}
 .tile.on{background:#4cc9f0}
+.tile.match{outline:2px solid #7ac74f;outline-offset:-2px}
+.tile.target-tile{cursor:default}
 #endCard{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px}
 #endCard h1{letter-spacing:8px;color:#ffd166;font-size:42px;margin:0}
 .tagline{font-style:italic;color:#9fb8c8}

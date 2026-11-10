@@ -34,9 +34,12 @@
   </div>
   <div id="repairModal" class="hidden modal">
     <h2>Repair: Signal Relay - Match the Circuit</h2>
-    <p>Click tiles to match the pattern shown. Match all 8 lit circuits before the battery runs low.</p>
-    <div id="targetPattern"></div>
-    <div id="repairGrid"></div>
+    <p>Click the tiles on the right to match the gold pattern on the left. Match all 16 before the battery runs low.</p>
+    <div class="repair-grids">
+      <div class="repair-col"><div class="repair-label">TARGET - gold = on</div><div id="targetPattern"></div></div>
+      <div class="repair-col"><div class="repair-label">YOUR CIRCUIT - click tiles</div><div id="repairGrid"></div></div>
+    </div>
+    <div id="repairProgress"></div>
     <div id="repairStatus"></div>
     <button id="repairClose">Close</button>
   </div>
