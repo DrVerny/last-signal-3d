@@ -37,4 +37,13 @@
 #letterboxTop{top:0}#letterboxBottom{bottom:0}
 #cinemaBtn{position:fixed;bottom:8px;right:12px;z-index:7;background:rgba(8,14,20,.85);color:#ffd166;border:1px solid #4a3f1e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;letter-spacing:1px}
 #cinemaBtn:hover{background:#1d2a33}
+#resetViewBtn{position:fixed;bottom:44px;right:12px;z-index:7;background:rgba(8,14,20,.85);color:#ffd166;border:1px solid #4a3f1e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;letter-spacing:1px}
+#resetViewBtn:hover{background:#1d2a33}
 #help{position:fixed;bottom:8px;left:12px;font-size:11px;color:#7a93a3;z-index:5}
+
+#loading{position:fixed;inset:0;background:#05070a;z-index:40;display:flex;align-items:center;justify-content:center;text-align:center}
+.load-box{max-width:420px;padding:24px}
+.load-box h2{letter-spacing:6px;color:#ffd166;margin:0 0 12px}
+#loadingText{color:#9fb8c8}
+#loadingError{color:#ef476f;font-size:13px;margin-top:10px}
+#loadingContinue{margin-top:14px;background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:8px;padding:9px 14px;cursor:pointer}

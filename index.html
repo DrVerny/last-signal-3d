@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>THE LAST SIGNAL - Act I: The 4 Train (3D Prototype)</title>
 <link rel="stylesheet" href="styles.css">
+<script type="importmap">{"imports": {"three": "./three.module.js"}}</script>
 </head>
 <body>
 <div id="app">
+  <div id="loading"><div class="load-box"><h2>THE LAST SIGNAL</h2><p id="loadingText">Loading characters...</p><p id="loadingError" class="hidden"></p><button id="loadingContinue" class="hidden">Continue without the missing characters</button></div></div>
   <canvas id="scene"></canvas>
   <div id="hud">
     <div class="hud-title">THE LAST SIGNAL <span>- Act I: The 4 Train</span></div>
@@ -50,9 +52,9 @@
   <div id="letterboxTop" class="letterbox hidden"></div>
   <div id="letterboxBottom" class="letterbox hidden"></div>
   <button id="cinemaBtn" title="Toggle cinematic letterbox">Cinema</button>
-  <div id="help">Drag to look around • Click glowing objects to inspect • WASD to move • Start: talk through the opening scene</div>
+  <button id="resetViewBtn" title="Reset camera view (or press R)">Reset view</button>
+  <div id="help">Drag to look around • Click glowing objects to inspect • WASD to move • R / Reset view to re-centre • Start: talk through the opening scene</div>
 </div>
-<script src="three.min.js"></script>
-<script src="game.js"></script>
+<script type="module" src="game.js"></script>
 </body>
 </html>
