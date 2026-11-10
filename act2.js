@@ -219,7 +219,7 @@ async function loadHumans() {
     const jb = new THREE.Box3().setFromObject(jg); const js = new THREE.Vector3(); jb.getSize(js);
     const jscale = 1.70 / js.y; jg.scale.setScalar(jscale);
     const jb2 = new THREE.Box3().setFromObject(jg); jg.position.y = -jb2.min.y;
-    mission1.add(jg); placeHuman(jg, 'jade', -1.6, 4.5, Math.PI, jscale);
+    mission1.add(jg); placeHuman(jg, 'jade', -2.8, 6, Math.PI, jscale);
   } catch (e) { failures.push('jade'); }
   let calebBase = null;
   try {
@@ -240,7 +240,7 @@ async function loadHumans() {
     const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
     badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.32, 0.17); cg.add(badge);
     calebBase = { group: cg, scale: cscale };
-    mission1.add(cg); placeHuman(cg, 'caleb', 1.6, 4.5, Math.PI, cscale);
+    mission1.add(cg); placeHuman(cg, 'caleb', 2.8, 6, Math.PI, cscale);
   } catch (e) { failures.push('caleb'); }
   // Derrick Shaw and the two substation guards reuse Caleb's scan with new
   // coats (cloned groups, recoloured materials) - a prototype stand-in, the
@@ -317,6 +317,12 @@ function buildMission1() {
     wheel.position.set(v.x, 1.25, 2.5); wheel.castShadow = true;
     wheel.name = 'valve' + v.key[0].toUpperCase() + v.key.slice(1); wheel.userData.clickable = true; mission1.add(wheel);
     window._valveMeshes[v.key] = wheel;
+    // Generous invisible click target around the whole valve assembly: the
+    // torus is a thin ring with an empty hub, so a click dead-centre on the
+    // wheel (the obvious place to click) would otherwise miss it entirely.
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.6, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+    hit.position.set(v.x, 1.4, 2.5); hit.name = wheel.name; hit.userData.clickable = true; mission1.add(hit);
+    window._valveMeshes[v.key + 'Hit'] = hit;
     for (let s = 0; s < 3; s++) {
       const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.8, 0.05), stdMat({ color: v.color, roughness: 0.5 }));
       spoke.position.copy(wheel.position); spoke.rotation.z = s * Math.PI / 3; mission1.add(spoke);
@@ -337,8 +343,12 @@ function buildMission1() {
   const dev = box(mission1, 0.35, 0.25, 0.05, 0x7ac74f, -2.2, 1.4, -0.7, 'device1');
   dev.rotation.y = 0; dev.visible = false;
   window._device1 = dev;
-  blobShadow(mission1, -1.6, 4.5, 0.9, 0.9, 0.55);
-  blobShadow(mission1, 1.6, 4.5, 0.9, 0.9, 0.55);
+  // Generous invisible click target for the small device, same reason as the valves.
+  const devHit = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 0.8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  devHit.position.set(-2.2, 1.4, -0.5); devHit.name = 'device1'; devHit.userData.clickable = true; devHit.visible = false; mission1.add(devHit);
+  window._device1Hit = devHit;
+  blobShadow(mission1, -2.8, 6, 0.9, 0.9, 0.55);
+  blobShadow(mission1, 2.8, 6, 0.9, 0.9, 0.55);
 }
 // Valve-balance puzzle (Mission 1).
 const pressures = { hospital: 60, residential: 60, industrial: 60 };
@@ -394,7 +404,7 @@ setInterval(() => {
       document.getElementById('valveModal').classList.add('hidden');
       integrity('Water', 10);
       setObjectives(OBJ1, 2);
-      window._device1.visible = true;
+      window._device1.visible = true; window._device1Hit.visible = true;
       toast('Pressure holding - the aqueduct is stable. Something on the station wall catches your eye.');
       moralChoiceWater();
     }
@@ -474,10 +484,16 @@ function buildMission2() {
   scadaScreen.position.set(2.42, 1.38, 1.28); scadaScreen.rotation.y = -0.4; mission2.add(scadaScreen);
   logbookMesh = box(mission2, 0.4, 0.06, 0.3, 0x8a2a2a, 1.9, 0.95, 1.7, 'logbook');
   logbookMesh.rotation.y = 0.5;
+  var logbookHit = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 1.0), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  logbookHit.position.set(1.9, 1.0, 1.7); logbookHit.name = 'logbook'; logbookHit.userData.clickable = true; mission2.add(logbookHit);
+  window._logbookHit = logbookHit;
   // Manifesto pinned to the control-room wall (revealed after the bomb is dealt with).
   manifestoMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.2), new THREE.MeshStandardMaterial({ color: 0xf2f0e8, roughness: 0.9 }));
   manifestoMesh.position.set(1.5, 1.8, -2.22); manifestoMesh.name = 'manifesto'; manifestoMesh.userData.clickable = true;
   manifestoMesh.visible = false; mission2.add(manifestoMesh);
+  var manifestoHit = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.8, 0.5), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  manifestoHit.position.set(1.5, 1.8, -2.1); manifestoHit.name = 'manifesto'; manifestoHit.userData.clickable = true; manifestoHit.visible = false; mission2.add(manifestoHit);
+  window._manifestoHit = manifestoHit;
   // Security cameras on poles, with vision cones.
   for (const cx of [-6, 6]) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3.4, 8), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.4 }));
@@ -490,6 +506,10 @@ function buildMission2() {
   // Key card on the first guard's belt (hidden until the guards stand down).
   keycardMesh = box(mission2, 0.16, 0.1, 0.02, 0xf2f2f2, -3.5, 1.0, 2.15, 'keycard');
   keycardMesh.visible = false;
+  // The card is tiny: a generous invisible hit box around the guard's belt.
+  var keycardHit = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  keycardHit.position.set(-3.5, 1.1, 2.1); keycardHit.name = 'keycard'; keycardHit.userData.clickable = true; keycardHit.visible = false; mission2.add(keycardHit);
+  window._keycardHit = keycardHit;
   blobShadow(mission2, -3.5, 2, 0.9, 0.9, 0.55);
   blobShadow(mission2, 3.5, 2, 0.9, 0.9, 0.55);
 }
@@ -526,7 +546,7 @@ function guardDialogue() {
       { who: 'Guard 1', text: 'What do you need?' },
       { who: 'Caleb Bishop', text: 'Names. Numbers. Who hired you. And the key card - the terminal needs it.' }
     ], () => {
-      guardsDown = true; keycardMesh.visible = true; trust(1, 'Caleb talked them down');
+      guardsDown = true; keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(1, 'Caleb talked them down');
       setObjectives(OBJ2, 1);
       toast('The guards stood down. Click the white key card on the guard\u2019s belt, then the red log book on the desk.');
     });
@@ -536,7 +556,7 @@ function guardDialogue() {
       { who: 'Guard 1', text: 'Credentials? Work order number? You do not sound like an inspector.' },
       { who: 'Jade Morales', text: 'He is not ready for this. Plan B - I slip in through the side gate while they are watching him. It is slower, and it costs us goodwill.' }
     ], () => {
-      guardsDown = true; keycardMesh.visible = true; trust(-1, 'the bluff failed'); integrity('Power', -5);
+      guardsDown = true; keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(-1, 'the bluff failed'); integrity('Power', -5);
       setObjectives(OBJ2, 1);
       toast('Jade slipped in through the side gate. Click the white key card, then the red log book.');
     });
@@ -586,7 +606,7 @@ document.getElementById('scadaSubmit').onclick = () => {
     clearInterval(bombInterval); bombInterval = null;
     document.getElementById('scadaModal').classList.add('hidden');
     state.bombDisarmed = true; integrity('Power', 15);
-    manifestoMesh.visible = true; setObjectives(OBJ2, 3);
+    manifestoMesh.visible = true; if (window._manifestoHit) window._manifestoHit.visible = true; setObjectives(OBJ2, 3);
     showDialogue([
       { who: 'Jade Morales', text: 'Load rerouted. The bomb has nothing to cascade into. It is dead.' },
       { who: 'Caleb Bishop', text: 'You used your own words as the passphrase. "Trust the system, but verify the people." He has been reading your old reports.' },
@@ -603,7 +623,7 @@ document.getElementById('scadaClose').onclick = () => {
 };
 function bombGoesOff() {
   integrity('Power', -25); integrity('Comms', -10);
-  manifestoMesh.visible = true; setObjectives(OBJ2, 3);
+  manifestoMesh.visible = true; if (window._manifestoHit) window._manifestoHit.visible = true; setObjectives(OBJ2, 3);
   showDialogue([
     { who: 'System', text: '8:00 PM. The cascade trips. A partial blackout rolls across Queens - hospitals switch to generators, the streets go dark. The game goes on, but the city is darker, and the finale will be harder.' },
     { who: 'Jade Morales', text: 'We were too slow. We still finish this - and there is something pinned to the wall. Click it.' }
@@ -658,6 +678,8 @@ function buildMission3() {
   for (const cz of [-8, -4, 0, 4]) {
     const ch = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.35), new THREE.MeshStandardMaterial({ color: 0x3a0a0a, emissive: 0xff2222, emissiveIntensity: 1.6, roughness: 0.4 }));
     ch.position.set(-1.6, 5.2, cz); ch.name = 'charge'; ch.userData.clickable = true; mission3.add(ch); chargeMeshes.push(ch);
+    const chHit = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+    chHit.position.set(-1.6, 5.2, cz); chHit.name = 'charge'; chHit.userData.clickable = true; mission3.add(chHit); chargeMeshes.push(chHit);
   }
   // Derrick's detonator, on the deck beside him (small dark box, red button).
   const det = box(mission3, 0.25, 0.12, 0.18, 0x1a1a1a, 0.5, 0.06, -6.5, 'detonator', { roughness: 0.4 });
@@ -758,23 +780,47 @@ function endAct2() {
 }
 
 // ---------- Click to inspect ----------
+// Debug hook for live testing: window.__ls2.state / .interact / .openValveModal.
+window.__ls2 = { state, interact, openValveModal, openScadaModal };
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
-canvas.addEventListener('click', e => {
-  if (dragMoved > 6) { dragMoved = 0; return; }
-  dragMoved = 0;
-  mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+let lastTapAt = 0;
+function handleTap(clientX, clientY) {
+  mouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(mouse, camera);
   const targets = [];
-  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1);
-  if (state.mission === 2) targets.push(keycardMesh, logbookMesh, scadaMesh, manifestoMesh);
+  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit);
+  if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
   if (state.mission === 3) targets.push(...chargeMeshes);
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
   if (sceneHits.length) { interact(sceneHits[0].object.name); return; }
   const humanHits = ray.intersectObjects(humanGroups.filter(g => g.visible && g.parent && g.parent.visible), true);
   if (humanHits.length) {
-    let o = humanHits[0].object; while (o.parent && o.parent !== scene) o = o.parent;
-    interact(o.name || humanHits[0].object.name);
+    // Resolve the clicked character by walking up to the human group itself.
+    // (The old walk-up stopped at the mission group, whose name is empty,
+    // so clicks on Jade/Caleb/guards/Derrick silently did nothing.)
+    let name = null, p = humanHits[0].object;
+    while (p) {
+      if (humanGroups.indexOf(p) !== -1) { name = p.name; break; }
+      p = p.parent;
+    }
+    interact(name || humanHits[0].object.name);
   }
+}
+canvas.addEventListener('click', e => {
+  if (dragMoved > 6) { dragMoved = 0; return; }
+  dragMoved = 0;
+  if (Date.now() - lastTapAt < 400) return; // already handled by pointerup
+  lastTapAt = Date.now();
+  handleTap(e.clientX, e.clientY);
+});
+// Pointerup fallback: some harnesses and touch inputs deliver press/release
+// without a click event on the canvas. A tap (not a drag) is a click here.
+canvas.addEventListener('pointerup', e => {
+  if (dragMoved > 6) { dragMoved = 0; return; }
+  dragMoved = 0;
+  if (Date.now() - lastTapAt < 400) return;
+  lastTapAt = Date.now();
+  handleTap(e.clientX, e.clientY);
 });
 function interact(name) {
   if (!name) return;
@@ -795,7 +841,7 @@ function interact(name) {
   if (name === 'caleb') { toast('Caleb Bishop, NYPD Transit. Young, earnest - and getting better at this.'); return; }
   if (name === 'guard1' || name === 'guard2') { guardDialogue(); return; }
   if (name === 'keycard' && keycardMesh.visible) {
-    hasKeycard = true; keycardMesh.visible = false; state.inventory.push('SCADA key card'); updateHUD();
+    hasKeycard = true; keycardMesh.visible = false; if (window._keycardHit) window._keycardHit.visible = false; state.inventory.push('SCADA key card'); updateHUD();
     setObjectives(OBJ2, 2);
     toast('Key card collected. Now the red log book on the desk - the passphrase is in it.');
     return;
@@ -849,7 +895,7 @@ function animate() {
   camera.position.y = (state.mission === 3 ? 1.9 : 1.7) + Math.sin(t * 0.8) * 0.012 * sway;
   if (waterMesh) waterMesh.position.y = 0.05 + Math.sin(t * 0.6) * 0.02;
   for (const ch of chargeMeshes) {
-    if (!state.derrickDown) ch.material.emissiveIntensity = 1.2 + Math.sin(t * 5) * 0.8;
+    if (!state.derrickDown && ch.material.emissive) ch.material.emissiveIntensity = 1.2 + Math.sin(t * 5) * 0.8;
   }
   for (const h of humans) {
     const bt = t * 1.1 + h.phase;
