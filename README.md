@@ -46,8 +46,7 @@ Now, procedural only, no external assets: the shell is a real R160/R211 cross-se
 Real scanned figures, not procedural geometry: `models/jade.glb` (Riley, woman, 1.672 m, short dark hair, teal T-shirt, jeans), `models/caleb.glb` (Daniel, man, 1.795 m, dark hair, olive jacket recoloured navy in code), `models/adeyemi.glb` (professional nurse, teal scrubs, stethoscope, ponytail, 1.644 m), `models/walter.glb` (Rowan, older man, grey hair, seated on a bench, 1.30 m seated height). All four are CC0 (public domain) from the Innerscene / MakeHuman library. The game loads them with the vendored Three.js r160 GLTFLoader, normalises each to its story height (Jade 1.70 m, Caleb 1.88 m, Adeyemi 1.68 m, Walter unscaled at 1.00), re-grounds feet at y=0, and keeps click-to-inspect on each model group. Walter's bench from his file is hidden (the car already has benches); Caleb gets a simple navy cap and a gold badge disc in code, since the scan has neither. The models are static scans (no skeleton, no animations), so idle motion is a subtle whole-group breathing scale only - no head turns, no blinking, and Adeyemi's lean toward Walter is not applied. **Repo size note:** the four models total about 89 MB (Jade 21 MB, Caleb 27 MB, Adeyemi 16 MB, Walter 26 MB), so the repo is large and the game shows a loading screen until the characters load, with a clear error and a "continue without them" option if any model fails. Three.js is vendored locally (`three.module.js` r160 + `vendor/loaders/GLTFLoader.js` + `vendor/utils/BufferGeometryUtils.js`, import-map ESM) - no CDN needed. Still not true photorealism: lighting is simulated (not ray-traced), and the scans are static, so there is no facial animation or cloth movement.
 
 ## What is NOT included
-- Act III (control center, courtroom, press conference) - Acts I and II only
-- The full 16-scene script - this is a playable slice, not the whole story
+- The full 16-scene script in full detail - Acts I, II and III are all built as playable slices, not the whole story shot-for-shot
 - Multiplayer
 - **Live-stream audience voting** - not built yet. How it could work later: viewers vote in chat (e.g. `!hospital` / `!residential` / `!industrial`); votes are collected as the sealed choice, encrypted, and revealed live at the end of the act - the audience's choice changes the ending, but nobody sees the tally until reveal
 - Real FHEVM contract - no contract is deployed in this prototype; the Zama layer is a clearly-labelled simulation, ready to be wired to Sepolia like Sealed Fortune
@@ -59,9 +58,20 @@ Act I's end card links to `act2.html`. Trust, System Integrity, the sealed choic
 3. **The Verrazzano** - bridge upper deck at night. Climb the maintenance catwalk in the wind, cross the cut-out gap (Trust climax: three dialogue options, each a different ending path), face Derrick Shaw and talk him into putting down the detonator. Act II end card records Trust, Integrity, evidence, water choice, bomb outcome and bridge path.
 Derrick and the two guards reuse Caleb's CC0 scan with recoloured coats (grey for Derrick, dark for the guards), cap and badge removed in code.
 
+## Act III - The Human Signal (added 2026-11-10)
+Act II's end card links to `act3.html`. Trust, System Integrity, evidence, water choice, bomb outcome and the Act II bridge path carry over from Act II via localStorage (defaults apply when played standalone). Six chapters:
+1. **The Control Center** - MTA Rail Control, 4 AM, 36 hours after the blackout. A dormant virus in the Emergency Broadcast System triggers in 12 hours (fake all-clear, then fake evacuation). The FINAL SEALED CHOICE: A Quick Fix (always open), B Rebuild (needs Trust 8+ and 4 evidence pieces), C The Third Way (needs Trust 10, the trust dialogue at the bridge, and all 5 evidence pieces) - locked options are named with what they need. The choice stays sealed until the end card, like Act I.
+2. **The Courtroom** - Judge Ellsworth: 90 days, credit for time served, probation 2 years, 400 hours public service with the infrastructure oversight committee. Nurse Adeyemi in the gallery: the hospital and the dialysis clinic are both fine, because of you.
+3. **The Transport Van + The Escape** - the van stops, the doors are ripped open, Derrick's friends break you out; rooftop, fire escape, black SUV.
+4. **The Safehouse** - Owen Marsh and the ex-city workers: the files, the witnesses, the evidence map; the plan is the Attorney General's press conference, 9 AM.
+5. **The Press Conference** - Jade takes the podium, slams the folder down, the AG picks it up: "This better be good." / "It's the truth."
+6. **The Aftermath + The Bridge** - one month later, Jade Director of Infrastructure Oversight, Caleb's badge restored, dawn on the Williamsburg Bridge, the 4 train crossing. The sealed choice is revealed as Ending A "The System Holds", B "The Human Signal", or C "The Last Signal" (best ending).
+Derrick, the judge, Owen, the AG, the MTA official and the masked leader reuse Caleb's CC0 scan with recoloured coats, cap and badge removed in code. Nurse Adeyemi's own model appears in the courtroom gallery.
+
 ## Files
 - `index.html` - Act I page (end card links to Act II)
 - `act2.html` + `act2.js` - Act II page and code (valve-balance modal, SCADA reroute modal, bridge climb)
+- `act3.html` + `act3.js` - Act III page and code (control center sealed choice, courtroom, escape, safehouse, press conference, dawn bridge)
 - `styles.css` - dark cinematic UI
 - `game.js` - Three.js scene, gameplay loop, dialogue, repair puzzle, sealed choice, GLB character loading
 - `three.module.js` - vendored Three.js r160 (ESM); `three.min.js` is the old UMD build and is no longer loaded
