@@ -61,6 +61,10 @@ function toast(msg) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.style.opacity = 0; toastTimer = null; }, 4000);
 }
+function hideToast() {
+  const t = document.getElementById('toast'); t.style.opacity = 0;
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+}
 function trust(n, why) { state.trust = Math.max(0, Math.min(10, state.trust + n)); updateHUD(); toast((n > 0 ? 'Trust +' + n : 'Trust ' + n) + (why ? ' - ' + why : '')); }
 function integrity(key, n) { state.integrity[key] = Math.max(0, Math.min(100, state.integrity[key] + n)); updateHUD(); }
 let dlgQueue = [], dlgCb = null;
@@ -79,6 +83,7 @@ function nextLine() {
     next.style.display = 'none';
     line.choices.forEach(c => {
       const b = document.createElement('button'); b.textContent = c.label;
+      if (c.locked) { b.disabled = true; b.style.opacity = 0.55; b.title = 'Locked - see the requirement in the label'; }
       b.onclick = () => { if (c.effect) c.effect(); nextLine(); };
       ch.appendChild(b);
     });
@@ -357,7 +362,9 @@ function finalChoiceDialogue() {
     { label: 'A - QUICK FIX: restore the old code, 30 minutes, no changes', effect: () => { state.finalChoice = 'quick'; integrity('Comms', 10); } }
   ];
   if (canRebuild) choices.push({ label: 'B - REBUILD: transparent logs, public oversight, whistleblower protections (4 hours, partial outage)', effect: () => { state.finalChoice = 'rebuild'; integrity('Comms', 15); integrity('Power', -10); } });
+  else choices.push({ label: 'B - REBUILD: transparent logs, public oversight, whistleblower protections (LOCKED - needs Trust 8+ and 4 evidence; you have Trust ' + state.trust + ', ' + state.evidence.length + ' evidence)', locked: true });
   if (canThirdWay) choices.push({ label: 'C - THE THIRD WAY: rebuild AND expose the official who buried your audit', effect: () => { state.finalChoice = 'thirdway'; integrity('Comms', 20); } });
+  else choices.push({ label: 'C - THE THIRD WAY: rebuild AND expose the official who buried your audit (LOCKED - needs Trust 10, the best bridge path, and 5 evidence)', locked: true });
   showDialogue([
     { who: 'MTA Official', text: 'We need to restore the EBS now. The virus triggers in twelve hours. If we do not fix it -' },
     { who: 'Jade Morales', text: 'I know what happens if we do not fix it. The question is HOW we fix it. Two options. Quick fix - restore the old code, no changes, back to normal in thirty minutes.' },
@@ -376,7 +383,7 @@ function finalChoiceDialogue() {
   });
 }
 function startChapter1() {
-  state.chapter = 1; resetView();
+  state.chapter = 1; resetView(); hideToast();
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 1);
   setObjectives(0); updateHUD();
   document.getElementById('timerLabel').textContent = 'EBS virus';
@@ -422,7 +429,7 @@ function buildCourt() {
   blobShadow(gCourt, 4.5, 2, 0.9, 0.9, 0.5);
 }
 function startChapter2() {
-  state.chapter = 2; resetView();
+  state.chapter = 2; resetView(); hideToast();
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 2);
   reparentCast('jade', gCourt, -0.8, 2.8, Math.PI);
   reparentCast('caleb', gCourt, 0.8, 2.8, Math.PI);
@@ -441,7 +448,7 @@ function startChapter2() {
       { who: 'Nurse Adeyemi', text: 'Miss Morales. I wanted you to know - the hospital. The dialysis clinic. They are both fine. Because of you.' },
       { who: 'Jade Morales', text: '...Thank you.' },
       { who: 'Nurse Adeyemi', text: 'No. Thank you.' }
-    ], () => { setObjectives(2); toast('The court officers lead you out. Click the van doors when they come for you.'); startChapter3(); });
+    ], () => { setObjectives(2); toast('The court officers lead you out. Click the van doors when they come for you.'); setTimeout(() => startChapter3(), 1200); });
   });
 }
 
@@ -459,6 +466,7 @@ function buildEscape() {
   hitBox(gEscape, 2.6, 2.4, 0.8, 0, 1.2, -0.6, 'vanDoors');
   // Rooftop (raised platform) with AC units and a parapet.
   box(gEscape, 10, 0.4, 8, 0x3a3f42, -4, 2.6, -6, null, { roughness: 1 });
+  hitBox(gEscape, 10, 1.4, 8, -4, 3.2, -6, 'rooftop');
   box(gEscape, 10, 0.5, 0.3, 0x2a2f33, -4, 3.0, -10, null, { roughness: 1 });
   box(gEscape, 1.5, 1.0, 1.5, 0x5a5f62, -6, 3.3, -7, null, { roughness: 0.8, metalness: 0.4 });
   box(gEscape, 1.2, 0.8, 1.2, 0x4a4f52, -2, 3.2, -8, null, { roughness: 0.8, metalness: 0.4 });
@@ -475,27 +483,45 @@ function buildEscape() {
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 5.5, -8); gEscape.add(sign);
   blobShadow(gEscape, 0, 2, 2.6, 5, 0.5);
 }
+let escapeTimer = null;
+function startEscapeTimer() {
+  let left = 90;
+  document.getElementById('timerLabel').textContent = 'Backup';
+  document.getElementById('timerVal').textContent = left + ' seconds';
+  document.getElementById('timerBar').style.width = '100%';
+  if (escapeTimer) clearInterval(escapeTimer);
+  escapeTimer = setInterval(() => {
+    left--;
+    if (left <= 0) { left = 0; clearInterval(escapeTimer); escapeTimer = null; toast('Backup is here - move!'); }
+    document.getElementById('timerVal').textContent = left + ' seconds';
+    document.getElementById('timerBar').style.width = left + '%';
+  }, 1000);
+}
+function stopEscapeTimer() { if (escapeTimer) { clearInterval(escapeTimer); escapeTimer = null; } }
 function startChapter3() {
-  state.chapter = 3; state.escapeStep = 0; resetView();
+  state.chapter = 3; state.escapeStep = 0; resetView(); hideToast();
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 3);
   reparentCast('jade', gEscape, -0.9, 3.5, 0);
   reparentCast('caleb', gEscape, 0.9, 3.5, 0);
   setObjectives(0); updateHUD();
-  document.getElementById('timerLabel').textContent = 'Backup';
-  document.getElementById('timerVal').textContent = '90 seconds';
-  document.getElementById('timerBar').style.width = '100%';
+  startEscapeTimer();
   showDialogue([
     { who: 'Jade Morales', text: 'A white corrections van idles by the curb. Two officers load us into the back. The doors slam shut. Darkness. A metal bench, a wire mesh partition, a single flickering light.' },
     { who: 'Caleb Bishop', text: 'Well. This is new. First time in any wagon.' },
     { who: 'Jade Morales', text: 'You get used to it.' },
     { who: 'Caleb Bishop', text: 'Hey, Morales. What about us? After the ninety days?' },
-    { who: 'Jade Morales', text: 'We rebuild. Remember?' }
+    { who: 'Jade Morales', text: state.finalChoice === 'quick' ? 'We wait it out. Ninety days. Then we see what the city does with us.' : 'We rebuild. Remember?' }
   ], () => {
     setObjectives(1);
     toast('Something is wrong - the van just stopped. Click the van doors.');
   });
 }
-function escapeStep() {
+function escapeStep(from) {
+  // Each escape beat only advances from its own target, so a stray click on
+  // the SUV or the fire escape cannot skip the van doors or the rooftop.
+  if (state.escapeStep === 0 && from !== 'vanDoors') return;
+  if (state.escapeStep === 1 && from !== 'rooftop') return;
+  if (state.escapeStep === 2 && from !== 'fireEscape' && from !== 'suv') return;
   if (state.escapeStep === 0) {
     state.escapeStep = 1;
     vanDoorL.position.x = -1.6; vanDoorR.position.x = 1.6; // doors ripped open
@@ -522,7 +548,7 @@ function escapeStep() {
       { who: 'System', text: 'Down the fire escape, into the alley. The SUV doors open. You pile in. The SUV peels out.' },
       { who: 'Caleb Bishop', text: 'No! But I would like to go on record saying this is insane!' },
       { who: 'Jade Morales', text: '(half-smile) Noted. For the record.' }
-    ], () => { setObjectives(3); startChapter4(); });
+    ], () => { setObjectives(3); stopEscapeTimer(); setTimeout(() => startChapter4(), 1200); });
   }
 }
 
@@ -552,7 +578,7 @@ function buildSafe() {
   blobShadow(gSafe, -2.5, -2, 0.9, 0.9, 0.55);
 }
 function startChapter4() {
-  state.chapter = 4; resetView();
+  state.chapter = 4; resetView(); hideToast();
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 4);
   reparentCast('jade', gSafe, -1.2, 3.5, Math.PI);
   reparentCast('caleb', gSafe, 1.2, 3.5, Math.PI);
@@ -609,7 +635,7 @@ function buildPress() {
   blobShadow(gPress, 0, -2, 1.2, 1.0, 0.5);
 }
 function startChapter5() {
-  state.chapter = 5; resetView();
+  state.chapter = 5; resetView(); hideToast();
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 5);
   reparentCast('jade', gPress, -1.2, 1.5, 0);
   reparentCast('caleb', gPress, 1.2, 1.5, 0);
@@ -636,7 +662,7 @@ function pressConference() {
     { who: 'Jade Morales', text: 'Derrick Shaw was wrong to plant those bombs. But he was right about one thing: the system does not listen. So we are making it listen. Read it. Publish it. Prosecute the people who deserve it. And then - maybe - we can start talking about repair.' },
     { who: 'Attorney General', text: '(quiet) This better be good.' },
     { who: 'Jade Morales', text: 'It is the truth. That is better than good.' }
-  ], () => startChapter6());
+  ], () => { setObjectives(2); stopEscapeTimer(); setTimeout(() => startChapter6(), 1200); });
 }
 
 // ---------- Chapter 6: The Aftermath + The Bridge at dawn ----------
@@ -661,14 +687,17 @@ function buildBridge() {
     win.position.set(i * 3.4, 0.2, 0.85); trainMesh.add(win);
   }
   trainMesh.position.set(-30, 2.5, -30); trainMesh.name = 'train'; gBridge.add(trainMesh);
-  hitBox(gBridge, 14, 3, 3, 0, 2.5, -30, 'train');
+  // The click target rides WITH the train: the old static hit box sat at
+  // x=0 while the train moved, so only the leading car was clickable when
+  // it happened to pass x=0. Now the whole train is clickable anywhere.
+  hitBox(trainMesh, 14, 3, 3, 5.1, 0, 0, 'train');
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('WILLIAMSBURG BRIDGE - DAWN', '#111111', '#ffd166', 'ONE MONTH LATER'), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 6, -14); gBridge.add(sign);
   blobShadow(gBridge, -0.8, 4, 0.9, 0.9, 0.55);
   blobShadow(gBridge, 0.8, 4, 0.9, 0.9, 0.55);
 }
 function startChapter6() {
-  state.chapter = 6; resetView();
+  state.chapter = 6; resetView(); hideToast();
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 6);
   reparentCast('jade', gBridge, -0.8, 4, Math.PI);
   reparentCast('caleb', gBridge, 0.8, 4, Math.PI);
@@ -680,7 +709,9 @@ function startChapter6() {
   document.getElementById('timerVal').textContent = 'dawn';
   document.getElementById('timerBar').style.width = '100%';
   showDialogue([
-    { who: 'Jade Morales', text: 'One month ago, I stood on the City Hall steps and told you the system was broken. Today, I am here to tell you it is being fixed. Independent. Transparent. Accountable. It is not perfect. It is not fast. But it is a start.' },
+    { who: 'Jade Morales', text: state.finalChoice === 'quick'
+      ? 'One month ago, I stood on the City Hall steps and told you the system was broken. Today, I am here to tell you the city recovered. Quietly. The same way it always does.'
+      : 'One month ago, I stood on the City Hall steps and told you the system was broken. Today, I am here to tell you it is being fixed. Independent. Transparent. Accountable. It is not perfect. It is not fast. But it is a start.' },
     { who: 'Caleb Bishop', text: 'My dad used to say the city runs on trust. And trust has to be earned. So we are earning it. One crack at a time.' },
     { who: 'System', text: 'Dawn on the Williamsburg Bridge. The city hums beneath them. And somewhere, in a prison cell, Derrick Shaw watches too. And for the first time in years, he smiles.' },
     { who: 'Caleb Bishop', text: 'So. Director Morales. Has a nice ring to it.' },
@@ -714,6 +745,9 @@ window.__ls3 = { state, interact: null };
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
 let lastTapAt = 0;
 function handleTap(clientX, clientY) {
+  // While a dialogue is open the player is reading or choosing: canvas
+  // taps must not re-trigger an interaction and reset the queue.
+  if (!document.getElementById('dialogue').classList.contains('hidden')) return;
   mouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(mouse, camera);
   // Every named prop / hit box in the current chapter group is clickable
@@ -750,9 +784,10 @@ function interact(name) {
   if (name === 'judge') { toast('Judge Ellsworth, 60s. Weary, but fair. He read the buried audit.'); return; }
   if (name === 'nurse') { toast('Nurse Adeyemi - night shift, hospital, dialysis clinic. People are counting on her.'); return; }
   if (name === 'derrick') { toast('Derrick Shaw, in custody. He testified six times. Nobody listened. Now they will.'); return; }
-  if (name === 'vanDoors') { escapeStep(); return; }
-  if (name === 'fireEscape') { escapeStep(); return; }
-  if (name === 'suv') { escapeStep(); return; }
+  if (name === 'vanDoors') { escapeStep('vanDoors'); return; }
+  if (name === 'rooftop') { escapeStep('rooftop'); return; }
+  if (name === 'fireEscape') { escapeStep('fireEscape'); return; }
+  if (name === 'suv') { escapeStep('suv'); return; }
   if (name === 'leader') { toast('The leader - a former MTA worker, tired eyes. "We are not terrorists. We are city workers."'); return; }
   if (name === 'evidenceMap') { toast('The map: every crack, every cover-up, pinned and connected. This is the case.'); return; }
   if (name === 'files') {

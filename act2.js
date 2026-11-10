@@ -734,6 +734,8 @@ function climbStep() {
   });
 }
 function gapChoice() {
+  if (state.gapDone) return;
+  state.gapDone = true;
   showDialogue([
     { who: 'Caleb Bishop', text: 'That is not there. That is not a catwalk. That is a - a thing that is not there. I cannot move.' },
     { who: 'Jade Morales', text: 'Caleb. Look at me. When I was a kid, my dad took me up here. I was terrified. And he said: "Jade, the bridge does not care if you are scared. It is going to hold you anyway. That is what it is for."', choices: [
@@ -750,6 +752,9 @@ function gapChoice() {
 }
 function confrontation() {
   if (state.derrickDown) return;
+  // Mark resolved at entry, not in the callback: a second canvas tap while
+  // the dialogue is open used to restart the whole confrontation.
+  state.derrickDown = true;
   showDialogue([
     { who: 'Derrick Shaw', text: 'Jade. You look well.' },
     { who: 'Jade Morales', text: 'You look like a terrorist.' },
@@ -761,7 +766,6 @@ function confrontation() {
     { who: 'Derrick Shaw', text: '...What do I do?' },
     { who: 'Jade Morales', text: 'You put down the detonator. You come with us. And you tell your story. Not with bombs. With words.' }
   ], () => {
-    state.derrickDown = true;
     // Turn the charges off. Guard for emissive: the hit boxes in
     // chargeMeshes use MeshBasicMaterial, which has no emissive - the old
     // unguarded loop threw on the first hit box and the ending never ran.
@@ -792,7 +796,7 @@ function endAct2() {
     `<p><strong>Water choice:</strong> ${state.waterChoice || 'none'} line got full pressure. <strong>Bridge:</strong> ${pathText}</p>` +
     `<p><strong>Evidence:</strong> ${state.evidence.length ? state.evidence.join(' · ') : 'none yet'}</p>` +
     `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
-    `<p>Next: Act III - The Human Signal (courtroom, ambush, press conference) - not in this prototype yet.</p>`;
+    `<p>Next: Act III - The Human Signal (courtroom, ambush, press conference). Press "Begin Act III" below to continue.</p>`;
 }
 
 // ---------- Click to inspect ----------
@@ -801,6 +805,11 @@ window.__ls2 = { state, interact, openValveModal, openScadaModal };
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
 let lastTapAt = 0;
 function handleTap(clientX, clientY) {
+  // While a dialogue or a modal is open the player is reading or choosing:
+  // canvas taps must not re-trigger an interaction and reset the queue.
+  if (!document.getElementById('dialogue').classList.contains('hidden')) return;
+  if (!document.getElementById('valveModal').classList.contains('hidden')) return;
+  if (!document.getElementById('scadaModal').classList.contains('hidden')) return;
   mouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(mouse, camera);
   const targets = [];
