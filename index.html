@@ -32,7 +32,7 @@
   </div>
   <div id="repairModal" class="hidden modal">
     <h2>Repair: Signal Relay - Match the Circuit</h2>
-    <p>Click tiles to match the pattern shown. Match all 4 lit circuits before the battery runs low.</p>
+    <p>Click tiles to match the pattern shown. Match all 8 lit circuits before the battery runs low.</p>
     <div id="targetPattern"></div>
     <div id="repairGrid"></div>
     <div id="repairStatus"></div>
@@ -45,6 +45,11 @@
     <button onclick="location.reload()">Play Act I Again</button>
   </div>
   <div id="toast"></div>
+  <div id="vignette"></div>
+  <div id="grain"></div>
+  <div id="letterboxTop" class="letterbox hidden"></div>
+  <div id="letterboxBottom" class="letterbox hidden"></div>
+  <button id="cinemaBtn" title="Toggle cinematic letterbox">Cinema</button>
   <div id="help">Drag to look around • Click glowing objects to inspect • WASD to move • Start: talk through the opening scene</div>
 </div>
 <script src="three.min.js"></script>

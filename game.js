@@ -37,6 +37,7 @@ function toast(msg) {
   const t = document.getElementById('toast'); t.textContent = msg; t.style.opacity = 1;
   setTimeout(() => t.style.opacity = 0, 3500);
 }
+function hideToast() { document.getElementById('toast').style.opacity = 0; }
 function trust(n, why) { state.trust = Math.max(0, Math.min(10, state.trust + n)); updateHUD(); toast((n > 0 ? 'Trust +' + n : 'Trust ' + n) + (why ? ' - ' + why : '')); }
 function integrity(key, n) { state.integrity[key] = Math.max(0, Math.min(100, state.integrity[key] + n)); updateHUD(); }
 
@@ -64,42 +65,211 @@ function nextLine() {
 }
 document.getElementById('dlgNext').onclick = nextLine;
 
+// ---------- Procedural textures (no external assets) ----------
+function canvasTexture(w, h, draw, repeatX, repeatY) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(repeatX || 1, repeatY || 1);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+function speckle(ctx, w, h, n, color, alpha, maxR) {
+  for (let i = 0; i < n; i++) {
+    ctx.globalAlpha = Math.random() * alpha;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(Math.random() * w, Math.random() * h, 0.5 + Math.random() * (maxR || 3), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function grimeTexture(base, dark, repeatX, repeatY) {
+  return canvasTexture(512, 512, (ctx, w, h) => {
+    ctx.fillStyle = base; ctx.fillRect(0, 0, w, h);
+    speckle(ctx, w, h, 900, dark, 0.35, 4);
+    speckle(ctx, w, h, 260, '#000000', 0.25, 7);
+    for (let i = 0; i < 22; i++) { // scuffs and streaks
+      ctx.globalAlpha = 0.06 + Math.random() * 0.1; ctx.strokeStyle = dark;
+      ctx.lineWidth = 1 + Math.random() * 3; ctx.beginPath();
+      const x = Math.random() * w, y = Math.random() * h;
+      ctx.moveTo(x, y); ctx.lineTo(x + (Math.random() - 0.5) * 180, y + (Math.random() - 0.5) * 60); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    const g = ctx.createLinearGradient(0, 0, 0, h); // worn edges darker
+    g.addColorStop(0, 'rgba(0,0,0,0.22)'); g.addColorStop(0.5, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.28)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  }, repeatX, repeatY);
+}
+function fabricTexture(base, repeatX, repeatY) {
+  return canvasTexture(256, 256, (ctx, w, h) => {
+    ctx.fillStyle = base; ctx.fillRect(0, 0, w, h);
+    for (let y = 0; y < h; y += 3) { ctx.globalAlpha = 0.12; ctx.fillStyle = (y / 3) % 2 ? '#000' : '#fff'; ctx.fillRect(0, y, w, 1); }
+    for (let x = 0; x < w; x += 3) { ctx.globalAlpha = 0.08; ctx.fillStyle = (x / 3) % 2 ? '#000' : '#fff'; ctx.fillRect(x, 0, 1, h); }
+    ctx.globalAlpha = 1; speckle(ctx, w, h, 220, '#101418', 0.3, 2);
+  }, repeatX, repeatY);
+}
+function glowTexture() { // soft round sprite for light shafts, dust and lamp glow
+  return canvasTexture(128, 128, (ctx, w, h) => {
+    const g = ctx.createRadialGradient(64, 64, 2, 64, 64, 62);
+    g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.35, 'rgba(255,255,255,0.45)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  });
+}
+function posterTexture(kind) {
+  return canvasTexture(256, 384, (ctx, w, h) => {
+    if (kind === 'zoo') {
+      ctx.fillStyle = '#0e3a24'; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#ffd166'; ctx.font = 'bold 44px Georgia'; ctx.fillText('BRONX', 22, 70); ctx.fillText('ZOO', 22, 118);
+      ctx.fillStyle = '#e8e8e8'; ctx.font = '20px Georgia'; ctx.fillText('Open daily', 22, 160); ctx.fillText('4 train to', 22, 190); ctx.fillText('Pelham Pkwy', 22, 218);
+      ctx.fillStyle = '#7ac74f'; ctx.beginPath(); ctx.arc(150, 300, 52, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#0e3a24'; ctx.font = 'bold 26px Georgia'; ctx.fillText('GO', 132, 310);
+    } else if (kind === 'mta') {
+      ctx.fillStyle = '#e8e8e8'; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#0039a6'; ctx.beginPath(); ctx.arc(128, 84, 56, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 64px Arial'; ctx.fillText('4', 110, 108);
+      ctx.fillStyle = '#111'; ctx.font = 'bold 24px Arial'; ctx.fillText('LEXINGTON AVE', 28, 190); ctx.fillText('EXPRESS', 62, 222);
+      ctx.font = '18px Arial'; ctx.fillText('Stand clear of the', 48, 272); ctx.fillText('closing doors.', 58, 298);
+    } else {
+      ctx.fillStyle = '#12303f'; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#4cc9f0'; ctx.font = 'bold 34px Georgia'; ctx.fillText('RIDE', 30, 80); ctx.fillText('SAFE', 30, 122);
+      ctx.fillStyle = '#e8e8e8'; ctx.font = '18px Georgia'; ctx.fillText('See something,', 30, 170); ctx.fillText('say something.', 30, 198);
+      ctx.fillText('Report to any', 30, 240); ctx.fillText('MTA employee.', 30, 268);
+    }
+  });
+}
+function signTexture(text, bg, fg, sub) {
+  return canvasTexture(512, 128, (ctx, w, h) => {
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = fg; ctx.font = 'bold 52px Arial'; ctx.textAlign = 'center'; ctx.fillText(text, w / 2, 62);
+    if (sub) { ctx.font = '26px Arial'; ctx.fillText(sub, w / 2, 102); }
+    ctx.textAlign = 'left';
+  });
+}
+
 // ---------- Three.js scene ----------
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping; // photoreal filmic response
+renderer.toneMappingExposure = 1.15;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070a);
-scene.fog = new THREE.Fog(0x05070a, 8, 30);
+scene.fog = new THREE.FogExp2(0x0a0d10, 0.055); // tunnel haze, denser than before
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 100);
 camera.position.set(0, 1.6, 6);
-const ambient = new THREE.AmbientLight(0xffffff, 0.7); scene.add(ambient);
-const mainLight = new THREE.PointLight(0xfff2cc, 1.2, 20); mainLight.position.set(0, 2.6, 0); scene.add(mainLight);
-const redLight = new THREE.PointLight(0xff2222, 0, 20); redLight.position.set(0, 2.4, 0); scene.add(redLight);
-function box(w, h, d, color, x, y, z, name) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
-  m.position.set(x, y, z); if (name) { m.name = name; m.userData.clickable = true; } scene.add(m); return m;
+const ambient = new THREE.AmbientLight(0xbfc8d4, 0.35); scene.add(ambient); // low cool fill, real light comes from tubes
+const hemi = new THREE.HemisphereLight(0x8fa3b8, 0x1a1410, 0.25); scene.add(hemi);
+// Cool-white fluorescent key light, with realistic falloff and shadows
+const mainLight = new THREE.PointLight(0xeef4ff, 28, 22, 1.8); mainLight.position.set(0, 2.6, 0);
+mainLight.castShadow = true; mainLight.shadow.mapSize.set(1024, 1024); mainLight.shadow.bias = -0.002;
+scene.add(mainLight);
+const fillLight = new THREE.PointLight(0xdfeaff, 8, 16, 1.8); fillLight.position.set(0, 2.5, -4.5); scene.add(fillLight);
+const fillLight2 = new THREE.PointLight(0xdfeaff, 8, 16, 1.8); fillLight2.position.set(0, 2.5, 4.5); scene.add(fillLight2);
+const redLight = new THREE.PointLight(0xff2a22, 0, 22, 1.6); redLight.position.set(0, 2.4, 0); redLight.castShadow = true; scene.add(redLight);
+const redLight2 = new THREE.PointLight(0xff2a22, 0, 18, 1.6); redLight2.position.set(0, 2.2, -4); scene.add(redLight2);
+const warmLight = new THREE.PointLight(0xffc98a, 0, 18, 1.7); warmLight.position.set(0, 2.5, 0); scene.add(warmLight);
+// Fluorescent tube fixtures (emissive, so they read as real light sources)
+const tubeMat = new THREE.MeshStandardMaterial({ color: 0xf4f8ff, emissive: 0xeef4ff, emissiveIntensity: 1.6, roughness: 0.3 });
+const tubeGeo = new THREE.BoxGeometry(0.28, 0.06, 3.2);
+const tubes = [];
+for (const z of [-4.5, 0, 4.5]) {
+  const t = new THREE.Mesh(tubeGeo, tubeMat); t.position.set(0, 2.92, z); scene.add(t); tubes.push(t);
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xdfeaff, transparent: true, opacity: 0.22, depthWrite: false }));
+  glow.scale.set(2.2, 0.7, 1); glow.position.set(0, 2.85, z); scene.add(glow); tubes.push(glow);
 }
-function cyl(r, h, color, x, y, z) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 12), new THREE.MeshStandardMaterial({ color, metalness: 0.6, roughness: 0.4 }));
-  m.position.set(x, y, z); scene.add(m); return m;
+// Red emergency strips along the ceiling (emissive, glow in blackout)
+const stripMat = new THREE.MeshStandardMaterial({ color: 0x7a0f0f, emissive: 0xff2222, emissiveIntensity: 0, roughness: 0.5 });
+for (const x of [-1.4, 1.4]) {
+  const s = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 12), stripMat);
+  s.position.set(x, 2.9, 0); scene.add(s);
+}
+// Dust motes drifting in the air, lit by the tubes
+const dustGeo = new THREE.BufferGeometry();
+const dustCount = 320, dustPos = new Float32Array(dustCount * 3);
+for (let i = 0; i < dustCount; i++) { dustPos[i * 3] = (Math.random() - 0.5) * 5.6; dustPos[i * 3 + 1] = 0.2 + Math.random() * 2.7; dustPos[i * 3 + 2] = (Math.random() - 0.5) * 13; }
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ map: glowTexture(), color: 0xcfd8e2, size: 0.035, transparent: true, opacity: 0.55, depthWrite: false, sizeAttenuation: true }));
+scene.add(dust);
+// Volumetric-style light shafts under the tubes (additive, faint)
+const shaftMat = new THREE.MeshBasicMaterial({ color: 0xbfd4ee, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+const shafts = [];
+for (const z of [-4.5, 0, 4.5]) {
+  const shaft = new THREE.Mesh(new THREE.ConeGeometry(1.5, 2.9, 24, 1, true), shaftMat);
+  shaft.position.set(0, 1.45, z); scene.add(shaft); shafts.push(shaft);
+}
+function setLightingMode(mode) {
+  // mode: 'normal' (cool fluorescent), 'blackout' (dark + red), 'battery' (dim warm)
+  if (mode === 'normal') {
+    mainLight.intensity = 28; fillLight.intensity = 8; fillLight2.intensity = 8;
+    redLight.intensity = 0; redLight2.intensity = 0; warmLight.intensity = 0;
+    tubeMat.emissive.set(0xeef4ff); tubeMat.emissiveIntensity = 1.6; stripMat.emissiveIntensity = 0;
+    renderer.toneMappingExposure = 1.15; scene.fog.density = 0.045;
+  } else if (mode === 'blackout') {
+    mainLight.intensity = 0.6; fillLight.intensity = 0; fillLight2.intensity = 0;
+    redLight.intensity = 14; redLight2.intensity = 9; warmLight.intensity = 0;
+    tubeMat.emissive.set(0x111111); tubeMat.emissiveIntensity = 0.1; stripMat.emissiveIntensity = 2.2;
+    renderer.toneMappingExposure = 0.9; scene.fog.density = 0.075;
+  } else {
+    mainLight.intensity = 0; fillLight.intensity = 0; fillLight2.intensity = 0;
+    redLight.intensity = 2; redLight2.intensity = 1; warmLight.intensity = 12;
+    tubeMat.emissive.set(0xffc98a); tubeMat.emissiveIntensity = 0.5; stripMat.emissiveIntensity = 0.4;
+    renderer.toneMappingExposure = 1.0; scene.fog.density = 0.06;
+  }
+}
+setLightingMode('normal');
+const floorTex = grimeTexture('#33383d', '#14171a', 3, 7);
+const wallTex = grimeTexture('#46545e', '#1c2226', 2, 2);
+const seatTex = fabricTexture('#1d4a75', 2, 1);
+const steelTex = grimeTexture('#9aa4ab', '#5a646b', 1, 1);
+function stdMat(opts) { return new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.8, metalness: 0.05 }, opts)); }
+function box(w, h, d, color, x, y, z, name, matOpts) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matOpts ? stdMat(matOpts) : stdMat({ color }));
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+  if (name) { m.name = name; m.userData.clickable = true; } scene.add(m); return m;
+}
+function cyl(r, h, color, x, y, z, matOpts) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 16), matOpts ? stdMat(matOpts) : stdMat({ color, metalness: 0.85, roughness: 0.25 }));
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; scene.add(m); return m;
+}
+function wallPlane(w, h, tex, x, y, z, rotY) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 }));
+  m.position.set(x, y, z); m.rotation.y = rotY; m.receiveShadow = true; scene.add(m); return m;
 }
 // Subway car interior: floor, ceiling, walls, seats, poles, doors, windows
-box(6, 0.1, 14, 0x2a2f33, 0, 0, 0); // floor
-box(6, 0.1, 14, 0x1c2126, 0, 3, 0); // ceiling
-box(0.15, 3, 14, 0x3a4a55, -3, 1.5, 0); // left wall
-box(0.15, 3, 14, 0x3a4a55, 3, 1.5, 0); // right wall
-box(6, 3, 0.15, 0x2a343c, 0, 1.5, -7); // front
-box(6, 3, 0.15, 0x2a343c, 0, 1.5, 7); // back
-// Seats (blue benches)
-for (const sx of [-2.4, 2.4]) for (let z = -5; z <= 5; z += 2.5) box(1.2, 0.5, 2, 0x1f4e79, sx, 0.6, z);
-// Poles
-for (let z = -6; z <= 6; z += 3) { cyl(0.05, 3, 0xc0c8cc, -1.2, 1.5, z); cyl(0.05, 3, 0xc0c8cc, 1.2, 1.5, z); }
+box(6, 0.1, 14, 0x2a2f33, 0, 0, 0, null, { map: floorTex, roughness: 0.65, metalness: 0.15 }); // worn, scuffed floor
+box(6, 0.1, 14, 0x1c2126, 0, 3, 0, null, { map: wallTex, roughness: 0.9 }); // ceiling
+box(0.15, 3, 14, 0x3a4a55, -3, 1.5, 0, null, { map: wallTex, roughness: 0.75, metalness: 0.3 }); // left wall
+box(0.15, 3, 14, 0x3a4a55, 3, 1.5, 0, null, { map: wallTex, roughness: 0.75, metalness: 0.3 }); // right wall
+box(6, 3, 0.15, 0x2a343c, 0, 1.5, -7, null, { map: wallTex, roughness: 0.8, metalness: 0.25 }); // front
+box(6, 3, 0.15, 0x2a343c, 0, 1.5, 7, null, { map: wallTex, roughness: 0.8, metalness: 0.25 }); // back
+// Seats (blue fabric benches, worn)
+for (const sx of [-2.4, 2.4]) for (let z = -5; z <= 5; z += 2.5) box(1.2, 0.5, 2, 0x1f4e79, sx, 0.6, z, null, { map: seatTex, roughness: 0.95, metalness: 0 });
+// Poles (brushed stainless steel, slight wear)
+for (let z = -6; z <= 6; z += 3) { cyl(0.05, 3, 0xc0c8cc, -1.2, 1.5, z, { map: steelTex, metalness: 0.9, roughness: 0.28 }); cyl(0.05, 3, 0xc0c8cc, 1.2, 1.5, z, { map: steelTex, metalness: 0.9, roughness: 0.28 }); }
+// Horizontal handrails above the seats
+for (const sx of [-1.2, 1.2]) { const r = cyl(0.035, 13, 0xc0c8cc, sx, 2.55, 0, { metalness: 0.9, roughness: 0.3 }); r.rotation.x = Math.PI / 2; }
 // Doors (centre, right side) - open to platform after blackout
-const doorL = box(0.1, 2.2, 1.1, 0x8a9aa5, 2.95, 1.2, -1, 'door');
-const doorR = box(0.1, 2.2, 1.1, 0x8a9aa5, 2.95, 1.2, 1, 'door');
-// Windows: dark city glow strips
-for (const sx of [-2.95, 2.95]) for (let z = -5; z <= 5; z += 2.5) box(0.05, 0.9, 1.4, 0x0a1a2a, sx, 1.9, z);
+const doorL = box(0.1, 2.2, 1.1, 0x8a9aa5, 2.95, 1.2, -1, 'door', { map: steelTex, metalness: 0.7, roughness: 0.35 });
+const doorR = box(0.1, 2.2, 1.1, 0x8a9aa5, 2.95, 1.2, 1, 'door', { map: steelTex, metalness: 0.7, roughness: 0.35 });
+// Windows: dark city glow strips (emissive, so the city outside reads as lit)
+const winMat = new THREE.MeshStandardMaterial({ color: 0x0a1a2a, emissive: 0x16283a, emissiveIntensity: 0.7, roughness: 0.15, metalness: 0.4 });
+for (const sx of [-2.95, 2.95]) for (let z = -5; z <= 5; z += 2.5) {
+  const win = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.9, 1.4), winMat);
+  win.position.set(sx, 1.9, z); scene.add(win);
+}
+// Realistic signage and ads on the car walls (procedural canvas textures)
+wallPlane(1.1, 1.65, posterTexture('mta'), -2.91, 1.7, -5.2, Math.PI / 2);
+wallPlane(1.1, 1.65, posterTexture('zoo'), 2.91, 1.7, -5.2, -Math.PI / 2);
+wallPlane(1.1, 1.65, posterTexture('safety'), -2.91, 1.7, 5.2, Math.PI / 2);
+wallPlane(1.1, 1.65, posterTexture('zoo'), 2.91, 1.7, 5.2, -Math.PI / 2);
+wallPlane(2.0, 0.5, signTexture('14 ST - UNION SQ', '#111111', '#e8e8e8', '4  5  6  L  N  Q  R  W'), -2.91, 2.55, 0, Math.PI / 2);
+wallPlane(1.6, 0.4, signTexture('STAND CLEAR OF THE CLOSING DOORS', '#e8e8e8', '#111111', ''), 2.91, 2.55, 0, -Math.PI / 2);
 // Interactive objects
 const relay = box(0.7, 0.9, 0.2, 0xffd166, -2.9, 1.6, -3, 'relay');
 const release = box(0.4, 0.5, 0.15, 0xef476f, 2.9, 1.5, -3, 'release');
@@ -109,10 +279,13 @@ board.visible = false; // appears on the platform after evacuation
 // NPCs: simple figures (Jade = player, Caleb, Nurse, Walter)
 function person(color, x, z, name) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 1.1, 10), new THREE.MeshStandardMaterial({ color }));
-  body.position.y = 0.8; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), new THREE.MeshStandardMaterial({ color: 0xd9a066 }));
-  head.position.y = 1.55; g.add(head);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 1.1, 10), new THREE.MeshStandardMaterial({ color, roughness: 0.9 }));
+  body.position.y = 0.8; body.castShadow = true; g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.6 }));
+  head.position.y = 1.55; head.castShadow = true; g.add(head);
+  // Shoulders read as a real coat, not a flat cylinder
+  const shoulders = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 8), new THREE.MeshStandardMaterial({ color, roughness: 0.9 }));
+  shoulders.scale.set(1, 0.55, 1); shoulders.position.y = 1.32; shoulders.castShadow = true; g.add(shoulders);
   g.position.set(x, 0, z); g.name = name; scene.add(g); return g;
 }
 const caleb = person(0x1a3a5a, 1.5, -2, 'caleb');
@@ -135,15 +308,37 @@ addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
 addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 function animate() {
   requestAnimationFrame(animate);
+  const t = Date.now() / 1000;
   const sp = 0.05;
   if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
   if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
   camera.position.x = Math.max(-2.5, Math.min(2.5, camera.position.x));
   camera.position.z = Math.max(-6.5, Math.min(6.5, camera.position.z));
-  camera.rotation.order = 'YXZ'; camera.rotation.y = state.yaw; camera.rotation.x = state.pitch;
+  camera.rotation.order = 'YXZ';
+  // Slight handheld sway (depth-of-field feel comes from the vignette + grain overlays)
+  const sway = document.getElementById('dialogue').classList.contains('hidden') ? 1 : 0.4;
+  camera.rotation.y = state.yaw + Math.sin(t * 0.7) * 0.004 * sway;
+  camera.rotation.x = state.pitch + Math.sin(t * 0.9 + 1.3) * 0.003 * sway;
+  camera.position.y = 1.6 + Math.sin(t * 0.8) * 0.012 * sway;
+  // Dust drifts slowly through the light shafts
+  const pos = dustGeo.attributes.position;
+  for (let i = 0; i < dustCount; i++) {
+    let y = pos.getY(i) - 0.0006;
+    if (y < 0.15) y = 2.9;
+    pos.setY(i, y);
+    pos.setX(i, pos.getX(i) + Math.sin(t * 0.4 + i) * 0.0004);
+  }
+  pos.needsUpdate = true;
+  dust.material.opacity = (state.stage === 'blackout') ? 0.25 : 0.55;
   if (state.stage === 'blackout' || state.stage === 'after') {
-    mainLight.intensity = 0.05 + Math.sin(Date.now() / 300) * 0.03;
-    redLight.intensity = 0.9;
+    if (state.stage === 'blackout') {
+      // Flickering red emergency light while the relay is dead
+      setLightingMode('blackout');
+      redLight.intensity = 12 + Math.sin(t * 9) * 3 + (Math.random() > 0.96 ? -6 : 0);
+      mainLight.intensity = 0.4 + Math.sin(t * 7) * 0.25;
+    } else {
+      setLightingMode('battery'); // dim warm battery power after the repair
+    }
   }
   renderer.render(scene, camera);
 }
@@ -194,6 +389,7 @@ function renderRepair() {
 function checkRepair() {
   if (gridState.every((v, i) => v === TARGET[i])) {
     state.repaired = true;
+    hideToast(); // BLACKOUT banner goes away as soon as the lights return
     document.getElementById('repairStatus').textContent = '✓ Relay restored - platform lights flicker back on.';
     document.getElementById('repairClose').textContent = 'Continue';
     integrity('Transit', 10); integrity('Power', 10);
@@ -253,12 +449,16 @@ function endAct() {
   const el = document.getElementById('endCard');
   el.classList.remove('hidden');
   document.getElementById('endSummary').innerHTML =
-    `<p>Act I complete - the train is evacuated, the relay is repaired, and the RESET board is in your hands.</p>` +
+    `<p>Act I complete - the passengers are moving to the platform, the relay is repaired, and the RESET board is in your hands. Caleb is staying with Walter on the bench until help reaches him.</p>` +
     `<p><strong>Sealed choice revealed:</strong> ${state.sealedChoice || 'none'} got priority power. ` +
     `In the full Zama version this choice would have stayed encrypted on-chain until this moment.</p>` +
     `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
     `<p>Next: Act II - City of Wires (not in this prototype).</p>`;
 }
+document.getElementById('cinemaBtn').onclick = () => {
+  document.getElementById('letterboxTop').classList.toggle('hidden');
+  document.getElementById('letterboxBottom').classList.toggle('hidden');
+};
 // Timer
 setInterval(() => {
   if (state.timer > 0) { state.timer--; updateHUD(); if (state.timer === 0) toast('Battery dead - emergency lights are out. The story continues in the dark.'); }
