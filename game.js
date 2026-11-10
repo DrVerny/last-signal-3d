@@ -1048,6 +1048,14 @@ function findBoard() {
   ], endAct);
 }
 function endAct() {
+  // Carry Act I forward: Act II reads this from localStorage (Trust, System
+  // Integrity, sealed choice, evidence). Defaults apply if it is missing.
+  try {
+    localStorage.setItem('lastSignalAct1', JSON.stringify({
+      trust: state.trust, integrity: state.integrity, sealedChoice: state.sealedChoice,
+      inventory: state.inventory, boardFound: state.boardFound
+    }));
+  } catch (e) { /* private mode: Act II starts from its defaults */ }
   const el = document.getElementById('endCard');
   el.classList.remove('hidden');
   document.getElementById('endSummary').innerHTML =
