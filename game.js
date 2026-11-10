@@ -299,14 +299,14 @@ const hemi = new THREE.HemisphereLight(0x8fa3b8, 0x1a1410, 0.08); scene.add(hemi
 // Cool-white fluorescent key light, with realistic falloff and shadows.
 // Distance is kept to the car interior (9 m) so light does not spill out
 // through the windows and wash out the tunnel and platform outside.
-const mainLight = new THREE.PointLight(0xeef4ff, 10, 9, 1.8); mainLight.position.set(0, 2.0, 0);
+const mainLight = new THREE.PointLight(0xeef4ff, 5, 9, 1.8); mainLight.position.set(0, 1.4, 0);
 mainLight.castShadow = true; mainLight.shadow.mapSize.set(1024, 1024); mainLight.shadow.bias = -0.002;
 scene.add(mainLight);
-const fillLight = new THREE.PointLight(0xdfeaff, 3.0, 8, 1.8); fillLight.position.set(0, 2.0, -4.5); scene.add(fillLight);
-const fillLight2 = new THREE.PointLight(0xdfeaff, 3.0, 8, 1.8); fillLight2.position.set(0, 2.0, 4.5); scene.add(fillLight2);
-const redLight = new THREE.PointLight(0xff2a22, 0, 10, 1.6); redLight.position.set(0, 2.0, 0); redLight.castShadow = true; scene.add(redLight);
-const redLight2 = new THREE.PointLight(0xff2a22, 0, 9, 1.6); redLight2.position.set(0, 2.0, -4); scene.add(redLight2);
-const warmLight = new THREE.PointLight(0xffc98a, 0, 9, 1.7); warmLight.position.set(0, 2.0, 0); scene.add(warmLight);
+const fillLight = new THREE.PointLight(0xdfeaff, 1.5, 8, 1.8); fillLight.position.set(0, 1.4, -4.5); scene.add(fillLight);
+const fillLight2 = new THREE.PointLight(0xdfeaff, 1.5, 8, 1.8); fillLight2.position.set(0, 1.4, 4.5); scene.add(fillLight2);
+const redLight = new THREE.PointLight(0xff2a22, 0, 10, 1.6); redLight.position.set(0, 1.4, 0); redLight.castShadow = true; scene.add(redLight);
+const redLight2 = new THREE.PointLight(0xff2a22, 0, 9, 1.6); redLight2.position.set(0, 1.4, -4); scene.add(redLight2);
+const warmLight = new THREE.PointLight(0xffc98a, 0, 9, 1.7); warmLight.position.set(0, 1.4, 0); scene.add(warmLight);
 // Fluorescent tube fixtures (emissive, so they read as real light sources).
 // Kept dim on purpose: the interior is a moody night car, not a bright room.
 // The glow sprites are tracked separately so blackout can dim them too.
@@ -316,11 +316,11 @@ const tubes = [];
 const tubeGlows = [];
 for (const z of [-4.5, 0, 4.5]) {
   const t = new THREE.Mesh(tubeGeo, tubeMat); t.position.set(0, 2.92, z); scene.add(t); tubes.push(t);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xdfeaff, transparent: true, opacity: 0.04, depthWrite: false }));
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xdfeaff, transparent: true, opacity: 0.015, depthWrite: false }));
   glow.scale.set(2.2, 0.7, 1); glow.position.set(0, 2.85, z); scene.add(glow); tubes.push(glow); tubeGlows.push(glow);
 }
 // Red emergency strips along the ceiling (emissive, glow in blackout)
-const stripMat = new THREE.MeshStandardMaterial({ color: 0x7a0f0f, emissive: 0xff2222, emissiveIntensity: 0, roughness: 0.5 });
+const stripMat = new THREE.MeshStandardMaterial({ color: 0x7a0f0f, emissive: 0xff2222, emissiveIntensity: 0, roughness: 0.5, envMapIntensity: 0 });
 for (const x of [-1.15, 1.15]) {
   const s = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 12), stripMat);
   s.position.set(x, 2.62, 0); scene.add(s);
@@ -334,18 +334,18 @@ const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ map: glowTextu
 scene.add(dust);
 // Volumetric light shafts: layered cones with a vertical gradient alpha texture,
 // so the beam is bright at the tube and fades to nothing at the floor (god-ray feel).
-const shaftMat = new THREE.MeshBasicMaterial({ map: SHAFT_TEX, color: 0xbfd4ee, transparent: true, opacity: 0.10, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+const shaftMat = new THREE.MeshBasicMaterial({ map: SHAFT_TEX, color: 0xbfd4ee, transparent: true, opacity: 0.07, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
 const shafts = [];
 const shaftHalos = [];
 for (const z of [-4.5, 0, 4.5]) {
   const shaft = new THREE.Mesh(new THREE.ConeGeometry(1.5, 2.9, 24, 1, true), shaftMat);
   shaft.position.set(0, 1.45, z); scene.add(shaft); shafts.push(shaft);
   const inner = new THREE.Mesh(new THREE.ConeGeometry(0.85, 2.9, 20, 1, true), shaftMat.clone());
-  inner.material.opacity = 0.07; inner.position.set(0, 1.45, z); scene.add(inner); shafts.push(inner);
+  inner.material.opacity = 0.05; inner.position.set(0, 1.45, z); scene.add(inner); shafts.push(inner);
   // Light pool on the floor under each tube, plus a bloom-like halo at the tube.
   const pool = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 3.4), new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xbfd4ee, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending, depthWrite: false }));
   pool.rotation.x = -Math.PI / 2; pool.position.set(0, 0.055, z); scene.add(pool); shaftHalos.push(pool);
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xeef4ff, transparent: true, opacity: 0.10, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xeef4ff, transparent: true, opacity: 0.03, blending: THREE.AdditiveBlending, depthWrite: false }));
   halo.scale.set(3.2, 1.0, 1); halo.position.set(0, 2.85, z); scene.add(halo); shaftHalos.push(halo);
 }
 // Dust motes concentrated inside the light shafts (visible beams, not just ambient dust).
@@ -361,28 +361,28 @@ scene.add(shaftDust);
 function setLightingMode(mode) {
   // mode: 'normal' (cool fluorescent), 'blackout' (dark + red), 'battery' (dim warm)
   if (mode === 'normal') {
-    mainLight.intensity = 10; fillLight.intensity = 3.0; fillLight2.intensity = 3.0;
+    mainLight.intensity = 5; fillLight.intensity = 1.5; fillLight2.intensity = 1.5;
     redLight.intensity = 0; redLight2.intensity = 0; warmLight.intensity = 0;
     tubeMat.emissive.set(0xcfe0f0); tubeMat.emissiveIntensity = 0.25; stripMat.emissiveIntensity = 0;
-    for (const g of tubeGlows) g.material.opacity = 0.04;
+    for (const g of tubeGlows) g.material.opacity = 0.015;
     renderer.toneMappingExposure = 0.95; scene.fog.density = 0.055;
-    shaftMat.opacity = 0.10; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.10 : 0.05;
+    shaftMat.opacity = 0.07; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.03 : 0.05;
     shaftDust.material.opacity = 0.3;
   } else if (mode === 'blackout') {
     mainLight.intensity = 0.6; fillLight.intensity = 0; fillLight2.intensity = 0;
-    redLight.intensity = 14; redLight2.intensity = 9; warmLight.intensity = 0;
+    redLight.intensity = 7; redLight2.intensity = 4.5; warmLight.intensity = 0;
     tubeMat.emissive.set(0x111111); tubeMat.emissiveIntensity = 0.1; stripMat.emissiveIntensity = 0.6;
-    for (const g of tubeGlows) g.material.opacity = 0.02;
+    for (const g of tubeGlows) g.material.opacity = 0.01;
     renderer.toneMappingExposure = 0.9; scene.fog.density = 0.075;
-    shaftMat.opacity = 0.05; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.06 : 0.03;
+    shaftMat.opacity = 0.03; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.02 : 0.03;
     shaftDust.material.opacity = 0.15;
   } else {
     mainLight.intensity = 0; fillLight.intensity = 0; fillLight2.intensity = 0;
-    redLight.intensity = 2; redLight2.intensity = 1; warmLight.intensity = 12;
+    redLight.intensity = 2; redLight2.intensity = 1; warmLight.intensity = 6;
     tubeMat.emissive.set(0xffc98a); tubeMat.emissiveIntensity = 0.3; stripMat.emissiveIntensity = 0.4;
-    for (const g of tubeGlows) g.material.opacity = 0.03;
+    for (const g of tubeGlows) g.material.opacity = 0.015;
     renderer.toneMappingExposure = 1.0; scene.fog.density = 0.06;
-    shaftMat.opacity = 0.12; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.12 : 0.06;
+    shaftMat.opacity = 0.08; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.04 : 0.06;
     shaftDust.material.opacity = 0.35;
   }
 }
@@ -465,14 +465,14 @@ roof.position.set(0, 0, -7.5); roof.receiveShadow = true; scene.add(roof);
 // Ceiling panels: longitudinal strips following the arch, with seams between them.
 // Mid-grey, not near-white: the old near-white panels blew out under the tubes.
 for (const px of [-0.85, 0, 0.85]) {
-  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.04, 14.6), new THREE.MeshStandardMaterial({ color: 0x3a4046, roughness: 0.6, metalness: 0.08, bumpMap: NOISE_TEX_FINE, bumpScale: 0.08 }));
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.04, 14.6), new THREE.MeshStandardMaterial({ color: 0x3a4046, roughness: 0.95, metalness: 0.08, envMapIntensity: 0, bumpMap: NOISE_TEX_FINE, bumpScale: 0.08 }));
   const y = px === 0 ? 3.02 : 2.82;
   panel.position.set(px, y, 0); panel.receiveShadow = true; panel.castShadow = true; scene.add(panel);
 }
 // Recessed fluorescent housings (two rows, in the ceiling panels) - the tubes
 // already defined above sit inside these, so they read as fixtures, not floating bars
 for (const px of [0]) for (const z of [-4.5, 0, 4.5]) {
-  const housing = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.05, 3.4), new THREE.MeshStandardMaterial({ color: 0x2a2e32, roughness: 0.4, metalness: 0.7, envMap: ENV_MAP, envMapIntensity: 0.6 }));
+  const housing = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.05, 3.4), new THREE.MeshStandardMaterial({ color: 0x2a2e32, roughness: 0.4, metalness: 0.7, envMap: ENV_MAP, envMapIntensity: 0.15 }));
   housing.position.set(px, 3.0, z); scene.add(housing);
 }
 // Arched end walls (same profile as the cross-section), with a centre door and
@@ -905,7 +905,7 @@ function animate() {
     if (state.stage === 'blackout') {
       // Flickering red emergency light while the relay is dead
       setLightingMode('blackout');
-      redLight.intensity = 12 + Math.sin(t * 9) * 3 + (Math.random() > 0.96 ? -6 : 0);
+      redLight.intensity = 6 + Math.sin(t * 9) * 1.5 + (Math.random() > 0.96 ? -3 : 0);
       mainLight.intensity = 0.4 + Math.sin(t * 7) * 0.25;
     } else {
       setLightingMode('battery'); // dim warm battery power after the repair
