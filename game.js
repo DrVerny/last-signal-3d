@@ -1,4 +1,4 @@
-// THE LAST SIGNAL — Act I: The 4 Train — 3D prototype
+// THE LAST SIGNAL - Act I: The 4 Train - 3D prototype
 // Original short dialogue in the spirit of the script; no long verbatim copying.
 // Sealed choice is simulated locally: hidden until reveal. On Sepolia it would
 // use FHEVM (as in Sealed Fortune) so no one sees the choice before reveal.
@@ -10,8 +10,8 @@ const state = {
   yaw: 0, pitch: 0, camZ: 0
 };
 const OBJ = [
-  'Ride the 4 train — talk to Caleb',
-  'Survive the blackout — inspect the signal relay',
+  'Ride the 4 train - talk to Caleb',
+  'Survive the blackout - inspect the signal relay',
   'Repair the relay (match the circuit)',
   'Count the passengers and help Walter',
   'Make a sealed choice: which line gets priority power',
@@ -31,13 +31,13 @@ function updateHUD() {
   document.getElementById('intWater').style.width = state.integrity.Water + '%';
   document.getElementById('intPower').style.width = state.integrity.Power + '%';
   document.getElementById('intComms').style.width = state.integrity.Comms + '%';
-  document.getElementById('invList').textContent = state.inventory.length ? state.inventory.join(', ') : '— empty —';
+  document.getElementById('invList').textContent = state.inventory.length ? state.inventory.join(', ') : '- empty -';
 }
 function toast(msg) {
   const t = document.getElementById('toast'); t.textContent = msg; t.style.opacity = 1;
   setTimeout(() => t.style.opacity = 0, 3500);
 }
-function trust(n, why) { state.trust = Math.max(0, Math.min(10, state.trust + n)); updateHUD(); toast((n > 0 ? 'Trust +' + n : 'Trust ' + n) + (why ? ' — ' + why : '')); }
+function trust(n, why) { state.trust = Math.max(0, Math.min(10, state.trust + n)); updateHUD(); toast((n > 0 ? 'Trust +' + n : 'Trust ' + n) + (why ? ' - ' + why : '')); }
 function integrity(key, n) { state.integrity[key] = Math.max(0, Math.min(100, state.integrity[key] + n)); updateHUD(); }
 
 // ---------- Dialogue ----------
@@ -95,7 +95,7 @@ box(6, 3, 0.15, 0x2a343c, 0, 1.5, 7); // back
 for (const sx of [-2.4, 2.4]) for (let z = -5; z <= 5; z += 2.5) box(1.2, 0.5, 2, 0x1f4e79, sx, 0.6, z);
 // Poles
 for (let z = -6; z <= 6; z += 3) { cyl(0.05, 3, 0xc0c8cc, -1.2, 1.5, z); cyl(0.05, 3, 0xc0c8cc, 1.2, 1.5, z); }
-// Doors (centre, right side) — open to platform after blackout
+// Doors (centre, right side) - open to platform after blackout
 const doorL = box(0.1, 2.2, 1.1, 0x8a9aa5, 2.95, 1.2, -1, 'door');
 const doorR = box(0.1, 2.2, 1.1, 0x8a9aa5, 2.95, 1.2, 1, 'door');
 // Windows: dark city glow strips
@@ -161,14 +161,14 @@ canvas.addEventListener('click', e => {
 });
 function interact(name) {
   if (name === 'relay' && state.stage === 'blackout') { openRepair(); return; }
-  if (name === 'relay') { toast('Signal relay — dead. It needs a repair once the power is out.'); return; }
-  if (name === 'release') { toast('Emergency release — locked. Restore the relay first.'); return; }
-  if (name === 'panel') { toast('Maintenance panel — wiring inside. Jade knows this panel by heart.'); return; }
+  if (name === 'relay') { toast('Signal relay - dead. It needs a repair once the power is out.'); return; }
+  if (name === 'release') { toast('Emergency release - locked. Restore the relay first.'); return; }
+  if (name === 'panel') { toast('Maintenance panel - wiring inside. Jade knows this panel by heart.'); return; }
   if (name === 'board' && board.visible) { findBoard(); return; }
-  if (name === 'caleb') { toast('Caleb Bishop, NYPD Transit. Young, earnest, out of his depth — and trying.'); return; }
-  if (name === 'nurse') { toast('Nurse Adeyemi — night shift starts in an hour. People are counting on her.'); return; }
+  if (name === 'caleb') { toast('Caleb Bishop, NYPD Transit. Young, earnest, out of his depth - and trying.'); return; }
+  if (name === 'nurse') { toast('Nurse Adeyemi - night shift starts in an hour. People are counting on her.'); return; }
   if (name === 'walter') { toast('Walter Simms, 70s. He rode this line when it cost a nickel. He cannot climb stairs.'); return; }
-  if (name === 'door') { toast('Doors — sealed while the train is in the tunnel.'); return; }
+  if (name === 'door') { toast('Doors - sealed while the train is in the tunnel.'); return; }
 }
 
 // ---------- Repair mini-game ----------
@@ -194,7 +194,7 @@ function renderRepair() {
 function checkRepair() {
   if (gridState.every((v, i) => v === TARGET[i])) {
     state.repaired = true;
-    document.getElementById('repairStatus').textContent = '✓ Relay restored — platform lights flicker back on.';
+    document.getElementById('repairStatus').textContent = '✓ Relay restored - platform lights flicker back on.';
     document.getElementById('repairClose').textContent = 'Continue';
     integrity('Transit', 10); integrity('Power', 10);
     setObjectives(3);
@@ -212,13 +212,13 @@ function afterRepair() {
   doorL.position.z = -2.2; doorR.position.z = 2.2;
   board.visible = true;
   showDialogue([
-    { who: 'Jade', text: 'Lights are back — on battery. Fifteen minutes. We move now, or we wait in the dark.' },
+    { who: 'Jade', text: 'Lights are back - on battery. Fifteen minutes. We move now, or we wait in the dark.' },
     { who: 'Caleb', text: 'Count the passengers. Third car first. Nobody gets left behind.' }
   ], () => countPassengers());
 }
 function countPassengers() {
   showDialogue([
-    { who: 'Jade', text: 'Nurse Adeyemi — accounted for. Walter — he is still on the bench. He cannot climb those stairs.' },
+    { who: 'Jade', text: 'Nurse Adeyemi - accounted for. Walter - he is still on the bench. He cannot climb those stairs.' },
     { who: 'Caleb', text: 'I will stay with him. You go ahead and check the platform. Deal?' },
     { who: 'Jade', text: 'Deal. Five minutes, Bishop. Then you are calling the shots again.', choices: [
       { label: '“Thank you, Caleb. I trust you with him.” (Trust +2)', effect: () => trust(2, 'you trusted Caleb') },
@@ -230,13 +230,13 @@ function sealedChoice() {
   // Sealed / encrypted choice: hidden until the end of Act I.
   // Prototype simulates FHE locally; on Sepolia this would be an FHEVM euint32.
   showDialogue([
-    { who: 'System', text: 'SEALED CHOICE — Priority power: one line gets full power for 2 hours. The others run low. Your choice is sealed — nobody, not even the other players, can see it until the reveal.' },
-    { who: 'Jade', text: 'Hospital, residential, or the treatment plant. There is no clean answer. Choose — and own it.', choices: [
-      { label: 'Hospital — full power', effect: () => { state.sealedChoice = 'Hospital'; integrity('Water', -5); } },
-      { label: 'Residential — dialysis clinic line', effect: () => { state.sealedChoice = 'Residential'; integrity('Power', -5); } },
-      { label: 'Industrial — water treatment plant', effect: () => { state.sealedChoice = 'Industrial'; integrity('Transit', -5); } }
+    { who: 'System', text: 'SEALED CHOICE - Priority power: one line gets full power for 2 hours. The others run low. Your choice is sealed - nobody, not even the other players, can see it until the reveal.' },
+    { who: 'Jade', text: 'Hospital, residential, or the treatment plant. There is no clean answer. Choose - and own it.', choices: [
+      { label: 'Hospital - full power', effect: () => { state.sealedChoice = 'Hospital'; integrity('Water', -5); } },
+      { label: 'Residential - dialysis clinic line', effect: () => { state.sealedChoice = 'Residential'; integrity('Power', -5); } },
+      { label: 'Industrial - water treatment plant', effect: () => { state.sealedChoice = 'Industrial'; integrity('Transit', -5); } }
     ] }
-  ], () => { setObjectives(5); toast('Choice sealed (encrypted in prototype — hidden until reveal). Click the green circuit board on the platform wall.'); });
+  ], () => { setObjectives(5); toast('Choice sealed (encrypted in prototype - hidden until reveal). Click the green circuit board on the platform wall.'); });
 }
 function findBoard() {
   if (state.boardFound) return;
@@ -245,7 +245,7 @@ function findBoard() {
   updateHUD(); setObjectives(6);
   showDialogue([
     { who: 'Jade', text: 'Hand-soldered. MTA capacitors. Labelled with one word: RESET. Someone who used to work here built this.' },
-    { who: 'Caleb', text: 'So this was not an accident. Someone tested the system — on us.' },
+    { who: 'Caleb', text: 'So this was not an accident. Someone tested the system - on us.' },
     { who: 'Jade', text: 'And they are waiting for someone to prove them wrong. That someone is us.' }
   ], endAct);
 }
@@ -253,28 +253,28 @@ function endAct() {
   const el = document.getElementById('endCard');
   el.classList.remove('hidden');
   document.getElementById('endSummary').innerHTML =
-    `<p>Act I complete — the train is evacuated, the relay is repaired, and the RESET board is in your hands.</p>` +
+    `<p>Act I complete - the train is evacuated, the relay is repaired, and the RESET board is in your hands.</p>` +
     `<p><strong>Sealed choice revealed:</strong> ${state.sealedChoice || 'none'} got priority power. ` +
     `In the full Zama version this choice would have stayed encrypted on-chain until this moment.</p>` +
-    `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity — Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
-    `<p>Next: Act II — City of Wires (not in this prototype).</p>`;
+    `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
+    `<p>Next: Act II - City of Wires (not in this prototype).</p>`;
 }
 // Timer
 setInterval(() => {
-  if (state.timer > 0) { state.timer--; updateHUD(); if (state.timer === 0) toast('Battery dead — emergency lights are out. The story continues in the dark.'); }
+  if (state.timer > 0) { state.timer--; updateHUD(); if (state.timer === 0) toast('Battery dead - emergency lights are out. The story continues in the dark.'); }
 }, 1000);
 // Intro
 setObjectives(0); updateHUD();
 showDialogue([
-  { who: 'Jade Morales', text: 'Southbound 4 train, rush hour. I designed the signal system for this line — before they fired me.' },
+  { who: 'Jade Morales', text: 'Southbound 4 train, rush hour. I designed the signal system for this line - before they fired me.' },
   { who: 'Caleb Bishop', text: 'Everybody stay calm! NYPD! We are going to get you out of here!' },
   { who: 'Jade Morales', text: 'Unless you know how to bypass a locked emergency release, let me work. You are my eyes. Third car. Count the passengers.' },
-  { who: 'System', text: 'The lights flicker. Once. Twice. Then — darkness.', choices: [
+  { who: 'System', text: 'The lights flicker. Once. Twice. Then - darkness.', choices: [
     { label: '“Stay calm. I have done this before.” (Trust +1)', effect: () => trust(1, 'calm under pressure') },
     { label: '“Move. Now. No time to talk.”', effect: () => {} }
   ] }
 ], () => {
   state.stage = 'blackout';
   setObjectives(2);
-  toast('BLACKOUT — click the glowing gold signal relay to repair it.');
+  toast('BLACKOUT - click the glowing gold signal relay to repair it.');
 });
