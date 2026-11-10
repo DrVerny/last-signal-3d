@@ -374,11 +374,11 @@ function openValveModal() {
     // The sabotaged digital control overcorrects: one valve drops on its own.
     const keys = ['hospital', 'residential', 'industrial'];
     const k = keys[Math.floor(Math.random() * keys.length)];
-    const drop = (k === 'industrial' && state.trust < 7) ? 12 : 8;
+    const drop = (k === 'industrial' && state.trust < 7) ? 8 : 6;
     pressures[k] = Math.max(20, pressures[k] - drop);
     if (state.trust >= 7) pressures.industrial = Math.max(pressures.industrial, 70); // Caleb holds it
     renderValve();
-  }, 3500);
+  }, 5000);
 }
 document.querySelectorAll('#valveModal button[data-line]').forEach(b => {
   b.onclick = () => {
@@ -484,8 +484,8 @@ function buildMission2() {
   scadaScreen.position.set(2.42, 1.38, 1.28); scadaScreen.rotation.y = -0.4; mission2.add(scadaScreen);
   logbookMesh = box(mission2, 0.4, 0.06, 0.3, 0x8a2a2a, 1.9, 0.95, 1.7, 'logbook');
   logbookMesh.rotation.y = 0.5;
-  var logbookHit = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 1.0), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-  logbookHit.position.set(1.9, 1.0, 1.7); logbookHit.name = 'logbook'; logbookHit.userData.clickable = true; mission2.add(logbookHit);
+  var logbookHit = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 0.6), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  logbookHit.position.set(1.9, 0.95, 1.7); logbookHit.name = 'logbook'; logbookHit.userData.clickable = true; mission2.add(logbookHit);
   window._logbookHit = logbookHit;
   // Manifesto pinned to the control-room wall (revealed after the bomb is dealt with).
   manifestoMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.2), new THREE.MeshStandardMaterial({ color: 0xf2f0e8, roughness: 0.9 }));
@@ -605,6 +605,8 @@ document.getElementById('scadaSubmit').onclick = () => {
   if (total === 100 && feeders.A <= 60 && feeders.B <= 60 && feeders.C <= 60) {
     clearInterval(bombInterval); bombInterval = null;
     document.getElementById('scadaModal').classList.add('hidden');
+    document.getElementById('timerVal').textContent = 'disarmed';
+    document.getElementById('timerBar').style.width = '0%';
     state.bombDisarmed = true; integrity('Power', 15);
     manifestoMesh.visible = true; if (window._manifestoHit) window._manifestoHit.visible = true; setObjectives(OBJ2, 3);
     showDialogue([
@@ -623,6 +625,8 @@ document.getElementById('scadaClose').onclick = () => {
 };
 function bombGoesOff() {
   integrity('Power', -25); integrity('Comms', -10);
+  document.getElementById('timerVal').textContent = 'cascaded';
+  document.getElementById('timerBar').style.width = '0%';
   manifestoMesh.visible = true; if (window._manifestoHit) window._manifestoHit.visible = true; setObjectives(OBJ2, 3);
   showDialogue([
     { who: 'System', text: '8:00 PM. The cascade trips. A partial blackout rolls across Queens - hospitals switch to generators, the streets go dark. The game goes on, but the city is darker, and the finale will be harder.' },
@@ -681,6 +685,15 @@ function buildMission3() {
     const chHit = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     chHit.position.set(-1.6, 5.2, cz); chHit.name = 'charge'; chHit.userData.clickable = true; mission3.add(chHit); chargeMeshes.push(chHit);
   }
+  // Thin invisible click slab just above the catwalk planks, so clicking the
+  // walkway anywhere advances the climb. (The planks were never in the
+  // Mission 3 raycast targets, so 45 clicks on them did nothing.) The slab
+  // sits low (y 0.55-0.75) so it does not block clicks on the characters.
+  const catHit = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.2, 26), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  catHit.position.set(1.2, 0.65, -1); catHit.name = 'catwalk'; catHit.userData.clickable = true; mission3.add(catHit);
+  window._catwalkHit = catHit;
+  window._catwalkPlanks = [];
+  mission3.traverse(o => { if (o.name === 'catwalk' && o !== catHit) window._catwalkPlanks.push(o); });
   // Derrick's detonator, on the deck beside him (small dark box, red button).
   const det = box(mission3, 0.25, 0.12, 0.18, 0x1a1a1a, 0.5, 0.06, -6.5, 'detonator', { roughness: 0.4 });
   det.visible = false; window._detonator = det;
@@ -749,7 +762,10 @@ function confrontation() {
     { who: 'Jade Morales', text: 'You put down the detonator. You come with us. And you tell your story. Not with bombs. With words.' }
   ], () => {
     state.derrickDown = true;
-    for (const ch of chargeMeshes) { ch.material.emissiveIntensity = 0; ch.material.emissive.set(0x111111); }
+    // Turn the charges off. Guard for emissive: the hit boxes in
+    // chargeMeshes use MeshBasicMaterial, which has no emissive - the old
+    // unguarded loop threw on the first hit box and the ending never ran.
+    for (const ch of chargeMeshes) { if (ch.material.emissive) { ch.material.emissiveIntensity = 0; ch.material.emissive.set(0x111111); } }
     window._detonator.visible = true;
     integrity('Transit', 10); integrity('Comms', 10);
     state.evidence.push('Derrick Shaw surrendered');
@@ -790,7 +806,7 @@ function handleTap(clientX, clientY) {
   const targets = [];
   if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
-  if (state.mission === 3) targets.push(...chargeMeshes);
+  if (state.mission === 3) targets.push(...chargeMeshes, window._catwalkHit, ...(window._catwalkPlanks || []));
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
   if (sceneHits.length) { interact(sceneHits[0].object.name); return; }
   const humanHits = ray.intersectObjects(humanGroups.filter(g => g.visible && g.parent && g.parent.visible), true);
@@ -847,6 +863,7 @@ function interact(name) {
     return;
   }
   if (name === 'logbook') {
+    if (hasPassphrase) { toast('You already have the passphrase - "Trust the system, but verify the people." The terminal is waiting.'); return; }
     hasPassphrase = true; state.inventory.push('Passphrase'); state.evidence.push('Passphrase: Jade\u2019s own words'); updateHUD();
     showDialogue([
       { who: 'Jade Morales', text: 'The maintenance logs. An entry I wrote years ago: "Trust the system, but verify the people." That is the passphrase.' },
