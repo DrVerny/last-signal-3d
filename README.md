@@ -1,6 +1,6 @@
 # THE LAST SIGNAL - Act I: The 4 Train (3D Prototype)
 
-**Tagline:** “Repair is a moral act.”
+**Tagline:** "Repair is a moral act."
 **Author:** Moshood Sodiq Olasunkanmi (DrVerny / @verrnny)
 **Proposed GitHub repo:** `last-signal-3d`
 
@@ -27,13 +27,16 @@ No backend, no login, no real money. Three.js is vendored locally (`three.min.js
 - 3D subway car interior at night: seats, poles, doors, windows, dark platform outside
 - Blackout: lights flicker and die, red emergency strips take over, 15:00 battery timer ticks down
 - Inspect system (raycast clicking, highlighted interactive objects)
-- Repair mini-game: match the 4×4 gold circuit pattern to restore power
+- Repair mini-game: match the 4x4 gold circuit pattern to restore power
 - Lead: count passengers, help Walter Simms (cannot climb stairs) - moral choice, no wrong answer
-- Trust Meter Jade↔Caleb (0-10, starts at 3), dialogue choices raise/lower it
+- Trust Meter Jade-Caleb (0-10, starts at 3), dialogue choices raise/lower it
 - System Integrity Tracker: Transit / Water / Power / Communications bars, choices affect them
 - **Sealed choice (Zama twist):** pick which line gets priority power - Hospital / Residential / Industrial. The choice is hidden until the end of Act I, then revealed on the title card. In this prototype the sealing is simulated locally; on Sepolia it would be an FHEVM `euint32` (exactly like Sealed Fortune: encrypted input, computed on encrypted data, revealed only after a deadline)
-- Endings: reach the platform, find the RESET board, title card “THE LAST SIGNAL” with your Trust / Integrity / sealed-choice summary
+- Endings: reach the platform, find the RESET board, title card "THE LAST SIGNAL" with your Trust / Integrity / sealed-choice summary
 - HUD: Trust, battery timer, System Integrity, objectives, inventory (RESET circuit board)
+
+## Visual style - photoreal / real-life look
+ACESFilmicToneMapping with sRGB output, PCFSoft shadows, cool-white fluorescent key light plus red emergency and dim warm battery lighting, FogExp2 tunnel haze, 320 drifting dust motes, faint additive light shafts, PBR materials (brushed steel poles, worn fabric seats, scuffed floor, grime canvas textures), procedural posters and signage (4 train, Bronx Zoo, "Stand clear of the closing doors", 14 St-Union Sq), slight handheld camera sway, CSS vignette, animated film grain, and a Cinema button that toggles letterbox bars. No external assets: all textures are generated in code. Still stylised, not true photorealism: low-poly figures, flat poster art, and simulated (not ray-traced) lighting.
 
 ## What is NOT included
 - Acts II and III (Delaware Aqueduct, Con Edison substation, Verrazzano Bridge, courtroom, press conference) - Act I only
