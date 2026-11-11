@@ -703,10 +703,15 @@ const relayLight = new THREE.PointLight(0xffb700, 0.5, 6, 1.8); relayLight.posit
 // every pole in the car sits at x +/-0.82 on the same sightline as the relay,
 // so any wide sign near the wall gets a pole across its text. Centred in the
 // aisle the sign is clear of all poles from the default camera.
-const relayMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('▼ RELAY', '#ffd166', '#111111', ''), transparent: true, depthWrite: false, fog: false }));
-relayMarker.scale.set(0.8, 0.3, 1); relayMarker.position.set(-1.35, 2.45, -1.5); scene.add(relayMarker);
+// The RELAY marker is a wall plane, like the other signs in the car ("14 ST",
+// "STAND CLEAR") - the sprite version kept failing to read on screen: a
+// sprite in the transparent pass renders unreliably here, and at 0.8 m wide
+// its text was a blur. A 1.0 x 0.25 plane matches the 512x128 texture's 4:1
+// aspect exactly, sits just off the wall above the cabinet, and reads like
+// the other signs. It keeps the name relayMarker, so the gentle bob still runs.
+const relayMarker = wallPlane(1.0, 0.25, signTexture('▼ RELAY', '#ffd166', '#111111', ''), -1.41, 2.45, -1.5, Math.PI / 2);
 const relayArrow = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.45, 12), new THREE.MeshStandardMaterial({ color: 0xffc94d, emissive: 0x7a5c00, emissiveIntensity: 1.0, roughness: 0.4 }));
-relayArrow.rotation.x = Math.PI; relayArrow.position.set(-1.3, 2.05, -1.5); scene.add(relayArrow);
+relayArrow.rotation.x = Math.PI; relayArrow.position.set(-1.35, 2.0, -1.5); scene.add(relayArrow);
 // Generous invisible click target around the relay (transparent, still raycast).
 const relayHit = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 2.4), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
 relayHit.position.set(-1.15, 1.6, -1.5); relayHit.name = 'relay'; relayHit.userData.clickable = true; scene.add(relayHit);
