@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { PRIORITY_VALUES, sealPriorityChoice, wasSealedOnChain, initZamaUI } from './zama.js';
 // THE LAST SIGNAL - Act I: The 4 Train - 3D prototype
 // Original short dialogue in the spirit of the script; no long verbatim copying.
-// Sealed choice is simulated locally: hidden until reveal. On Sepolia it would
-// use FHEVM (as in Sealed Fortune) so no one sees the choice before reveal.
+// Sealed choice: hidden until reveal. In demo mode it is simulated locally;
+// when a wallet is connected on Sepolia (see zama.js), the choice is ALSO
+// encrypted with FHEVM and sealed on-chain, so no one sees it before reveal.
 const state = {
   trust: 3, timer: 900, // 15:00 in-fiction, ticks in real time
   integrity: { Transit: 70, Water: 80, Power: 60, Comms: 40 },
@@ -1097,15 +1099,25 @@ function countPassengers() {
 }
 function sealedChoice() {
   // Sealed / encrypted choice: hidden until the end of Act I.
-  // Prototype simulates FHE locally; on Sepolia this would be an FHEVM euint32.
+  // The local simulation is the source of truth for gameplay: the
+  // effect sets state.sealedChoice immediately, exactly as before.
+  // sealActIChoice() then seals the same pick on Sepolia in the
+  // background (fire-and-forget) when a wallet is connected; in
+  // demo mode it does nothing, so the game plays unchanged.
   showDialogue([
     { who: 'System', text: 'SEALED CHOICE - Priority power: one line gets full power for 2 hours. The others run low. Your choice is sealed - nobody, not even the other players, can see it until the reveal.' },
     { who: 'Jade', text: 'Hospital, residential, or the treatment plant. There is no clean answer. Choose - and own it.', choices: [
-      { label: 'Hospital - full power', effect: () => { state.sealedChoice = 'Hospital'; integrity('Water', -5); } },
-      { label: 'Residential - dialysis clinic line', effect: () => { state.sealedChoice = 'Residential'; integrity('Power', -5); } },
-      { label: 'Industrial - water treatment plant', effect: () => { state.sealedChoice = 'Industrial'; integrity('Transit', -5); } }
+      { label: 'Hospital - full power', effect: () => { state.sealedChoice = 'Hospital'; integrity('Water', -5); sealActIChoice('Hospital'); } },
+      { label: 'Residential - dialysis clinic line', effect: () => { state.sealedChoice = 'Residential'; integrity('Power', -5); sealActIChoice('Residential'); } },
+      { label: 'Industrial - water treatment plant', effect: () => { state.sealedChoice = 'Industrial'; integrity('Transit', -5); sealActIChoice('Industrial'); } }
     ] }
   ], () => { setObjectives(5); toast('Choice sealed. Find the green RESET board behind you.'); });
+}
+// Seal the Act I pick on Sepolia when a wallet is connected. Never
+// blocks the dialogue: the seal runs in the background, and if it
+// fails the game carries on with the local seal.
+function sealActIChoice(label) {
+  sealPriorityChoice(PRIORITY_VALUES[label], toast);
 }
 function findBoard() {
   if (state.boardFound) return;
@@ -1124,7 +1136,10 @@ function endAct() {
   try {
     localStorage.setItem('lastSignalAct1', JSON.stringify({
       trust: state.trust, integrity: state.integrity, sealedChoice: state.sealedChoice,
-      inventory: state.inventory, boardFound: state.boardFound
+      inventory: state.inventory, boardFound: state.boardFound,
+      // True only if the Act I pick was sealed on Sepolia this session.
+      // Act III reads it to say whether the on-chain record exists.
+      prioritySealedOnChain: wasSealedOnChain('priority')
     }));
   } catch (e) { /* private mode: Act II starts from its defaults */ }
   const el = document.getElementById('endCard');
@@ -1132,7 +1147,9 @@ function endAct() {
   document.getElementById('endSummary').innerHTML =
     `<p>Act I complete - the passengers are moving to the platform, the relay is repaired, and the RESET board is in your hands. Caleb is staying with Walter on the bench until help reaches him.</p>` +
     `<p><strong>Sealed choice revealed:</strong> ${state.sealedChoice || 'none'} got priority power. ` +
-    `In the full Zama version this choice would have stayed encrypted on-chain until this moment.</p>` +
+    (wasSealedOnChain('priority')
+      ? `Your choice was sealed on Sepolia with FHEVM - encrypted until this moment, now revealed here.`
+      : `In the full Zama version this choice would have stayed encrypted on-chain until this moment.`) + `</p>` +
     `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
     `<p>Next: Act II - City of Wires. Press "Begin Act II" below to continue.</p>`;
 }
@@ -1145,5 +1162,5 @@ setInterval(() => {
   if (state.timer > 0) { state.timer--; updateHUD(); if (state.timer === 0) toast('Battery dead - emergency lights are out. The story continues in the dark.'); }
 }, 1000);
 // Intro: the game starts only after the character models load (or fail clearly).
-setObjectives(0); updateHUD();
+setObjectives(0); updateHUD(); initZamaUI();
 loadHumans();

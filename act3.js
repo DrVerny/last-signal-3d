@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { FINAL_VALUES, sealFinalChoice, wasSealedOnChain, initZamaUI, setupRevealButton } from './zama.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -8,8 +9,9 @@ import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 // Trust, System Integrity, evidence and the Act II bridge path carry over
 // from localStorage (saved by Act II); defaults apply when played standalone.
 // The final choice is SEALED like Act I's: hidden until the end card, where
-// the ending is revealed. In the full Zama version it would be an FHEVM
-// euint32 vote, exactly like Sealed Fortune.
+// the ending is revealed. In demo mode it is simulated locally; when a wallet
+// is connected on Sepolia (see zama.js), the choice is ALSO encrypted with
+// FHEVM as an euint8 vote, exactly like Sealed Fortune.
 let act2 = { trust: 6, integrity: { Transit: 80, Water: 75, Power: 70, Comms: 40 }, evidence: [], waterChoice: 'Hospital', bombDisarmed: true, bridgePath: 'undecided' };
 try {
   const saved = JSON.parse(localStorage.getItem('lastSignalAct2') || 'null');
@@ -23,7 +25,8 @@ try {
   };
 } catch (e) { /* private mode: defaults */ }
 let act1Sealed = null;
-try { const a1 = JSON.parse(localStorage.getItem('lastSignalAct1') || 'null'); if (a1) act1Sealed = a1.sealedChoice || null; } catch (e) { /* ignore */ }
+let act1SealedOnChain = false;
+try { const a1 = JSON.parse(localStorage.getItem('lastSignalAct1') || 'null'); if (a1) { act1Sealed = a1.sealedChoice || null; act1SealedOnChain = a1.prioritySealedOnChain === true; } } catch (e) { /* ignore */ }
 const state = {
   trust: act2.trust,
   integrity: { Transit: act2.integrity.Transit ?? 80, Water: act2.integrity.Water ?? 75, Power: act2.integrity.Power ?? 70, Comms: act2.integrity.Comms ?? 40 },
@@ -352,6 +355,12 @@ function buildControl() {
   blobShadow(gControl, 1.4, 4.5, 0.9, 0.9, 0.55);
   blobShadow(gControl, 3.5, -1, 0.9, 0.9, 0.5);
 }
+// Seal the Act III pick on Sepolia when a wallet is connected. Never
+// blocks the dialogue: the seal runs in the background, and if it
+// fails the game carries on with the local seal.
+function sealActIIIChoice(key) {
+  sealFinalChoice(FINAL_VALUES[key], toast);
+}
 function finalChoiceDialogue() {
   if (state.finalSealed) { toast('The choice is sealed. It stays sealed until the end.'); return; }
   const canRebuild = state.trust >= 8 && state.evidence.length >= 4;
@@ -359,11 +368,11 @@ function finalChoiceDialogue() {
   const lockedNote = 'Rebuild needs Trust 8+ and 4 pieces of evidence (you have Trust ' + state.trust + ', ' + state.evidence.length + ' evidence). '
     + 'The third way needs Trust 10, the trust dialogue at the bridge, and all 5 evidence pieces.';
   const choices = [
-    { label: 'A - QUICK FIX: restore the old code, 30 minutes, no changes', effect: () => { state.finalChoice = 'quick'; integrity('Comms', 10); } }
+    { label: 'A - QUICK FIX: restore the old code, 30 minutes, no changes', effect: () => { state.finalChoice = 'quick'; integrity('Comms', 10); sealActIIIChoice('quick'); } }
   ];
-  if (canRebuild) choices.push({ label: 'B - REBUILD: transparent logs, public oversight, whistleblower protections (4 hours, partial outage)', effect: () => { state.finalChoice = 'rebuild'; integrity('Comms', 15); integrity('Power', -10); } });
+  if (canRebuild) choices.push({ label: 'B - REBUILD: transparent logs, public oversight, whistleblower protections (4 hours, partial outage)', effect: () => { state.finalChoice = 'rebuild'; integrity('Comms', 15); integrity('Power', -10); sealActIIIChoice('rebuild'); } });
   else choices.push({ label: 'B - REBUILD: transparent logs, public oversight, whistleblower protections (LOCKED - needs Trust 8+ and 4 evidence; you have Trust ' + state.trust + ', ' + state.evidence.length + ' evidence)', locked: true });
-  if (canThirdWay) choices.push({ label: 'C - THE THIRD WAY: rebuild AND expose the official who buried your audit', effect: () => { state.finalChoice = 'thirdway'; integrity('Comms', 20); } });
+  if (canThirdWay) choices.push({ label: 'C - THE THIRD WAY: rebuild AND expose the official who buried your audit', effect: () => { state.finalChoice = 'thirdway'; integrity('Comms', 20); sealActIIIChoice('thirdway'); } });
   else choices.push({ label: 'C - THE THIRD WAY: rebuild AND expose the official who buried your audit (LOCKED - needs Trust 10, the best bridge path, and 5 evidence)', locked: true });
   showDialogue([
     { who: 'MTA Official', text: 'We need to restore the EBS now. The virus triggers in twelve hours. If we do not fix it -' },
@@ -732,12 +741,20 @@ function endAct3() {
   };
   const e = endings[state.finalChoice || 'quick'];
   document.getElementById('endSummary').innerHTML =
-    `<p><strong>Sealed choice revealed:</strong> ${state.finalChoice || 'none'} - in the full Zama version this vote would have stayed encrypted on-chain until this moment.</p>` +
+    `<p><strong>Sealed choice revealed:</strong> ${state.finalChoice || 'none'} - ` +
+    (wasSealedOnChain('final')
+      ? `sealed on Sepolia with FHEVM, encrypted until this moment. Press "Reveal on Sepolia" below to decrypt the on-chain record.`
+      : `in the full Zama version this vote would have stayed encrypted on-chain until this moment.`) + `</p>` +
     `<p><strong>${e.title}</strong><br>${e.text}</p>` +
     `<p><strong>Evidence:</strong> ${state.evidence.length ? state.evidence.join(' · ') : 'none'}<br>` +
-    `Act I sealed choice: ${state.act1Sealed || 'none'} got priority power &nbsp;•&nbsp; Act II water: ${state.waterChoice} line &nbsp;•&nbsp; Substation bomb: ${state.bombDisarmed ? 'disarmed' : 'partial blackout'} &nbsp;•&nbsp; Bridge: ${state.bridgePath}</p>` +
+    `Act I sealed choice: ${state.act1Sealed || 'none'} got priority power` +
+    (act1SealedOnChain ? ` (sealed on Sepolia with FHEVM)` : ``) +
+    ` &nbsp;•&nbsp; Act II water: ${state.waterChoice} line &nbsp;•&nbsp; Substation bomb: ${state.bombDisarmed ? 'disarmed' : 'partial blackout'} &nbsp;•&nbsp; Bridge: ${state.bridgePath}</p>` +
     `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
     `<p>THE LAST SIGNAL - complete. “Repair is a moral act.”</p>`;
+  // The on-chain reveal button appears only when there is something
+  // to reveal: wallet connected and both choices sealed on-chain.
+  setupRevealButton();
 }
 
 // ---------- Click to inspect ----------
@@ -859,4 +876,9 @@ for (const [n, g] of Object.entries(GROUPS)) {
   chapterTargets[n] = arr;
 }
 setObjectives(0); updateHUD();
+initZamaUI({ onConnect: async () => {
+  // If the player connects late, at the end card, the reveal button
+  // appears then.
+  if (!document.getElementById('endCard').classList.contains('hidden')) await setupRevealButton();
+} });
 loadHumans();

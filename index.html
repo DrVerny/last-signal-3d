@@ -13,6 +13,12 @@
   <canvas id="scene"></canvas>
   <div id="hud">
     <div class="hud-title">THE LAST SIGNAL <span>- Act I: The 4 Train</span></div>
+    <div id="zamaBar">
+      <span id="zamaMode" class="zama-mode demo">DEMO MODE - choices sealed locally</span>
+      <button id="zamaConnectBtn" type="button">Connect wallet (Sepolia)</button>
+      <span id="zamaWallet"></span>
+    </div>
+    <div id="zamaStatus" class="zama-status"></div>
     <div class="hud-row">
       <div class="meter"><label>Trust - Jade ↔ Caleb</label><div class="bar"><div id="trustBar" style="width:30%"></div></div><span id="trustVal">3 / 10</span></div>
       <div class="meter"><label>Battery (emergency lights)</label><div class="bar"><div id="timerBar" style="width:100%"></div></div><span id="timerVal">15:00</span></div>
@@ -59,6 +65,7 @@
   <button id="resetViewBtn" title="Reset camera view (or press R)">Reset view</button>
   <div id="help">Drag to look around • Click glowing objects to inspect • WASD to move • R / Reset view to re-centre • Start: talk through the opening scene</div>
 </div>
+<script src="vendor/ethers.umd.min.js"></script>
 <script type="module" src="game.js"></script>
 </body>
 </html>
