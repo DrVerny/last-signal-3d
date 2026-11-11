@@ -705,16 +705,17 @@ const relayLight = new THREE.PointLight(0xffb700, 1.0, 6, 1.8); relayLight.posit
 // every pole in the car sits at x +/-0.82 on the same sightline as the relay,
 // so any wide sign near the wall gets a pole across its text. Centred in the
 // aisle the sign is clear of all poles from the default camera.
-// The RELAY marker is a SPRITE, not a wall plane: a plane on the left wall
-// faces +x, but the default camera looks down the car (along -z), so any
-// wall-mounted sign is seen at a steep oblique angle and foreshortens to a
-// thin sliver - that is why every wall-plane version read as a tiny grey
-// sliver or "RE..." and why the door sign vanished. A sprite always faces
-// the camera, so at 1.4 m wide it reads full-size from the default view.
-// It hangs in front of the cabinet face (x -1.05) and above its top (y 2.3),
-// so the cabinet cannot hide it from the low default camera.
+// The marker hangs 1 m IN FRONT of the cabinet (z -0.5, not -1.5). At the
+// cabinet's own z, the grab pole at x -0.82, z -1.35 stands 0.15 m in front
+// of the sign and its hanging grab ring crosses it, hiding "RE" and "A" -
+// that is why round 9 read only "LAY" / "L...Y" from the default view. At
+// z -0.5 that pole is BEHIND the sign so it cannot occlude it, and the
+// other pole (x -0.82, z 2.15) projects to x -1.99 on the sign's plane,
+// left of the sign's left edge (-1.7), so it clears it too. The sign still
+// reads as labelling the cabinet below and behind it, with the arrow
+// pointing down at the relay.
 const relayMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('▼ RELAY', '#ffd166', '#111111', ''), transparent: true, depthWrite: false, fog: false }));
-relayMarker.scale.set(1.4, 0.35, 1); relayMarker.position.set(-1.05, 2.5, -1.5); scene.add(relayMarker);
+relayMarker.scale.set(1.4, 0.35, 1); relayMarker.position.set(-1.0, 2.5, -0.5); scene.add(relayMarker);
 const relayArrow = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.35, 12), new THREE.MeshStandardMaterial({ color: 0xffc94d, emissive: 0x7a5c00, emissiveIntensity: 1.0, roughness: 0.4 }));
 relayArrow.rotation.x = Math.PI; relayArrow.position.set(-1.0, 1.95, -1.5); scene.add(relayArrow); // smaller and lower than before, clear of the sign above it
 // Generous invisible click target around the relay (transparent, still raycast).
