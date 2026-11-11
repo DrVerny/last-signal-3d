@@ -48,6 +48,7 @@ function integrity(key, n) { state.integrity[key] = Math.max(0, Math.min(100, st
 // ---------- Dialogue ----------
 let dlgQueue = [], dlgCb = null;
 function showDialogue(lines, cb) {
+  hideToast(); // a new dialogue clears any stale hint, e.g. the BLACKOUT prompt after the repair
   dlgQueue = lines.slice(); dlgCb = cb || null; nextLine();
 }
 function nextLine() {
@@ -363,26 +364,28 @@ function setLightingMode(mode) {
   if (mode === 'normal') {
     mainLight.intensity = 3.5; fillLight.intensity = 1.5; fillLight2.intensity = 1.5;
     redLight.intensity = 0; redLight2.intensity = 0; warmLight.intensity = 0;
-    tubeMat.emissive.set(0x9fb4c8); tubeMat.emissiveIntensity = 0.15; stripMat.emissiveIntensity = 0;
-    for (const g of tubeGlows) g.material.opacity = 0.015;
+    tubeMat.color.set(0x6a7076); tubeMat.emissive.set(0x9fb4c8); tubeMat.emissiveIntensity = 0.15; stripMat.emissiveIntensity = 0;
+    for (const g of tubeGlows) g.material.opacity = 0.008;
     renderer.toneMappingExposure = 0.95; scene.fog.density = 0.055;
-    shaftMat.opacity = 0.04; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.03 : 0.05;
+    shaftMat.opacity = 0.02; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.015 : 0.03;
     shaftDust.material.opacity = 0.3;
   } else if (mode === 'blackout') {
     mainLight.intensity = 0.6; fillLight.intensity = 0; fillLight2.intensity = 0;
-    redLight.intensity = 7; redLight2.intensity = 4.5; warmLight.intensity = 0;
-    tubeMat.emissive.set(0x0a0a0a); tubeMat.emissiveIntensity = 0.05; stripMat.emissiveIntensity = 0.6;
-    for (const g of tubeGlows) g.material.opacity = 0.01;
+    redLight.intensity = 5; redLight2.intensity = 3; warmLight.intensity = 0;
+    // Dead fluorescents: near-black tubes, so the red emergency light has
+    // almost nothing to bounce off - the red strips are the light, not the tubes.
+    tubeMat.color.set(0x111111); tubeMat.emissive.set(0x0a0a0a); tubeMat.emissiveIntensity = 0.05; stripMat.emissiveIntensity = 0.6;
+    for (const g of tubeGlows) g.material.opacity = 0.005;
     renderer.toneMappingExposure = 0.9; scene.fog.density = 0.075;
-    shaftMat.opacity = 0.02; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.02 : 0.03;
+    shaftMat.opacity = 0.01; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.01 : 0.015;
     shaftDust.material.opacity = 0.15;
   } else {
     mainLight.intensity = 0; fillLight.intensity = 0; fillLight2.intensity = 0;
-    redLight.intensity = 2; redLight2.intensity = 1; warmLight.intensity = 6;
-    tubeMat.emissive.set(0xffc98a); tubeMat.emissiveIntensity = 0.15; stripMat.emissiveIntensity = 0.4;
-    for (const g of tubeGlows) g.material.opacity = 0.015;
+    redLight.intensity = 2; redLight2.intensity = 1; warmLight.intensity = 4;
+    tubeMat.color.set(0x6a7076); tubeMat.emissive.set(0xffc98a); tubeMat.emissiveIntensity = 0.15; stripMat.emissiveIntensity = 0.4;
+    for (const g of tubeGlows) g.material.opacity = 0.008;
     renderer.toneMappingExposure = 1.0; scene.fog.density = 0.06;
-    shaftMat.opacity = 0.05; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.04 : 0.06;
+    shaftMat.opacity = 0.02; for (const h of shaftHalos) h.material.opacity = h.isSprite ? 0.02 : 0.03;
     shaftDust.material.opacity = 0.35;
   }
 }
@@ -606,11 +609,11 @@ for (const sx of [-1, 1]) {
   const tw = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.4, 15), new THREE.MeshStandardMaterial({ color: 0x020304, roughness: 1, envMapIntensity: 0 }));
   tw.position.set(sx * 2.6, 1.6, 0); scene.add(tw);
 }
-const tunnelLampMat = new THREE.MeshStandardMaterial({ color: 0xffe0a0, emissive: 0xff9d00, emissiveIntensity: 0.9, roughness: 0.4 });
-const tunnelLampGlowMat = new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffc978, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
-const tunnelLampPoolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xffc978, transparent: true, opacity: 0.30, blending: THREE.AdditiveBlending, depthWrite: false });
+const tunnelLampMat = new THREE.MeshStandardMaterial({ color: 0x3a2a10, emissive: 0xff8c00, emissiveIntensity: 0.9, roughness: 0.4, envMapIntensity: 0 });
+const tunnelLampGlowMat = new THREE.SpriteMaterial({ map: glowTexture(), color: 0xff9d00, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
+const tunnelLampPoolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xff9d00, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
 const tunnelLampGroups = [];
-for (const sx of [-1, 1]) for (const z of [-5.25, -2.75, 2.75, 5.25]) { // lamps aligned with the window centres, at window height (y 1.68), so they are seen through the windows, not above them
+for (const sx of [-1, 1]) for (const z of [-6.5, -4, -1.5, 1.5, 4, 6.5]) { // lamps aligned with the window centres, at window height (y 1.68), so they are seen through the windows, not above them
   const g = new THREE.Group();
   const housing = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.2, 0.55), new THREE.MeshStandardMaterial({ color: 0x1a1d20, roughness: 0.8, metalness: 0.4 }));
   housing.position.set(0, 0, 0); g.add(housing);
@@ -633,11 +636,11 @@ let tunnelLampsOn = true;
 // brighter than the dimmed version, with a glow sprite each, streaming past
 // the windows while the train is moving (intro stage) and freezing/dark when
 // the train stops.
-for (let i = 0; i < 10; i++) {
-  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 1.0), new THREE.MeshStandardMaterial({ color: 0xffe0a0, emissive: 0xff9d00, emissiveIntensity: 0.9 }));
-  const tlGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffc978, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+for (let i = 0; i < 12; i++) {
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 1.4), new THREE.MeshStandardMaterial({ color: 0x3a2a10, emissive: 0xff8c00, emissiveIntensity: 0.9, envMapIntensity: 0 }));
+  const tlGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xff9d00, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false }));
   tlGlow.scale.set(1.4, 0.7, 1); tl.add(tlGlow);
-  tl.position.set((i % 2 ? 2.15 : -2.15), 1.68, -7 + i * 1.5); scene.add(tl); tunnelLights.push(tl);
+  tl.position.set((i % 2 ? 2.15 : -2.15), 1.68, -7 + i * 1.25); scene.add(tl); tunnelLights.push(tl);
 }
 // Signage, strip maps, ads and route map on the car walls
 wallPlane(1.1, 1.65, posterTexture('mta'), -1.41, 1.35, -6.85, Math.PI / 2);
@@ -665,27 +668,27 @@ intercomBtn.rotation.z = Math.PI / 2; intercomBtn.position.set(1.38, 1.5, -1.6);
 // of the wall, and the faceplate is gold too. The marker and arrow sit in
 // open car air (x -1.05, below the roof arch) instead of up at y 2.5 inside
 // the arch, and the glow/marker sprites ignore fog so they stay bright.
-const relayMat = new THREE.MeshStandardMaterial({ color: 0xd9a520, emissive: 0xcc8800, emissiveIntensity: 0.9, roughness: 0.35, metalness: 0.2 });
-const relayBackplate = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.6, 1.4), new THREE.MeshStandardMaterial({ color: 0xd9a520, emissive: 0xcc8800, emissiveIntensity: 0.4, roughness: 0.4 }));
+const relayMat = new THREE.MeshStandardMaterial({ color: 0x8a6d1b, emissive: 0x7a5c00, emissiveIntensity: 0.6, roughness: 0.45, metalness: 0.2 });
+const relayBackplate = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.6, 1.4), new THREE.MeshStandardMaterial({ color: 0x8a6d1b, emissive: 0x7a5c00, emissiveIntensity: 0.3, roughness: 0.4 }));
 relayBackplate.position.set(-1.40, 1.6, -1.5); relayBackplate.name = 'relay'; relayBackplate.userData.clickable = true; scene.add(relayBackplate);
 const relay = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.4, 1.2), relayMat);
 relay.position.set(-1.30, 1.6, -1.5); relay.castShadow = true; relay.receiveShadow = true;
 relay.name = 'relay'; relay.userData.clickable = true; scene.add(relay);
-const relayFace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.1, 0.9), new THREE.MeshStandardMaterial({ color: 0xd9a520, emissive: 0xcc8800, emissiveIntensity: 0.8, roughness: 0.4 }));
+const relayFace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.1, 0.9), new THREE.MeshStandardMaterial({ color: 0x8a6d1b, emissive: 0x7a5c00, emissiveIntensity: 0.5, roughness: 0.4 }));
 relayFace.position.set(-1.14, 1.6, -1.5); relayFace.name = 'relay'; relayFace.userData.clickable = true; scene.add(relayFace);
-const relayStrip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.7), new THREE.MeshStandardMaterial({ color: 0x2a2113, emissive: 0xcc8800, emissiveIntensity: 0.5, roughness: 0.4 }));
+const relayStrip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.7), new THREE.MeshStandardMaterial({ color: 0x2a2113, emissive: 0x7a5c00, emissiveIntensity: 0.4, roughness: 0.4 }));
 relayStrip.position.set(-1.10, 1.6, -1.5); scene.add(relayStrip);
-const relayGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffc94d, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+const relayGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffb700, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
 relayGlow.scale.set(2.4, 2.4, 1); relayGlow.position.set(-1.05, 1.6, -1.5); scene.add(relayGlow);
-const relayLight = new THREE.PointLight(0xffc94d, 3, 6, 1.8); relayLight.position.set(-1.0, 1.6, -1.5); scene.add(relayLight);
+const relayLight = new THREE.PointLight(0xffb700, 2.5, 6, 1.8); relayLight.position.set(-1.0, 1.6, -1.5); scene.add(relayLight);
 // The marker and arrow float in the aisle above the relay, NOT on the wall:
 // every pole in the car sits at x +/-0.82 on the same sightline as the relay,
 // so any wide sign near the wall gets a pole across its text. Centred in the
 // aisle the sign is clear of all poles from the default camera.
 const relayMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('▼ RELAY', '#ffd166', '#111111', ''), transparent: true, depthWrite: false, fog: false }));
 relayMarker.scale.set(1.5, 0.42, 1); relayMarker.position.set(0, 2.45, -1.5); scene.add(relayMarker);
-const relayArrow = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.45, 12), new THREE.MeshStandardMaterial({ color: 0xffc94d, emissive: 0xcc8800, emissiveIntensity: 1.0, roughness: 0.4 }));
-relayArrow.rotation.x = Math.PI; relayArrow.position.set(-0.45, 2.05, -1.5); scene.add(relayArrow);
+const relayArrow = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.45, 12), new THREE.MeshStandardMaterial({ color: 0xffc94d, emissive: 0x7a5c00, emissiveIntensity: 1.0, roughness: 0.4 }));
+relayArrow.rotation.x = Math.PI; relayArrow.position.set(-0.8, 2.05, -1.5); scene.add(relayArrow);
 // Generous invisible click target around the relay (transparent, still raycast).
 const relayHit = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 2.4), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
 relayHit.position.set(-1.15, 1.6, -1.5); relayHit.name = 'relay'; relayHit.userData.clickable = true; scene.add(relayHit);
@@ -889,9 +892,9 @@ function animate() {
   sdp.needsUpdate = true;
   // Relay beacon: pulse the gold glow and bob the marker/arrow so the relay stays unmissable.
   const pulse = 0.5 + 0.5 * Math.sin(t * 3);
-  relayGlow.material.opacity = 0.3 + 0.15 * pulse;
+  relayGlow.material.opacity = 0.2 + 0.1 * pulse;
   relayGlow.scale.set(2.2 + 0.4 * pulse, 2.2 + 0.4 * pulse, 1);
-  relayMat.emissiveIntensity = 0.7 + 0.3 * pulse;
+  relayMat.emissiveIntensity = 0.5 + 0.2 * pulse;
   relayMarker.position.y = 2.45 + Math.sin(t * 2) * 0.06;
   relayArrow.position.y = 2.05 + Math.sin(t * 2) * 0.06;
   // Tunnel lights stream past the windows while the train is moving (intro
@@ -914,7 +917,7 @@ function animate() {
     if (state.stage === 'blackout') {
       // Flickering red emergency light while the relay is dead
       setLightingMode('blackout');
-      redLight.intensity = 6 + Math.sin(t * 9) * 1.5 + (Math.random() > 0.96 ? -3 : 0);
+      redLight.intensity = 4.5 + Math.sin(t * 9) * 1 + (Math.random() > 0.96 ? -2 : 0);
       mainLight.intensity = 0.4 + Math.sin(t * 7) * 0.25;
     } else {
       setLightingMode('battery'); // dim warm battery power after the repair
