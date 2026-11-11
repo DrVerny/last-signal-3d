@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { canvas, renderer, disposeScene } from './core.js';
 import { PRIORITY_VALUES, sealPriorityChoice, wasSealedOnChain, initZamaUI } from './zama.js';
 import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
 import { registerHumans, updateSpeakingGestures } from './gestures.js';
@@ -13,6 +14,20 @@ import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMark
 // Sealed choice: hidden until reveal. In demo mode it is simulated locally;
 // when a wallet is connected on Sepolia (see zama.js), the choice is ALSO
 // encrypted with FHEVM and sealed on-chain, so no one sees it before reveal.
+// Single-page lifecycle (see acts.js): this module boots on import, and
+// the act manager calls stopAct() before the next act loads. actActive
+// gates the animate loop and input handlers so a stopped act cannot keep
+// rendering or responding. It starts true because import is the start.
+let actActive = true;
+let actRaf = 0;
+let batteryInterval = 0;
+// Act I dodge-run state. Declared here (not with the run functions below)
+// because animate() reads runActive on its first frame, and a let declared
+// after the animate() call would throw a temporal-dead-zone error and stop
+// the whole game from loading.
+let runActive = false, runTime = 0, runInvuln = 0, runSpawnT = 0;
+let exitMarker = null;
+const runDebris = []; // {mesh, active, speed, cooldown}
 const state = {
   trust: 3, timer: 900, // 15:00 in-fiction, ticks in real time
   integrity: { Transit: 70, Water: 80, Power: 60, Comms: 40 },
@@ -301,15 +316,10 @@ function signTexture(text, bg, fg, sub) {
 }
 
 // ---------- Three.js scene ----------
-const canvas = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); // cap at 2x for playability
-renderer.setSize(innerWidth, innerHeight);
-renderer.toneMapping = THREE.ACESFilmicToneMapping; // photoreal filmic response
-renderer.toneMappingExposure = 0.95;
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Renderer and canvas are shared with the other acts (see core.js): one
+// WebGL context for the whole single-page game. This act sets only its
+// own exposure on the shared renderer.
+renderer.toneMappingExposure = 0.95; // photoreal filmic response
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070a);
 scene.environment = ENV_MAP; // procedural env map: steel and skin pick up reflections
@@ -975,6 +985,7 @@ function applyDrag(dx, dy) {
   state.pitch = Math.max(-0.6, Math.min(0.6, state.pitch));
 }
 canvas.addEventListener('pointerdown', e => {
+  if (!actActive) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   dragging = true; dragMoved = 0; lx = e.clientX; ly = e.clientY; downX = e.clientX; downY = e.clientY;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* capture not available, window fallback below still works */ }
@@ -983,6 +994,7 @@ canvas.addEventListener('pointerdown', e => {
   // already stops touch scrolling and selection during a drag.
 });
 canvas.addEventListener('pointermove', e => {
+  if (!actActive) return;
   if (!dragging) return;
   const dx = e.clientX - lx, dy = e.clientY - ly;
   dragMoved += Math.abs(dx) + Math.abs(dy);
@@ -996,6 +1008,7 @@ addEventListener('blur', endDrag);
 // Reset view: restores the default camera position and look direction.
 const DEFAULT_VIEW = { x: 0, y: 1.6, z: 4, yaw: 0.23, pitch: 0 };
 function resetView() {
+  if (!actActive) return;
   if (exteriorView) { exteriorView = false; const btn = document.getElementById('exteriorBtn'); if (btn) btn.textContent = 'Exterior'; setExteriorViewRestore(); }
   camera.position.set(DEFAULT_VIEW.x, DEFAULT_VIEW.y, DEFAULT_VIEW.z);
   state.yaw = DEFAULT_VIEW.yaw; state.pitch = DEFAULT_VIEW.pitch;
@@ -1010,10 +1023,11 @@ function setExteriorViewRestore() {
 }
 document.getElementById('resetViewBtn').onclick = resetView;
 const keys = {};
-addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); if (e.key.toLowerCase() === 'f') toggleFlashlight(); if (e.key.toLowerCase() === 'v') setExteriorView(!exteriorView); });
-addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+addEventListener('keydown', e => { if (!actActive) return; keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); if (e.key.toLowerCase() === 'f') toggleFlashlight(); if (e.key.toLowerCase() === 'v') setExteriorView(!exteriorView); });
+addEventListener('keyup', e => { if (!actActive) return; keys[e.key.toLowerCase()] = false; });
 function animate() {
-  requestAnimationFrame(animate);
+  if (!actActive) return;
+  actRaf = requestAnimationFrame(animate);
   const t = Date.now() / 1000;
   // Frame-rate independent tunnel speed: at 2.7 m/s the lamps stream past
   // the windows at train speed whatever the frame rate (a per-frame step
@@ -1125,11 +1139,12 @@ function animate() {
   renderer.render(scene, camera);
 }
 animate();
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('resize', () => { if (!actActive) return; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 // Click to inspect. A drag that moved more than a few pixels is a look-around,
 // not a click, so it must not raycast and open a toast/dialogue on release.
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
 canvas.addEventListener('click', e => {
+  if (!actActive) return;
   if (dragMoved > 6) { dragMoved = 0; return; }
   dragMoved = 0;
   mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
@@ -1241,9 +1256,6 @@ function afterRunDialogue() {
 // EXIT marker, or waiting out the 45 second window all finish the run,
 // so this beat can never block progress. Then a short climb out onto
 // the platform (hold SPACE), again with an auto-complete so it cannot block.
-let runActive = false, runTime = 0, runInvuln = 0, runSpawnT = 0;
-let exitMarker = null;
-const runDebris = []; // {mesh, active, speed, cooldown}
 function buildRunDebris() {
   if (runDebris.length) return;
   for (let i = 0; i < 8; i++) {
@@ -1404,13 +1416,29 @@ function endAct() {
       : `In the full Zama version this choice would have stayed encrypted on-chain until this moment.`) + `</p>` +
     `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
     `<p>Next: Act II - City of Wires. Press "Begin Act II" below to continue.</p>`;
+  if (window.__lsActManager) window.__lsActManager.setEndCardButtons('act1');
+}
+
+// Stop this act cleanly so the next act can load on the same page: halt
+// the animate loop and the battery timer, silence speech, hide any open
+// dialogue or modal, and dispose this act's scene (the shared renderer
+// in core.js is never disposed).
+export function stopAct() {
+  actActive = false;
+  if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
+  if (batteryInterval) { try { clearInterval(batteryInterval); } catch (e) { /* ignore */ } batteryInterval = 0; }
+  try { stopSpeaking(); } catch (e) { /* ignore */ }
+  try { document.getElementById('dialogue').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { document.getElementById('repairModal').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { disposeScene(scene); } catch (e) { /* ignore */ }
 }
 document.getElementById('cinemaBtn').onclick = () => {
   document.getElementById('letterboxTop').classList.toggle('hidden');
   document.getElementById('letterboxBottom').classList.toggle('hidden');
 };
 // Timer
-setInterval(() => {
+batteryInterval = setInterval(() => {
+  if (!actActive) return;
   if (state.timer > 0) { state.timer--; updateHUD(); if (state.timer === 0) toast('Battery dead - emergency lights are out. The story continues in the dark.'); }
 }, 1000);
 // Intro: the game starts only after the character models load (or fail clearly).
