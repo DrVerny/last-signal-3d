@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
+import { registerHumans, updateSpeakingGestures } from './gestures.js';
+import { registerLipSyncHumans } from './lipsync.js';
+import { initSoundUI, setAmbient, setTension, soundTick, sfxRepair, sfxTick, sfxPowerRestored, sfxBoom, sfxThud, sfxWhoosh } from './sound.js';
+import { runQTE, runHoldQTE } from './qte.js';
+import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
 // no long verbatim copying): 1. The Delaware Line (Rondout Reservoir),
@@ -64,10 +70,11 @@ function showDialogue(lines, cb) {
 }
 function nextLine() {
   const box = document.getElementById('dialogue');
-  if (!dlgQueue.length) { box.classList.add('hidden'); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
+  if (!dlgQueue.length) { box.classList.add('hidden'); stopSpeaking(); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
   const line = dlgQueue.shift(); box.classList.remove('hidden');
   document.getElementById('dlgName').textContent = line.who;
   document.getElementById('dlgText').textContent = line.text;
+  speakLine(line.who, line.text);
   const ch = document.getElementById('dlgChoices'); ch.innerHTML = '';
   const next = document.getElementById('dlgNext');
   if (line.choices) {
@@ -263,6 +270,8 @@ async function loadHumans() {
       mission2.add(g); placeHuman(g, gname, gx, gz, Math.PI, calebBase.scale);
     }
   }
+  registerHumans(humans); // speaking gestures use the loaded models
+  registerLipSyncHumans(humans); // jaw morph lip-sync uses the same loaded models
   if (failures.length) {
     loadingError.classList.remove('hidden');
     loadingError.textContent = 'Could not load: ' + failures.join(', ') + '. The game can still start without them.';
@@ -377,6 +386,7 @@ function openValveModal() {
     const drop = (k === 'industrial' && state.trust < 7) ? 8 : 6;
     pressures[k] = Math.max(20, pressures[k] - drop);
     if (state.trust >= 7) pressures.industrial = Math.max(pressures.industrial, 70); // Caleb holds it
+    try { sfxThud(); } catch (e) { /* ignore */ } // the sabotage clunks as a valve drops
     renderValve();
   }, 5000);
 }
@@ -384,6 +394,7 @@ document.querySelectorAll('#valveModal button[data-line]').forEach(b => {
   b.onclick = () => {
     const k = b.dataset.line, d = parseInt(b.dataset.d, 10);
     pressures[k] = Math.max(20, Math.min(100, pressures[k] + d));
+    try { sfxRepair(); } catch (e) { /* ignore */ }
     renderValve();
   };
 });
@@ -444,6 +455,7 @@ function startMission1() {
 
 // ---------- Mission 2: The Grid (Con Edison substation) ----------
 let keycardMesh, logbookMesh, scadaMesh, manifestoMesh, bombInterval = null, bombTime = 90;
+let scadaQteDone = false; // the surge quick-time fires once per SCADA open
 const feeders = { A: 33, B: 33, C: 34 };
 let hasKeycard = false, hasPassphrase = false, guardsDown = false;
 function buildMission2() {
@@ -523,6 +535,8 @@ function reparentCast(name, group, x, z, yaw) {
 function startMission2() {
   mission1.visible = false; mission2.visible = true; mission3.visible = false;
   state.mission = 2; resetView();
+  setAmbient('substation'); // electrical hum and whine inside the yard
+  setTension(0.4);
   reparentCast('jade', mission2, -1.6, 5.5, Math.PI);
   reparentCast('caleb', mission2, 1.6, 5.5, Math.PI);
   setObjectives(OBJ2, 0); updateHUD();
@@ -578,12 +592,15 @@ function openScadaModal() {
   if (!hasKeycard) { toast('The SCADA terminal needs the key card first - it is on the guard\u2019s belt.'); return; }
   if (!hasPassphrase) { toast('Two-factor: the terminal also needs a passphrase. It is in the maintenance log - the red book on the desk.'); return; }
   bombTime = 90;
+  scadaQteDone = false;
   document.getElementById('scadaModal').classList.remove('hidden');
   renderScada();
+  setTension(0.7); // the countdown is tense: score rises, heartbeat starts
   if (bombInterval) clearInterval(bombInterval);
   bombInterval = setInterval(() => {
     bombTime--;
     renderScada();
+    if (bombTime <= 10 && bombTime > 0) { try { sfxTick(); } catch (e) { /* ignore */ } } // final-seconds beeps
     document.getElementById('timerVal').textContent = bombTime + 's to cascade';
     document.getElementById('timerBar').style.width = (bombTime / 90 * 100) + '%';
     if (bombTime <= 0) {
@@ -592,6 +609,23 @@ function openScadaModal() {
       bombGoesOff();
     }
   }, 1000);
+  // Surge quick-time, once per open: twenty seconds in, the load spikes.
+  // A well-timed press steadies the feeders (+5 seconds); a miss just
+  // continues the reroute - never a fail state, never blocks the puzzle.
+  setTimeout(() => {
+    try {
+      if (scadaQteDone || !bombInterval) return;
+      if (document.getElementById('scadaModal').classList.contains('hidden')) return;
+      scadaQteDone = true;
+      runQTE({
+        label: 'SURGE SPIKE!',
+        sub: 'The load is spiking - press SPACE now to steady the feeders.',
+        key: ' ', windowMs: 2500,
+        onHit: () => { bombTime = Math.min(90, bombTime + 5); renderScada(); toast('Steady hands - +5 seconds on the bomb.'); },
+        onMiss: () => { toast('The surge passes - keep rerouting.'); }
+      });
+    } catch (e) { /* the QTE must never break the puzzle */ }
+  }, 20000);
 }
 document.querySelectorAll('#scadaModal button[data-f]').forEach(b => {
   b.onclick = () => {
@@ -608,6 +642,7 @@ document.getElementById('scadaSubmit').onclick = () => {
     document.getElementById('timerVal').textContent = 'disarmed';
     document.getElementById('timerBar').style.width = '0%';
     state.bombDisarmed = true; integrity('Power', 15);
+    try { sfxPowerRestored(); setTension(0.3); } catch (e) { /* ignore */ }
     manifestoMesh.visible = true; if (window._manifestoHit) window._manifestoHit.visible = true; setObjectives(OBJ2, 3);
     showDialogue([
       { who: 'Jade Morales', text: 'Load rerouted. The bomb has nothing to cascade into. It is dead.' },
@@ -621,10 +656,12 @@ document.getElementById('scadaSubmit').onclick = () => {
 document.getElementById('scadaClose').onclick = () => {
   if (bombInterval) { clearInterval(bombInterval); bombInterval = null; }
   document.getElementById('scadaModal').classList.add('hidden');
+  try { setTension(0.4); } catch (e) { /* ignore */ }
   toast('The bomb is still counting down in the terminal. Open it again to finish the job.');
 };
 function bombGoesOff() {
   integrity('Power', -25); integrity('Comms', -10);
+  try { sfxBoom(); setTension(0.8); } catch (e) { /* ignore */ }
   document.getElementById('timerVal').textContent = 'cascaded';
   document.getElementById('timerBar').style.width = '0%';
   manifestoMesh.visible = true; if (window._manifestoHit) window._manifestoHit.visible = true; setObjectives(OBJ2, 3);
@@ -699,6 +736,20 @@ function buildMission3() {
   det.visible = false; window._detonator = det;
   blobShadow(mission3, 0, -6, 0.9, 0.9, 0.55);
   blobShadow(mission3, 1.2, 4, 0.9, 0.9, 0.55);
+  // Deck-chase obstacles: cable spools that roll back and forth across the
+  // deck while the player runs to the catwalk. Hidden until the chase starts.
+  for (const [lane, phase, speed] of [[-6, 0, 0.7], [-2, 1.4, 0.9], [2, 2.6, 0.8], [6, 3.8, 1.0], [10, 5.0, 0.75]]) {
+    const spool = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.35, 0.35, 0.5, 14),
+      new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.9, metalness: 0.1 })
+    );
+    spool.rotation.x = Math.PI / 2; // axle along z, so it rolls in x
+    spool.position.set(0, 0.35, lane);
+    spool.castShadow = true;
+    spool.visible = false;
+    mission3.add(spool);
+    chaseSpools.push({ mesh: spool, z: lane, phase, speed });
+  }
 }
 function startMission3() {
   mission1.visible = false; mission2.visible = false; mission3.visible = true;
@@ -708,6 +759,8 @@ function startMission3() {
   // Night lighting: the sun goes down, the moon takes over.
   sun.intensity = 0.08; moon.intensity = 0.9; ambient.intensity = 0.12; hemi.intensity = 0.15;
   scene.background = new THREE.Color(0x05070a); scene.fog.density = 0.012;
+  setAmbient('bridge'); // night wind on the bridge, city hum far below
+  setTension(0.55);
   setObjectives(OBJ3, 0); updateHUD();
   document.getElementById('timerLabel').textContent = 'Detonator - 48 hr demand';
   document.getElementById('timerVal').textContent = 'live-streaming';
@@ -716,10 +769,78 @@ function startMission3() {
     { who: 'Jade Morales', text: 'Eleven-thirty PM. Verrazzano-Narrows Bridge, upper deck. Derrick Shaw is up there with four shaped charges on the main cables - not enough to drop the bridge, enough to close it for months.' },
     { who: 'Caleb Bishop', text: 'And he is live-streaming. Full public audit of all city infrastructure in forty-eight hours, or he detonates.' },
     { who: 'Jade Morales', text: 'My dad welded this bridge. We climb the maintenance catwalk. Click the catwalk planks to climb - and mind the gap.' }
-  ], () => { toast('Click the catwalk planks to climb toward the upper deck.'); });
+  ], () => { startDeckChase(); });
 }
+
+// ---------- Act II action: the deck chase and the physical catwalk climb ----------
+// Security is coming across the bridge deck. The player runs (WASD) from
+// the south end to the catwalk, dodging cable spools that roll back and
+// forth. A hit costs 1 Trust and staggers briefly - never a fail state.
+// Reaching the catwalk, or the 40 second window running out (the guards
+// lose you in the dark), ends the chase and the climb begins.
+let chaseActive = false, chaseTime = 0, chaseInvuln = 0;
+const chaseSpools = [];
+function startDeckChase() {
+  try {
+    chaseActive = true; chaseTime = 0; chaseInvuln = 0;
+    for (const s of chaseSpools) s.mesh.visible = true;
+    showActionBanner('RUN! Security is coming - run the deck to the catwalk and dodge the rolling spools. WASD to move.');
+    toast('Run to the catwalk - dodge the rolling spools.');
+  } catch (e) { chaseActive = false; toast('Click the catwalk planks to climb toward the upper deck.'); }
+}
+function completeDeckChase(auto) {
+  if (!chaseActive) return;
+  chaseActive = false;
+  hideActionBanner();
+  try { for (const s of chaseSpools) s.mesh.visible = false; } catch (e) { /* ignore */ }
+  if (auto) toast('The guards lose you in the dark. The catwalk is ahead.');
+  else toast('You reach the catwalk. Click the planks to climb - hold SPACE to pull yourself up.');
+}
+function updateDeckChase(dt) {
+  if (!chaseActive) return;
+  try {
+    chaseTime += dt;
+    if (chaseInvuln > 0) chaseInvuln -= dt;
+    const t = Date.now() / 1000;
+    for (const s of chaseSpools) {
+      s.mesh.position.x = Math.sin(t * s.speed + s.phase) * 1.4;
+      s.mesh.rotation.z += dt * s.speed * 2;
+      if (chaseInvuln <= 0 && Math.abs(s.mesh.position.x - camera.position.x) < 0.55 && Math.abs(s.z - camera.position.z) < 0.55) {
+        chaseInvuln = 2;
+        trust(-1, 'a rolling spool clipped you');
+        flashScreen('rgba(255,40,30,0.35)');
+        try { sfxThud(); } catch (e) { /* ignore */ }
+      }
+    }
+    const dist = Math.max(0, camera.position.z - (-2));
+    try { showActionBanner('RUN! Reach the catwalk - ' + Math.ceil(dist) + ' m to go. Dodge the rolling spools.'); } catch (e) { /* ignore */ }
+    if (camera.position.z <= -2 || chaseTime > 40) completeDeckChase(chaseTime > 40);
+  } catch (e) { completeDeckChase(true); }
+}
+// The catwalk climb is physical now: each step is a hand-over-hand pull.
+// Clicking the catwalk starts a hold - hold SPACE (or hold the prompt)
+// to pull yourself up. Releasing pauses the pull; the window is generous
+// and a slip just means trying again - never a fail state, never blocked.
+let climbHolding = false, gapQteDone = false, gapActive = false;
 function climbStep() {
   if (state.climbStep >= 3) { gapChoice(); return; }
+  if (climbHolding) return;
+  climbHolding = true;
+  try {
+    const ok = runHoldQTE({
+      label: 'CLIMB - HAND OVER HAND',
+      sub: 'Hold SPACE to pull yourself up the catwalk. Release to rest, hold to climb.',
+      holdMs: 1200, windowMs: 8000,
+      onDone: (done) => {
+        climbHolding = false;
+        if (done) advanceClimb();
+        else toast('You slip back a step - click the catwalk and hold SPACE to try again.');
+      }
+    });
+    if (!ok) { climbHolding = false; advanceClimb(); }
+  } catch (e) { climbHolding = false; advanceClimb(); }
+}
+function advanceClimb() {
   state.climbStep++;
   const zPos = [8, 4, 0, -2][state.climbStep];
   camera.position.z = zPos + 2; camera.position.y = 1.9;
@@ -736,6 +857,21 @@ function climbStep() {
 function gapChoice() {
   if (state.gapDone) return;
   state.gapDone = true;
+  gapActive = true; // Caleb freezes: heartbeat and score stay tense
+  if (gapQteDone) { gapChoiceDialogue(); return; }
+  gapQteDone = true;
+  try {
+    const ok = runQTE({
+      label: 'CALEB FREEZES!',
+      sub: 'Press SPACE now to steady him before he falls back.',
+      key: ' ', windowMs: 2500,
+      onHit: () => { trust(1, 'steady hands at the gap'); gapChoiceDialogue(); },
+      onMiss: () => { gapChoiceDialogue(); }
+    });
+    if (!ok) gapChoiceDialogue();
+  } catch (e) { gapChoiceDialogue(); }
+}
+function gapChoiceDialogue() {
   showDialogue([
     { who: 'Caleb Bishop', text: 'That is not there. That is not a catwalk. That is a - a thing that is not there. I cannot move.' },
     { who: 'Jade Morales', text: 'Caleb. Look at me. When I was a kid, my dad took me up here. I was terrified. And he said: "Jade, the bridge does not care if you are scared. It is going to hold you anyway. That is what it is for."', choices: [
@@ -745,6 +881,7 @@ function gapChoice() {
     ] },
     { who: 'Caleb Bishop', text: 'You know what you said? About bridges being trust you can see? ... I see you.' }
   ], () => {
+    gapActive = false; // the gap is crossed: the tension eases
     setObjectives(OBJ3, 2);
     if (state.bridgePath === 'solo') toast('Caleb stays behind. Jade goes on alone - the final sequence is harder.');
     else toast('Caleb jumps the gap. Together, then. Click Derrick Shaw to face him.');
@@ -907,6 +1044,8 @@ document.getElementById('cinemaBtn').onclick = () => {
 function animate() {
   requestAnimationFrame(animate);
   const t = Date.now() / 1000;
+  const dt = animate.lastT === undefined ? 0.016 : Math.min(0.1, t - animate.lastT);
+  animate.lastT = t;
   const sp = 0.05;
   if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
   if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
@@ -927,6 +1066,18 @@ function animate() {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
   }
+  updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
+  // Sound: footsteps while moving, heartbeat and score tension. The bomb
+  // countdown and the bridge gap are the tense moments here.
+  const moving = keys['w'] || keys['a'] || keys['s'] || keys['d'];
+  let tension = state.mission === 3 ? 0.55 : (state.mission === 2 ? 0.4 : 0.15);
+  let hb = 0;
+  if (state.mission === 2 && bombInterval) { tension = 0.7 + (1 - bombTime / 90) * 0.2; hb = bombTime <= 30 ? 100 : 70; }
+  if (state.mission === 3 && gapActive) { tension = 0.85; hb = 110; }
+  if (chaseActive) { tension = 0.8; hb = 105; }
+  setTension(tension);
+  soundTick(dt, { moving, heartbeatBpm: hb });
+  updateDeckChase(dt); // Verrazzano deck chase, no-op when inactive
   renderer.render(scene, camera);
 }
 animate();
@@ -934,5 +1085,8 @@ animate();
 buildMission1();
 buildMission2();
 buildMission3();
-setObjectives(OBJ1, 0); updateHUD();
+setObjectives(OBJ1, 0); updateHUD(); initVoiceUI();
+initSoundUI(); // procedural sound: ambient, effects, score, sound toggle
+setAmbient('field'); // the reservoir: wind and open air
+setTension(0.15);
 loadHumans();

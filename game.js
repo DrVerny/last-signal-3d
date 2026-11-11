@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 import { PRIORITY_VALUES, sealPriorityChoice, wasSealedOnChain, initZamaUI } from './zama.js';
+import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
+import { registerHumans, updateSpeakingGestures } from './gestures.js';
+import { registerLipSyncHumans } from './lipsync.js';
+import { initSoundUI, setAmbient, setTension, soundTick, sfxDoor, sfxRepair, sfxPowerRestored, sfxWhoosh, sfxThud } from './sound.js';
+import { initFlashlight, toggleFlashlight, updateFlashlight } from './flashlight.js';
+import { runHoldQTE } from './qte.js';
+import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
 // THE LAST SIGNAL - Act I: The 4 Train - 3D prototype
 // Original short dialogue in the spirit of the script; no long verbatim copying.
 // Sealed choice: hidden until reveal. In demo mode it is simulated locally;
@@ -55,10 +62,11 @@ function showDialogue(lines, cb) {
 }
 function nextLine() {
   const box = document.getElementById('dialogue');
-  if (!dlgQueue.length) { box.classList.add('hidden'); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
+  if (!dlgQueue.length) { box.classList.add('hidden'); stopSpeaking(); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
   const line = dlgQueue.shift(); box.classList.remove('hidden');
   document.getElementById('dlgName').textContent = line.who;
   document.getElementById('dlgText').textContent = line.text;
+  speakLine(line.who, line.text);
   const ch = document.getElementById('dlgChoices'); ch.innerHTML = '';
   const next = document.getElementById('dlgNext');
   if (line.choices) {
@@ -634,15 +642,21 @@ for (const sx of [-1, 1]) for (const z of [-5.25, -2.75, 2.75, 5.25]) {
 // procedural environment map washing the tunnel out. No tunnel point lights:
 // the lamps are emissive fixtures + glow sprites + lit wall pools only, so
 // no light spills into the car or washes out the gold relay.
+// The tunnel runs 50 m (z -25 to 25) so the full three-car train sits
+// inside it; the walls are kept so the exterior camera can hide the near
+// one and look at the train from outside.
+const tunnelWallMeshes = [];
 for (const sx of [-1, 1]) {
-  const tw = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.4, 15), new THREE.MeshStandardMaterial({ color: 0x020304, roughness: 1, envMapIntensity: 0 }));
-  tw.position.set(sx * 2.6, 1.6, 0); scene.add(tw);
+  const tw = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.4, 50), new THREE.MeshStandardMaterial({ color: 0x020304, roughness: 1, envMapIntensity: 0 }));
+  tw.position.set(sx * 2.6, 1.6, 0); scene.add(tw); tunnelWallMeshes.push(tw);
+  const lw = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.0, 50), new THREE.MeshStandardMaterial({ color: 0x020304, roughness: 1, envMapIntensity: 0 }));
+  lw.position.set(sx * 2.6, -0.55, 0); scene.add(lw); tunnelWallMeshes.push(lw);
 }
 const tunnelLampMat = new THREE.MeshStandardMaterial({ color: 0x3a2a10, emissive: 0xff8c00, emissiveIntensity: 0.9, roughness: 0.4, envMapIntensity: 0 });
 const tunnelLampGlowMat = new THREE.SpriteMaterial({ map: glowTexture(), color: 0xff9d00, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
 const tunnelLampPoolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xff9d00, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false });
 const tunnelLampGroups = [];
-for (const sx of [-1, 1]) for (const z of [-6.6, -4.7, -2.8, -0.9, 1.0, 2.9, 4.8, 6.7]) { // lamps aligned with the window centres, at window height (y 1.68), so they are seen through the windows, not above them
+for (const sx of [-1, 1]) for (const z of [-23, -19.2, -15.4, -11.6, -7.8, -6.6, -4.7, -2.8, -0.9, 1.0, 2.9, 4.8, 6.7, 8.6, 12.4, 16.2, 20, 23.8]) { // lamps aligned with the window centres, at window height (y 1.68), so they are seen through the windows, not above them
   const g = new THREE.Group();
   const housing = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.2, 0.55), new THREE.MeshStandardMaterial({ color: 0x1a1d20, roughness: 0.8, metalness: 0.4 }));
   housing.position.set(0, 0, 0); g.add(housing);
@@ -659,7 +673,7 @@ for (const sx of [-1, 1]) for (const z of [-6.6, -4.7, -2.8, -0.9, 1.0, 2.9, 4.8
 // tunnel reads as moving into light. It sits behind the end wall (z -8.6),
 // not inside the car, and fog:false keeps it bright through the glass.
 const tunnelAheadGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffc978, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-tunnelAheadGlow.scale.set(6.0, 3.5, 1); tunnelAheadGlow.position.set(0, 1.9, -8.6); scene.add(tunnelAheadGlow);
+tunnelAheadGlow.scale.set(6.0, 3.5, 1); tunnelAheadGlow.position.set(0, 1.9, -24.5); scene.add(tunnelAheadGlow);
 let tunnelLampsOn = true;
 // Passing light strips, restored to clearly visible warm light: larger and
 // brighter than the dimmed version, with a glow sprite each, streaming past
@@ -777,6 +791,7 @@ function startIntro() {
     ] }
   ], () => {
     state.stage = 'blackout';
+    setAmbient('tunnel'); // the train stops: rumble dies, tunnel wind stays
     setObjectives(2);
     toast('BLACKOUT - click the glowing gold signal relay to repair it.');
   });
@@ -833,6 +848,8 @@ async function loadHumans() {
     loadingText.textContent = 'Loading characters... ' + done + ' / ' + MODEL_DEFS.length;
   });
   await Promise.all(jobs);
+  registerHumans(humans); // speaking gestures use the loaded models
+  registerLipSyncHumans(humans); // jaw morph lip-sync uses the same loaded models
   if (failures.length) {
     loadingError.classList.remove('hidden');
     loadingError.textContent = 'Could not load: ' + failures.join(' ; ') + '. The game can still start without them.';
@@ -853,10 +870,90 @@ for (const sx of [-1.21, 1.21]) for (let z = -5; z <= 5; z += 2.5) contactShadow
 // Platform outside the right-hand doors (visible when doors open). Near-black
 // concrete with envMapIntensity 0, so the interior lights and the environment
 // map cannot wash it out; only a faint dim pool of light on the floor itself.
-box(3.5, 0.1, 4, 0x111214, 3.4, 0, 0, null, { color: 0x111214, envMapIntensity: 0, roughness: 1 });
-box(0.2, 3, 4, 0x0a0b0c, 5.2, 1.5, 0, null, { color: 0x0a0b0c, envMapIntensity: 0, roughness: 1 });
+const platformSlab = box(3.5, 0.1, 4, 0x111214, 3.4, 0, 0, null, { color: 0x111214, envMapIntensity: 0, roughness: 1 });
+const platformWall = box(0.2, 3, 4, 0x0a0b0c, 5.2, 1.5, 0, null, { color: 0x0a0b0c, envMapIntensity: 0, roughness: 1 });
+// ---------- Track under the train, and the train seen from outside ----------
+// The car sits on a real track: a ballast bed, two steel rails and sleepers,
+// with bogies and wheels under the car. The sleepers stream past in the
+// intro and after stages (same speed as the tunnel lamps) so the train
+// reads as moving when the camera is outside. The tunnel floor closes the
+// underside of the tunnel so the track does not float in a void.
+const trackBed = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.15, 50), new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 1, envMapIntensity: 0 }));
+trackBed.position.set(0, -0.95, 0); trackBed.receiveShadow = true; scene.add(trackBed);
+const tunnelFloor = new THREE.Mesh(new THREE.PlaneGeometry(12, 50), new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 1, envMapIntensity: 0 }));
+tunnelFloor.rotation.x = -Math.PI / 2; tunnelFloor.position.set(0, -1.02, 0); scene.add(tunnelFloor);
+for (const rx of [-0.75, 0.75]) {
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.12, 50), new THREE.MeshStandardMaterial({ color: 0x9aa2a8, metalness: 0.9, roughness: 0.25, envMapIntensity: 0.4 }));
+  rail.position.set(rx, -0.82, 0); scene.add(rail);
+}
+const trackSleepers = [];
+for (let z = -24.5; z <= 24.5; z += 0.7) {
+  const sl = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.1, 0.35), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 1, envMapIntensity: 0 }));
+  sl.position.set(0, -0.88, z); scene.add(sl); trackSleepers.push(sl);
+}
+const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.18, 16);
+const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.4 });
+function buildBogie(zc, parent) {
+  const bogie = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.5, 2.4), new THREE.MeshStandardMaterial({ color: 0x1c2126, roughness: 0.7, metalness: 0.5 }));
+  bogie.position.set(0, -0.35, zc); parent.add(bogie);
+  for (const wx of [-0.75, 0.75]) for (const wz of [zc - 0.8, zc + 0.8]) {
+    const wh = new THREE.Mesh(wheelGeo, wheelMat);
+    wh.rotation.z = Math.PI / 2; wh.position.set(wx, -0.38, wz); parent.add(wh);
+  }
+}
+buildBogie(-5, scene); buildBogie(5, scene);
+// Green livery band on the outside of the car (below the windows), so the
+// car reads as a 4 train from the outside, not a plain steel box.
+for (const sx of [-1, 1]) {
+  const band = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.35, 15), new THREE.MeshStandardMaterial({ color: 0x2a5a3a, roughness: 0.6, metalness: 0.2 }));
+  band.position.set(sx * 1.505, 1.15, 0); scene.add(band);
+}
+// Two coupled cars (front and rear), exterior only - the player never goes
+// inside them. Same 3.0 m width and arched roof profile as the main car,
+// green livery, lit window band, headlights on the front car and red
+// tail lights on the rear, so the train reads as a full train from outside.
+function buildExteriorCar(zc, isFront) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.0, 14.5), new THREE.MeshStandardMaterial({ color: 0x2a5a3a, roughness: 0.55, metalness: 0.3 }));
+  body.position.set(0, 1.0, 0); body.castShadow = true; g.add(body);
+  const roofGeo2 = new THREE.ExtrudeGeometry(roofShape, { depth: 14.5, bevelEnabled: false, curveSegments: 24 });
+  const roof2 = new THREE.Mesh(roofGeo2, roofMat);
+  roof2.position.set(0, 0, -7.25); g.add(roof2);
+  const winBand = new THREE.Mesh(new THREE.BoxGeometry(3.04, 0.65, 14.2), new THREE.MeshStandardMaterial({ color: 0x1a2a1a, emissive: 0xffd166, emissiveIntensity: 0.35, roughness: 0.2, metalness: 0.3 }));
+  winBand.position.set(0, 1.65, 0); g.add(winBand);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(3.04, 0.3, 14.5), new THREE.MeshStandardMaterial({ color: 0x1a3a2a, roughness: 0.6 }));
+  stripe.position.set(0, 1.15, 0); g.add(stripe);
+  buildBogie(-5, g); buildBogie(5, g);
+  const endZ = isFront ? -7.3 : 7.3;
+  for (const lx of [-0.9, 0.9]) {
+    const lamp = new THREE.Mesh(new THREE.CircleGeometry(0.14, 12), new THREE.MeshStandardMaterial({ color: isFront ? 0xfff2c0 : 0xff2020, emissive: isFront ? 0xffe9a0 : 0xff2020, emissiveIntensity: 1.6 }));
+    lamp.position.set(lx, 0.9, endZ); lamp.rotation.y = isFront ? Math.PI : 0; g.add(lamp);
+  }
+  g.position.set(0, 0, zc); scene.add(g); return g;
+}
+buildExteriorCar(-15, true);
+buildExteriorCar(15, false);
 const platformPool = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 2.2), new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0x9a8548, transparent: true, opacity: 0.10, blending: THREE.AdditiveBlending, depthWrite: false }));
 platformPool.rotation.x = -Math.PI / 2; platformPool.position.set(3.4, 0.06, 0); scene.add(platformPool);
+// Exterior camera: the train's body from outside, not only the interior.
+// The near tunnel wall, its lamps and light strips, and the platform sit
+// between an outside camera and the train, so they are hidden while the
+// exterior view is on and restored when it is off. The camera orbits the
+// train (drag to swing around it); V or the Exterior button toggles back.
+let exteriorView = false;
+function setExteriorView(on) {
+  exteriorView = on;
+  const btn = document.getElementById('exteriorBtn');
+  if (btn) btn.textContent = on ? 'Interior' : 'Exterior';
+  for (const w of tunnelWallMeshes) w.visible = !(on && w.position.x > 0);
+  for (const g of tunnelLampGroups) g.visible = !(on && g.position.x > 0);
+  for (const tl of tunnelLights) tl.visible = !(on && tl.position.x > 0);
+  platformSlab.visible = !on; platformWall.visible = !on;
+  if (on) { state.yaw = 0.6; state.pitch = 0; }
+  else resetView();
+}
+const exteriorBtnEl = document.getElementById('exteriorBtn');
+if (exteriorBtnEl) exteriorBtnEl.onclick = () => setExteriorView(!exteriorView);
 // Drag to look, WASD to move.
 // Pointer Events (not mouse-only handlers): the old mousedown-on-canvas +
 // mousemove-on-window pair lost the drag whenever the pointer started on an
@@ -868,7 +965,13 @@ canvas.style.touchAction = 'none';
 let dragging = false, lx = 0, ly = 0, downX = 0, downY = 0, dragMoved = 0;
 function applyDrag(dx, dy) {
   state.yaw -= dx * 0.0012; state.pitch -= dy * 0.0012;
-  state.yaw = Math.max(-0.9, Math.min(0.9, state.yaw));
+  if (exteriorView) {
+    // Orbiting the train: let the yaw swing all the way around.
+    if (state.yaw > Math.PI) state.yaw -= Math.PI * 2;
+    if (state.yaw < -Math.PI) state.yaw += Math.PI * 2;
+  } else {
+    state.yaw = Math.max(-0.9, Math.min(0.9, state.yaw));
+  }
   state.pitch = Math.max(-0.6, Math.min(0.6, state.pitch));
 }
 canvas.addEventListener('pointerdown', e => {
@@ -893,12 +996,21 @@ addEventListener('blur', endDrag);
 // Reset view: restores the default camera position and look direction.
 const DEFAULT_VIEW = { x: 0, y: 1.6, z: 4, yaw: 0.23, pitch: 0 };
 function resetView() {
+  if (exteriorView) { exteriorView = false; const btn = document.getElementById('exteriorBtn'); if (btn) btn.textContent = 'Exterior'; setExteriorViewRestore(); }
   camera.position.set(DEFAULT_VIEW.x, DEFAULT_VIEW.y, DEFAULT_VIEW.z);
   state.yaw = DEFAULT_VIEW.yaw; state.pitch = DEFAULT_VIEW.pitch;
 }
+// Restores the tunnel wall, lamps and platform hidden by the exterior view.
+// Kept separate so resetView can turn the exterior view off without recursing.
+function setExteriorViewRestore() {
+  for (const w of tunnelWallMeshes) w.visible = true;
+  for (const g of tunnelLampGroups) g.visible = true;
+  for (const tl of tunnelLights) tl.visible = true;
+  platformSlab.visible = true; platformWall.visible = true;
+}
 document.getElementById('resetViewBtn').onclick = resetView;
 const keys = {};
-addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); });
+addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); if (e.key.toLowerCase() === 'f') toggleFlashlight(); if (e.key.toLowerCase() === 'v') setExteriorView(!exteriorView); });
 addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 function animate() {
   requestAnimationFrame(animate);
@@ -909,16 +1021,26 @@ function animate() {
   const dt = animate.lastT === undefined ? 0.016 : Math.min(0.1, t - animate.lastT);
   animate.lastT = t;
   const sp = 0.05;
-  if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
-  if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
-  camera.position.x = Math.max(-1.05, Math.min(1.05, camera.position.x));
-  camera.position.z = Math.max(-7.0, Math.min(7.0, camera.position.z));
-  camera.rotation.order = 'YXZ';
-  // Slight handheld sway (depth-of-field feel comes from the vignette + grain overlays)
-  const sway = document.getElementById('dialogue').classList.contains('hidden') ? 1 : 0.4;
-  camera.rotation.y = state.yaw + Math.sin(t * 0.7) * 0.004 * sway;
-  camera.rotation.x = state.pitch + Math.sin(t * 0.9 + 1.3) * 0.003 * sway;
-  camera.position.y = 1.6 + Math.sin(t * 0.8) * 0.012 * sway;
+  if (exteriorView) {
+    // Exterior orbit: the camera circles the train outside the tunnel wall
+    // (hidden while this view is on), looking at the train body and track.
+    // Drag swings the orbit around; the pitch raises or lowers the view.
+    // The lamps and sleepers stream past, so the train reads as moving.
+    const orbitR = 9, orbitH = 2.8 + state.pitch * 2.5;
+    camera.position.set(Math.sin(state.yaw) * orbitR, orbitH, Math.cos(state.yaw) * orbitR);
+    camera.lookAt(0, 1.3, 0);
+  } else {
+    if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
+    if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
+    camera.position.x = Math.max(-1.05, Math.min(1.05, camera.position.x));
+    camera.position.z = Math.max(-7.0, Math.min(7.0, camera.position.z));
+    camera.rotation.order = 'YXZ';
+    // Slight handheld sway (depth-of-field feel comes from the vignette + grain overlays)
+    const sway = document.getElementById('dialogue').classList.contains('hidden') ? 1 : 0.4;
+    camera.rotation.y = state.yaw + Math.sin(t * 0.7) * 0.004 * sway;
+    camera.rotation.x = state.pitch + Math.sin(t * 0.9 + 1.3) * 0.003 * sway;
+    camera.position.y = 1.6 + Math.sin(t * 0.8) * 0.012 * sway;
+  }
   // Dust drifts slowly through the light shafts
   const pos = dustGeo.attributes.position;
   for (let i = 0; i < dustCount; i++) {
@@ -963,13 +1085,14 @@ function animate() {
   const inTunnel = state.stage === 'intro' || state.stage === 'after';
   if (inTunnel !== tunnelLampsOn) {
     tunnelLampsOn = inTunnel;
-    for (const g of tunnelLampGroups) g.visible = inTunnel;
-    for (const tl of tunnelLights) tl.visible = inTunnel;
+    for (const g of tunnelLampGroups) g.visible = inTunnel && !(exteriorView && g.position.x > 0);
+    for (const tl of tunnelLights) tl.visible = inTunnel && !(exteriorView && tl.position.x > 0);
     tunnelAheadGlow.visible = inTunnel;
   }
   if (inTunnel) {
     for (const tl of tunnelLights) { tl.position.z += 2.7 * dt; if (tl.position.z > 7.5) tl.position.z = -7.5; }
-    for (const g of tunnelLampGroups) { g.position.z += 2.7 * dt; if (g.position.z > 7.5) g.position.z = -7.5; }
+    for (const g of tunnelLampGroups) { g.position.z += 2.7 * dt; if (g.position.z > 25) g.position.z = -25; }
+    for (const sl of trackSleepers) { sl.position.z += 2.7 * dt; if (sl.position.z > 25) sl.position.z = -25; }
   }
   if (state.stage === 'blackout' || state.stage === 'after') {
     if (state.stage === 'blackout') {
@@ -987,6 +1110,18 @@ function animate() {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
   }
+  updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
+  updateFlashlight(); // flashlight rides on the camera (no-op when off)
+  // Sound: footsteps while moving, heartbeat and score tension by stage.
+  // Blackout is tense; a low battery is worse; the debris run is worst.
+  const moving = keys['w'] || keys['a'] || keys['s'] || keys['d'];
+  let tension = 0.2, hb = 0;
+  if (state.stage === 'blackout') { tension = 0.6; hb = 72; }
+  else if (state.stage === 'after') { tension = state.timer <= 180 ? 0.85 : 0.35; hb = state.timer <= 180 ? 105 : 0; }
+  if (runActive) { tension = Math.max(tension, 0.75); hb = Math.max(hb, 100); }
+  setTension(tension);
+  soundTick(dt, { moving, heartbeatBpm: hb });
+  updateTrainRun(dt); // Act I dodge run, no-op when inactive
   renderer.render(scene, camera);
 }
 animate();
@@ -999,12 +1134,14 @@ canvas.addEventListener('click', e => {
   dragMoved = 0;
   mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(mouse, camera);
-  const hits = ray.intersectObjects([relay, relayHit, relayFace, relayStrip, relayBackplate, release, panel, board, boardHit, doorL, doorR].concat(humanGroups), true);
+  const runTargets = (runActive && exitMarker && exitMarker.visible) ? [exitMarker] : [];
+  const hits = ray.intersectObjects([relay, relayHit, relayFace, relayStrip, relayBackplate, release, panel, board, boardHit, doorL, doorR].concat(runTargets).concat(humanGroups), true);
   if (!hits.length) return;
   let o = hits[0].object; while (o.parent && o.parent !== scene) o = o.parent; // top-level object (model group or named prop)
   interact(o.name || hits[0].object.name);
 });
 function interact(name) {
+  if (name === 'exit' && runActive) { completeTrainRun(false); return; }
   if (name === 'relay' && state.stage === 'blackout') { openRepair(); return; }
   if (name === 'relay') { toast('Signal relay - dead. It needs a repair once the power is out.'); return; }
   if (name === 'release') { toast('Emergency release - locked. Restore the relay first.'); return; }
@@ -1029,6 +1166,7 @@ const TARGET = [1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0];
 let gridState = [];
 function repairMatches() { return gridState.filter((v, i) => v === TARGET[i]).length; }
 function openRepair() {
+  try { sfxRepair(); } catch (e) { /* ignore */ }
   document.getElementById('repairModal').classList.remove('hidden');
   gridState = TARGET.map(() => Math.random() > 0.5 ? 1 : 0);
   document.getElementById('repairClose').textContent = 'Close';
@@ -1047,6 +1185,7 @@ function renderRepair() {
     d.addEventListener('click', () => {
       if (state.repaired) return; // puzzle already solved, do not un-solve it
       gridState[i] = gridState[i] ? 0 : 1; // toggle from current state, not a captured value
+      try { sfxRepair(); } catch (e) { /* ignore */ }
       renderRepair();
       checkRepair();
     });
@@ -1058,6 +1197,7 @@ function renderRepair() {
 function checkRepair() {
   if (repairMatches() === TARGET.length) {
     state.repaired = true;
+    try { sfxPowerRestored(); } catch (e) { /* ignore */ }
     hideToast(); // BLACKOUT banner goes away as soon as the lights return
     document.getElementById('repairProgress').textContent = 'Matched 16 / 16 - relay restored!';
     document.getElementById('repairStatus').textContent = 'Relay restored - platform lights flicker back on.';
@@ -1081,11 +1221,123 @@ function afterRepair() {
   // Slide the right-hand door leaves apart into their pockets (move the groups
   // along z, not the leaf meshes, so windows and seals move with them)
   doorGroupL.position.z = -1.55; doorGroupR.position.z = 1.55;
+  try { sfxDoor(); } catch (e) { /* ignore */ }
   board.visible = true;
+  setAmbient('train'); // the train moves again: rumble returns
+  startTrainRun(); // dodge run to the doors, then a short climb out - then the dialogue below
+}
+function afterRunDialogue() {
   showDialogue([
     { who: 'Jade', text: 'Lights are back - on battery. Fifteen minutes. We move now, or we wait in the dark.' },
     { who: 'Caleb', text: 'Count the passengers. Third car first. Nobody gets left behind.' }
   ], () => countPassengers());
+}
+
+// ---------- Act I action: run the car, dodge the debris, climb out ----------
+// After the repair the train lurches and the ceiling sheds debris and
+// sparks. The player runs (WASD) to the glowing EXIT at the open doors,
+// dodging what falls. A hit costs 15 seconds of battery and staggers the
+// player briefly - never a fail state. Reaching the doors, clicking the
+// EXIT marker, or waiting out the 45 second window all finish the run,
+// so this beat can never block progress. Then a short climb out onto
+// the platform (hold SPACE), again with an auto-complete so it cannot block.
+let runActive = false, runTime = 0, runInvuln = 0, runSpawnT = 0;
+let exitMarker = null;
+const runDebris = []; // {mesh, active, speed, cooldown}
+function buildRunDebris() {
+  if (runDebris.length) return;
+  for (let i = 0; i < 8; i++) {
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(0.2, 0.2, 0.2),
+      new THREE.MeshStandardMaterial({ color: 0x3a2410, emissive: 0xff6a00, emissiveIntensity: 1.2, roughness: 0.5 })
+    );
+    m.castShadow = false;
+    m.visible = false;
+    scene.add(m);
+    runDebris.push({ mesh: m, active: false, speed: 2.4, cooldown: 0 });
+  }
+}
+function startTrainRun() {
+  try {
+    buildRunDebris();
+    if (!exitMarker) {
+      exitMarker = makeActionMarker('EXIT', '#7ac74f');
+      if (exitMarker) {
+        exitMarker.position.set(1.25, 2.0, 0);
+        exitMarker.name = 'exit';
+        exitMarker.userData.clickable = true;
+        scene.add(exitMarker);
+      }
+    }
+    if (exitMarker) exitMarker.visible = true;
+    runActive = true; runTime = 0; runInvuln = 0; runSpawnT = 0;
+    showActionBanner('RUN! The train is lurching - dodge the falling debris and reach the glowing EXIT at the doors.');
+    toast('Run to the glowing EXIT - WASD to move, dodge the orange debris.');
+  } catch (e) { runActive = false; afterRunDialogue(); }
+}
+function completeTrainRun(auto) {
+  if (!runActive) return;
+  runActive = false;
+  hideActionBanner();
+  try {
+    if (exitMarker) exitMarker.visible = false;
+    for (const d of runDebris) { d.active = false; d.mesh.visible = false; }
+  } catch (e) { /* ignore */ }
+  if (auto) toast('You make it to the doors as the car steadies.');
+  // Short climb out onto the platform: hold SPACE. Releasing pauses the
+  // fill; the window is generous and it auto-completes, so it cannot block.
+  try {
+    const ok = runHoldQTE({
+      label: 'CLIMB OUT',
+      sub: 'Hold SPACE to climb out onto the platform.',
+      holdMs: 1200, windowMs: 8000,
+      onDone: () => { afterRunDialogue(); }
+    });
+    if (!ok) afterRunDialogue();
+  } catch (e) { afterRunDialogue(); }
+}
+function updateTrainRun(dt) {
+  if (!runActive) return;
+  try {
+    runTime += dt;
+    if (runInvuln > 0) runInvuln -= dt;
+    // Spawn debris above the aisle at random spots.
+    runSpawnT -= dt;
+    if (runSpawnT <= 0) {
+      runSpawnT = 0.45 + Math.random() * 0.3;
+      const d = runDebris.find(x => !x.active && x.cooldown <= 0);
+      if (d) {
+        d.active = true;
+        d.speed = 2.2 + Math.random() * 1.2;
+        d.mesh.position.set((Math.random() - 0.5) * 2, 2.9, (Math.random() - 0.5) * 12);
+        d.mesh.visible = true;
+        try { sfxWhoosh(); } catch (e) { /* ignore */ }
+      }
+    }
+    for (const d of runDebris) {
+      if (!d.active) { if (d.cooldown > 0) d.cooldown -= dt; continue; }
+      d.mesh.position.y -= d.speed * dt;
+      d.mesh.rotation.x += dt * 3; d.mesh.rotation.y += dt * 2;
+      const p = d.mesh.position;
+      if (p.y < 0.15) {
+        d.active = false; d.mesh.visible = false; d.cooldown = 0.4 + Math.random() * 0.6;
+        continue;
+      }
+      // A hit: the debris is at body height and close to the camera.
+      if (runInvuln <= 0 && p.y > 0.5 && p.y < 2.1 && dist2D(p.x, p.z, camera.position.x, camera.position.z) < 0.45) {
+        runInvuln = 1.5;
+        state.timer = Math.max(0, state.timer - 15); updateHUD();
+        flashScreen('rgba(255,40,30,0.35)');
+        try { sfxThud(); } catch (e) { /* ignore */ }
+        toast('Debris hits you - 15 seconds of battery lost. Keep moving!');
+        d.active = false; d.mesh.visible = false; d.cooldown = 1;
+      }
+    }
+    // Goal: reach the open doors (near the EXIT marker), or the window runs out.
+    const dist = dist2D(camera.position.x, camera.position.z, 1.25, 0);
+    try { showActionBanner('RUN! Reach the glowing EXIT at the doors - ' + Math.max(0, Math.ceil(dist)) + ' m to go. Debris costs 15s of battery.'); } catch (e) { /* ignore */ }
+    if (dist < 1.1 || runTime > 45) completeTrainRun(runTime > 45);
+  } catch (e) { completeTrainRun(true); }
 }
 function countPassengers() {
   showDialogue([
@@ -1162,5 +1414,9 @@ setInterval(() => {
   if (state.timer > 0) { state.timer--; updateHUD(); if (state.timer === 0) toast('Battery dead - emergency lights are out. The story continues in the dark.'); }
 }, 1000);
 // Intro: the game starts only after the character models load (or fail clearly).
-setObjectives(0); updateHUD(); initZamaUI();
+setObjectives(0); updateHUD(); initZamaUI(); initVoiceUI();
+initSoundUI(); // procedural sound: ambient, effects, score, sound toggle
+initFlashlight(scene, camera); // F key / HUD button, dark sections only
+setAmbient('train'); // the train is moving: rumble and tunnel wind
+setTension(0.2);
 loadHumans();

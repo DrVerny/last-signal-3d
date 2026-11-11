@@ -59,6 +59,25 @@
 #cinemaBtn:hover{background:#1d2a33}
 #resetViewBtn{position:fixed;bottom:44px;right:12px;z-index:7;background:rgba(8,14,20,.85);color:#ffd166;border:1px solid #4a3f1e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;letter-spacing:1px}
 #resetViewBtn:hover{background:#1d2a33}
+#voiceBtn{position:fixed;bottom:80px;right:12px;z-index:7;background:rgba(8,14,20,.85);color:#ffd166;border:1px solid #4a3f1e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;letter-spacing:1px}
+#voiceBtn:hover{background:#1d2a33}
+#voiceBtn.voice-off{opacity:.55}
+#voiceBtn:disabled{cursor:default;opacity:.45}
+#exteriorBtn{position:fixed;bottom:116px;right:12px;z-index:7;background:rgba(8,14,20,.85);color:#ffd166;border:1px solid #4a3f1e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;letter-spacing:1px}
+#exteriorBtn:hover{background:#1d2a33}
+#soundBtn{position:fixed;bottom:116px;right:12px;z-index:7;background:rgba(8,14,20,.85);color:#ffd166;border:1px solid #4a3f1e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;letter-spacing:1px}
+#soundBtn:hover{background:#1d2a33}
+#soundBtn.sound-off{opacity:.55}
+#soundBtn:disabled{cursor:default;opacity:.45}
+#flashBtn{position:fixed;bottom:152px;right:12px;z-index:7;background:rgba(8,14,20,.85);color:#ffd166;border:1px solid #4a3f1e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;letter-spacing:1px}
+#flashBtn:hover{background:#1d2a33}
+#flashBtn.flash-on{border-color:#ffd166;background:#2a2410}
+#qtePrompt{position:fixed;left:50%;top:22%;transform:translateX(-50%);z-index:25;background:rgba(8,14,20,.95);border:2px solid #ffd166;border-radius:12px;padding:16px 24px;text-align:center;min-width:280px;max-width:92vw;cursor:pointer}
+#qteLabel{color:#ffd166;font-weight:bold;font-size:22px;letter-spacing:2px}
+#qteSub{color:#e8e8e8;font-size:14px;margin-top:6px;line-height:1.4}
+#qteBarWrap{height:10px;background:#1a2a33;border-radius:5px;overflow:hidden;margin-top:12px}
+#qteBar{height:100%;background:#ffd166;width:100%}
+#qteKey{color:#9fb8c8;font-size:12px;letter-spacing:1px;margin-top:8px}
 #help{position:fixed;bottom:8px;left:12px;font-size:11px;color:#7a93a3;z-index:5}
 
 #loading{position:fixed;inset:0;background:#05070a;z-index:40;display:flex;align-items:center;justify-content:center;text-align:center}

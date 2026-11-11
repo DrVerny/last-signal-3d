@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 import { FINAL_VALUES, sealFinalChoice, wasSealedOnChain, initZamaUI, setupRevealButton } from './zama.js';
+import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
+import { registerHumans, updateSpeakingGestures } from './gestures.js';
+import { registerLipSyncHumans } from './lipsync.js';
+import { initSoundUI, setAmbient, setTension, soundTick, sfxDoor, sfxBoom, sfxGavel, sfxShutter, sfxRev, sfxTrainPass, sfxThud, sfxAlert } from './sound.js';
+import { runHoldQTE } from './qte.js';
+import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -76,10 +82,11 @@ function showDialogue(lines, cb) {
 }
 function nextLine() {
   const box = document.getElementById('dialogue');
-  if (!dlgQueue.length) { box.classList.add('hidden'); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
+  if (!dlgQueue.length) { box.classList.add('hidden'); stopSpeaking(); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
   const line = dlgQueue.shift(); box.classList.remove('hidden');
   document.getElementById('dlgName').textContent = line.who;
   document.getElementById('dlgText').textContent = line.text;
+  speakLine(line.who, line.text);
   const ch = document.getElementById('dlgChoices'); ch.innerHTML = '';
   const next = document.getElementById('dlgNext');
   if (line.choices) {
@@ -136,6 +143,19 @@ function mapTexture() {
     for (const [x, y] of [[120, 240], [250, 180], [360, 260], [200, 300]]) { ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.fill(); }
   });
 }
+// Road surface: dark asphalt with a dashed yellow centre line and white edge
+// lines, repeated along the length so the dashes stay a sensible size.
+function roadTexture() {
+  return canvasTexture(256, 512, (ctx, w, h) => {
+    ctx.fillStyle = '#23262a'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#2a2e33';
+    for (let i = 0; i < 120; i++) ctx.fillRect(Math.random() * w, Math.random() * h, 2, 2);
+    ctx.fillStyle = '#e8e8e8';
+    ctx.fillRect(10, 0, 6, h); ctx.fillRect(240, 0, 6, h);
+    ctx.fillStyle = '#d8b400';
+    for (let y = 0; y < h; y += 64) ctx.fillRect(124, y, 8, 32);
+  }, 1, 4);
+}
 
 // ---------- Renderer / scene ----------
 const canvas = document.getElementById('scene');
@@ -182,7 +202,7 @@ const GROUPS = { 1: gControl, 2: gCourt, 3: gEscape, 4: gSafe, 5: gPress, 6: gBr
 const VIEWS = {
   1: { pos: [0, 1.7, 8], yaw: 0, x: [-8, 8], z: [-4, 11] },
   2: { pos: [0, 1.7, 7], yaw: 0, x: [-6, 6], z: [-2, 10] },
-  3: { pos: [0, 1.7, 8], yaw: 0, x: [-8, 8], z: [-6, 12] },
+  3: { pos: [0, 2.4, 10.5], yaw: 0, x: [-8, 8], z: [-6, 12] }, // raised and pulled back so the road, the police bus and the militant van are all in frame
   4: { pos: [0, 1.7, 8], yaw: 0, x: [-8, 8], z: [-4, 11] },
   5: { pos: [0, 1.7, 7], yaw: 0, x: [-6, 6], z: [-2, 10] },
   6: { pos: [0, 2.0, 10], yaw: 0, x: [-1.5, 1.5], z: [-12, 12] }
@@ -193,7 +213,7 @@ function resetView() {
   const v = VIEWS[state.chapter];
   camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
   state.yaw = v.yaw; state.pitch = 0; camBounds = v;
-  camY = state.chapter === 6 ? 2.0 : 1.7;
+  camY = v.pos[1]; // the chapter view carries its own height (ch. 3 is raised so the road reads)
 }
 document.getElementById('resetViewBtn').onclick = resetView;
 canvas.style.touchAction = 'none';
@@ -249,6 +269,22 @@ function cloneCaleb(base, name, coatColor, group, x, z, yaw) {
   group.add(g); placeHuman(g, name, x, z, yaw, base.scale);
   return g;
 }
+// Durag + face wrap for a militant: dark cloth cap over the crown, a tail
+// hanging down the back of the head, and a wrap across the lower face so the
+// nose and mouth are hidden while the eyes stay clear. Positions are in the
+// character group's local units (head centre near y 1.76, face front +z),
+// so the covering scales with the model and sits on the head, not floating.
+function addDurag(group) {
+  const cloth = new THREE.MeshStandardMaterial({ color: 0x16161c, roughness: 0.95, metalness: 0 });
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.145, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55), cloth);
+  cap.position.set(0, 1.74, -0.02); cap.castShadow = true; group.add(cap);
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.3, 0.02), cloth);
+  tail.position.set(0, 1.62, -0.15); tail.rotation.x = 0.12; tail.castShadow = true; group.add(tail);
+  const knot = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 10), cloth);
+  knot.position.set(0, 1.78, -0.15); group.add(knot);
+  const wrap = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 0.06), cloth);
+  wrap.position.set(0, 1.6, 0.1); wrap.castShadow = true; group.add(wrap);
+}
 async function loadHumans() {
   const loadingText = document.getElementById('loadingText');
   const loadingError = document.getElementById('loadingError');
@@ -299,8 +335,28 @@ async function loadHumans() {
     cloneCaleb(calebBase, 'ag', 0x222226, gPress, 2.5, -3, Math.PI);
     cloneCaleb(calebBase, 'mta', 0x3a3a40, gControl, 3.5, -1, -0.6);
     cloneCaleb(calebBase, 'derrick', 0x3a3a3a, gCourt, 4.5, 2, -0.5);
-    cloneCaleb(calebBase, 'leader', 0x0a0a0a, gEscape, 0, -3, 0);
+    const leaderG = cloneCaleb(calebBase, 'leader', 0x0a0a0a, gEscape, 0, -3, 0);
+    addDurag(leaderG); // the masked leader: face covered
+    // A live courtroom: two lawyers at the counsel tables, a witness in the
+    // stand, four people seated in the gallery pews, and a court officer.
+    cloneCaleb(calebBase, 'lawyerP', 0x1a2a4a, gCourt, -2.6, 2.6, Math.PI);
+    cloneCaleb(calebBase, 'lawyerD', 0x2a2a2e, gCourt, 2.6, 2.6, Math.PI);
+    const wit = cloneCaleb(calebBase, 'witness', 0x4a3a2a, gCourt, -3.2, -2.5, 0);
+    wit.position.y = -0.35; // sunk so only the upper body shows above the stand: reads as seated
+    for (const [gx, gz, nm] of [[-3.5, 1, 'gallery1'], [3.5, 1, 'gallery2'], [-3.5, 3, 'gallery3'], [3.5, 3, 'gallery4']]) {
+      const gg = cloneCaleb(calebBase, nm, 0x3a3f45, gCourt, gx, gz, Math.PI);
+      gg.position.y = -0.35; // seated in the gallery pew: torso above the bench back
+    }
+    cloneCaleb(calebBase, 'officer', 0x1a1a22, gCourt, 3.4, -3.0, 0);
+    // The van ambush crew: two more militants by the militant van, durags on.
+    // They stand on the raised sidewalk, so their feet sit at its height.
+    const mil1 = cloneCaleb(calebBase, 'militant1', 0x0a0a0a, gEscape, -4.8, 1.5, 1.2);
+    mil1.position.y = 0.14; addDurag(mil1);
+    const mil2 = cloneCaleb(calebBase, 'militant2', 0x111114, gEscape, -4.2, 3.2, 1.2);
+    mil2.position.y = 0.14; addDurag(mil2);
   }
+  registerHumans(humans); // speaking gestures use the loaded models
+  registerLipSyncHumans(humans); // jaw morph lip-sync uses the same loaded models
   if (failures.length) {
     loadingError.classList.remove('hidden');
     loadingError.textContent = 'Could not load: ' + failures.join(', ') + '. The game can still start without them.';
@@ -431,6 +487,9 @@ function buildCourt() {
   // Witness stand + defendant table.
   box(gCourt, 1.4, 1.1, 1.0, 0x4a3423, -3.2, 0.55, -2.5, null, { roughness: 0.8 });
   box(gCourt, 3.4, 0.75, 1.2, 0x2a2118, 0, 0.38, 2.2, null, { roughness: 0.8 });
+  // Counsel tables: prosecution on the left, defence on the right.
+  box(gCourt, 1.6, 0.75, 1.0, 0x2a2118, -2.6, 0.38, 1.6, null, { roughness: 0.8 });
+  box(gCourt, 1.6, 0.75, 1.0, 0x2a2118, 2.6, 0.38, 1.6, null, { roughness: 0.8 });
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('NEW YORK SUPREME COURT', '#111111', '#e8e8e8', ''), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 4.4, -4.8); gCourt.add(sign);
   blobShadow(gCourt, 0, 2.5, 1.2, 1.2, 0.5);
@@ -443,6 +502,9 @@ function startChapter2() {
   reparentCast('jade', gCourt, -0.8, 2.8, Math.PI);
   reparentCast('caleb', gCourt, 0.8, 2.8, Math.PI);
   setObjectives(0); updateHUD();
+  setAmbient('court'); // the courtroom: low murmur and room tone
+  setTension(0.25);
+  try { sfxGavel(); } catch (e) { /* ignore */ } // the gavel falls as court opens
   document.getElementById('timerLabel').textContent = 'Sentence';
   document.getElementById('timerVal').textContent = '90 days';
   document.getElementById('timerBar').style.width = '100%';
@@ -463,16 +525,96 @@ function startChapter2() {
 
 // ---------- Chapter 3: The Transport Van + The Escape ----------
 let vanDoorL, vanDoorR, trainMesh;
+let policeLightL = null, policeLightR = null; // flashing roof bar on the police bus
+let militantVan = null; // the militants' van, animated in the chase
+let ramPuff = null; // dust at the spot where the van rammed the bus
+const dustPuffs = []; // drifting dust sprites, reused
+// The militant van's chase: rammed into the bus, then it pulls back, turns
+// onto the road and drifts away down the street, looping behind the camera.
+const vanChase = { phase: 'rammed', t: 0, fromX: 0, fromZ: 0, fromYaw: 0, toX: 0, toZ: 0, toYaw: 0, z: 0, spawnT: 0 };
 function buildEscape() {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ color: 0x2a2f33, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; gEscape.add(ground);
-  // White corrections van, loading dock.
-  box(gEscape, 2.4, 2.4, 5, 0xe8e8e8, 0, 1.2, 2, null, { roughness: 0.5, metalness: 0.2 });
-  box(gEscape, 2.2, 0.9, 0.6, 0x1a2a3a, 0, 1.5, 4.6, null, { roughness: 0.3 }); // cab
-  const dl = box(gEscape, 1.1, 2.0, 0.08, 0xd8d8d8, -0.55, 1.1, -0.55, 'vanDoors', { roughness: 0.5 });
-  const dr = box(gEscape, 1.1, 2.0, 0.08, 0xd8d8d8, 0.55, 1.1, -0.55, 'vanDoors', { roughness: 0.5 });
+  // The road: a marked asphalt strip running the length of the scene, so the
+  // chase plays out on a street the camera can see, not a blank floor.
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(7, 34), new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.95 }));
+  road.rotation.x = -Math.PI / 2; road.position.set(0, 0.02, 0); road.receiveShadow = true; gEscape.add(road);
+  for (const sx of [-1, 1]) box(gEscape, 2.2, 0.14, 34, 0x4a4d4f, sx * 4.6, 0.07, 0, null, { roughness: 1 }); // sidewalks
+  // Street lamps along the road.
+  for (const [lx, lz] of [[4.2, -6], [-4.2, 0], [4.2, 6]]) {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 4.5, 8), stdMat({ color: 0x2a2f33, metalness: 0.6, roughness: 0.5 }));
+    pole.position.set(lx, 2.25, lz); gEscape.add(pole);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.25), new THREE.MeshStandardMaterial({ color: 0x333333, emissive: 0xffc978, emissiveIntensity: 0.9 }));
+    head.position.set(lx + (lx > 0 ? -0.3 : 0.3), 4.5, lz); gEscape.add(head);
+  }
+  // Police transport bus: the offender rides in this. Navy body, white band,
+  // POLICE lettering, barred windows, flashing roof bar, rear doors (the
+  // click target, same name as the old van doors so the escape still works).
+  const bus = new THREE.Group(); bus.position.set(0, 0, 2); gEscape.add(bus);
+  const busBody = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6), stdMat({ color: 0x1a2a4a, roughness: 0.5, metalness: 0.25 }));
+  busBody.position.set(0, 1.4, 0); busBody.castShadow = true; busBody.receiveShadow = true; bus.add(busBody);
+  const busBand = new THREE.Mesh(new THREE.BoxGeometry(2.62, 0.55, 6.02), stdMat({ color: 0xe8e8e8, roughness: 0.5 }));
+  busBand.position.set(0, 1.55, 0); bus.add(busBand);
+  for (const sx of [-1, 1]) {
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.7), new THREE.MeshStandardMaterial({ map: signTexture('POLICE', '#f8f8f8', '#1a2a4a', ''), roughness: 0.6 }));
+    plate.position.set(sx * 1.32, 1.95, 0); plate.rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2; bus.add(plate);
+  }
+  const shield = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.9), new THREE.MeshStandardMaterial({ color: 0x0a141e, roughness: 0.15, metalness: 0.5 }));
+  shield.position.set(0, 1.7, 3.02); bus.add(shield);
+  for (const sx of [-1, 1]) for (const wz of [-2, -0.6, 0.8, 2.2]) {
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.7), new THREE.MeshStandardMaterial({ color: 0x0a141e, roughness: 0.2, metalness: 0.4 }));
+    win.position.set(sx * 1.31, 1.95, wz); win.rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2; bus.add(win);
+    for (const bx of [-0.3, 0, 0.3]) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.7, 0.03), stdMat({ color: 0x888888, metalness: 0.8, roughness: 0.3 }));
+      bar.position.set(sx * 1.33, 1.95, wz + bx); bus.add(bar);
+    }
+  }
+  const barBase = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.12, 0.45), stdMat({ color: 0x111111, roughness: 0.4 }));
+  barBase.position.set(0, 2.76, 1.6); bus.add(barBase);
+  policeLightL = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 0.4), new THREE.MeshStandardMaterial({ color: 0xaa0000, emissive: 0xff2020, emissiveIntensity: 1.2, roughness: 0.3 }));
+  policeLightL.position.set(-0.32, 2.82, 1.6); bus.add(policeLightL);
+  policeLightR = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 0.4), new THREE.MeshStandardMaterial({ color: 0x0000aa, emissive: 0x2040ff, emissiveIntensity: 1.2, roughness: 0.3 }));
+  policeLightR.position.set(0.32, 2.82, 1.6); bus.add(policeLightR);
+  for (const [wx, wz] of [[-1.15, -1.8], [1.15, -1.8], [-1.15, 2.0], [1.15, 2.0]]) {
+    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.3, 16), stdMat({ color: 0x111111, roughness: 0.9 }));
+    wh.rotation.z = Math.PI / 2; wh.position.set(wx, 0.45, wz); wh.castShadow = true; bus.add(wh);
+  }
+  const dl = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ color: 0xd8d8d8, roughness: 0.5 }));
+  dl.position.set(-0.62, 1.2, -3.05); dl.name = 'vanDoors'; dl.userData.clickable = true; bus.add(dl);
+  const dr = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ color: 0xd8d8d8, roughness: 0.5 }));
+  dr.position.set(0.62, 1.2, -3.05); dr.name = 'vanDoors'; dr.userData.clickable = true; bus.add(dr);
   vanDoorL = dl; vanDoorR = dr;
-  hitBox(gEscape, 2.6, 2.4, 0.8, 0, 1.2, -0.6, 'vanDoors');
+  hitBox(gEscape, 2.8, 2.6, 0.8, 0, 1.3, -1.1, 'vanDoors');
+  // The militants' van: a dark van rammed nose-first into the bus's left
+  // flank. Its nose touches the bus side at (-1.3, 2.3), with a dust puff
+  // at the impact point. It pulls away and drifts down the road once the
+  // doors are ripped open (see updateVanChase in the animate loop).
+  militantVan = new THREE.Group();
+  militantVan.position.set(-3.0, 0, 0.8); militantVan.rotation.y = 0.85;
+  gEscape.add(militantVan);
+  const mvBody = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.0, 4.6), stdMat({ color: 0x0d0d0f, roughness: 0.4, metalness: 0.4 }));
+  mvBody.position.set(0, 1.15, 0); mvBody.castShadow = true; mvBody.receiveShadow = true; militantVan.add(mvBody);
+  const mvCab = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.9, 0.8), stdMat({ color: 0x14161a, roughness: 0.3, metalness: 0.4 }));
+  mvCab.position.set(0, 1.35, 2.0); militantVan.add(mvCab);
+  const mvShield = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.7), new THREE.MeshStandardMaterial({ color: 0x0a141e, roughness: 0.15, metalness: 0.5 }));
+  mvShield.position.set(0, 1.4, 2.42); militantVan.add(mvShield);
+  for (const [wx, wz] of [[-1.0, -1.5], [1.0, -1.5], [-1.0, 1.5], [1.0, 1.5]]) {
+    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.28, 14), stdMat({ color: 0x111111, roughness: 0.9 }));
+    wh.rotation.z = Math.PI / 2; wh.position.set(wx, 0.38, wz); militantVan.add(wh);
+  }
+  for (const hx of [-0.7, 0.7]) {
+    const hl = new THREE.Mesh(new THREE.CircleGeometry(0.12, 12), new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a0, emissiveIntensity: 1.5 }));
+    hl.position.set(hx, 0.9, 2.32); militantVan.add(hl);
+  }
+  ramPuff = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0x9a8a7a, transparent: true, opacity: 0.5, depthWrite: false }));
+  ramPuff.scale.set(2.2, 1.4, 1); ramPuff.position.set(-1.5, 0.9, 2.3); gEscape.add(ramPuff);
+  // Drift dust pool: small grey puffs that spawn at the van's rear wheels
+  // while it slides, then grow and fade.
+  for (let i = 0; i < 10; i++) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0x8a8578, transparent: true, opacity: 0, depthWrite: false }));
+    s.scale.set(0.6, 0.6, 1); s.position.set(0, -10, 0); gEscape.add(s);
+    dustPuffs.push({ sprite: s, life: 0, maxLife: 1 });
+  }
   // Rooftop (raised platform) with AC units and a parapet.
   box(gEscape, 10, 0.4, 8, 0x3a3f42, -4, 2.6, -6, null, { roughness: 1 });
   hitBox(gEscape, 10, 1.4, 8, -4, 3.2, -6, 'rooftop');
@@ -493,17 +635,26 @@ function buildEscape() {
   blobShadow(gEscape, 0, 2, 2.6, 5, 0.5);
 }
 let escapeTimer = null;
+let escapeTimeLeft = 90; // shared so action hits can subtract backup time
+function escapePenalty(s) {
+  escapeTimeLeft = Math.max(0, escapeTimeLeft - s);
+  try {
+    document.getElementById('timerVal').textContent = escapeTimeLeft + ' seconds';
+    document.getElementById('timerBar').style.width = escapeTimeLeft + '%';
+  } catch (e) { /* ignore */ }
+  toast('Caught in the open - ' + s + ' seconds lost. Keep moving!');
+}
 function startEscapeTimer() {
-  let left = 90;
+  escapeTimeLeft = 90;
   document.getElementById('timerLabel').textContent = 'Backup';
-  document.getElementById('timerVal').textContent = left + ' seconds';
+  document.getElementById('timerVal').textContent = escapeTimeLeft + ' seconds';
   document.getElementById('timerBar').style.width = '100%';
   if (escapeTimer) clearInterval(escapeTimer);
   escapeTimer = setInterval(() => {
-    left--;
-    if (left <= 0) { left = 0; clearInterval(escapeTimer); escapeTimer = null; toast('Backup is here - move!'); }
-    document.getElementById('timerVal').textContent = left + ' seconds';
-    document.getElementById('timerBar').style.width = left + '%';
+    escapeTimeLeft--;
+    if (escapeTimeLeft <= 0) { escapeTimeLeft = 0; clearInterval(escapeTimer); escapeTimer = null; toast('Backup is here - move!'); }
+    document.getElementById('timerVal').textContent = escapeTimeLeft + ' seconds';
+    document.getElementById('timerBar').style.width = escapeTimeLeft + '%';
   }, 1000);
 }
 function stopEscapeTimer() { if (escapeTimer) { clearInterval(escapeTimer); escapeTimer = null; } }
@@ -513,9 +664,11 @@ function startChapter3() {
   reparentCast('jade', gEscape, -0.9, 3.5, 0);
   reparentCast('caleb', gEscape, 0.9, 3.5, 0);
   setObjectives(0); updateHUD();
+  setAmbient('chase'); // sirens and engine roar for the escape
+  setTension(0.9);
   startEscapeTimer();
   showDialogue([
-    { who: 'Jade Morales', text: 'A white corrections van idles by the curb. Two officers load us into the back. The doors slam shut. Darkness. A metal bench, a wire mesh partition, a single flickering light.' },
+    { who: 'Jade Morales', text: 'A police bus idles by the curb. Two officers load us into the back. The doors slam shut. Darkness. A metal bench, a wire mesh partition, a single flickering light.' },
     { who: 'Caleb Bishop', text: 'Well. This is new. First time in any wagon.' },
     { who: 'Jade Morales', text: 'You get used to it.' },
     { who: 'Caleb Bishop', text: 'Hey, Morales. What about us? After the ninety days?' },
@@ -534,6 +687,16 @@ function escapeStep(from) {
   if (state.escapeStep === 0) {
     state.escapeStep = 1;
     vanDoorL.position.x = -1.6; vanDoorR.position.x = 1.6; // doors ripped open
+    try { sfxDoor(); sfxBoom(); } catch (e) { /* ignore */ } // the doors tear off, the ram hits
+    // Jade and Caleb step out of the back of the bus, by the leader.
+    reparentCast('jade', gEscape, -1.2, -2.2, 0);
+    reparentCast('caleb', gEscape, 1.2, -2.2, 0);
+    // The militant van pulls off the bus and away down the road, drifting.
+    if (militantVan && vanChase.phase === 'rammed') {
+      vanChase.phase = 'pullback'; vanChase.t = 0;
+      vanChase.fromX = militantVan.position.x; vanChase.fromZ = militantVan.position.z; vanChase.fromYaw = militantVan.rotation.y;
+      vanChase.toX = -2.2; vanChase.toZ = -1.5; vanChase.toYaw = Math.PI;
+    }
     setObjectives(2);
     showDialogue([
       { who: 'System', text: 'SCREECHING TIRES. The van slams to a stop. A CRASH. The back doors are ripped open. Sunlight floods in. Three figures in black tactical gear stand silhouetted against the light.' },
@@ -542,7 +705,7 @@ function escapeStep(from) {
       { who: 'Leader', text: 'Friends of Derrick Shaw. He said you might need a hand. We have got ninety seconds before backup arrives. Move.' },
       { who: 'Caleb Bishop', text: 'This is insane! We are escaping custody!' },
       { who: 'Jade Morales', text: 'You got a better idea?' }
-    ], () => toast('Run - click the rooftop to climb up, then the fire escape down to the SUV.'));
+    ], () => { startEscapeAction(); }); // the escape becomes an action run, not just clicks
   } else if (state.escapeStep === 1) {
     state.escapeStep = 2;
     camY = 3.4; camera.position.set(-4, 3.4, -4);
@@ -557,8 +720,159 @@ function escapeStep(from) {
       { who: 'System', text: 'Down the fire escape, into the alley. The SUV doors open. You pile in. The SUV peels out.' },
       { who: 'Caleb Bishop', text: 'No! But I would like to go on record saying this is insane!' },
       { who: 'Jade Morales', text: '(half-smile) Noted. For the record.' }
-    ], () => { setObjectives(3); stopEscapeTimer(); setTimeout(() => startChapter4(), 1200); });
+    ], () => { try { sfxRev(); } catch (e) { /* ignore */ } setObjectives(3); stopEscapeTimer(); setTimeout(() => startChapter4(), 1200); });
   }
+}
+
+// ---------- Act III action: the escape as a run, dodge and climb ----------
+// After the doors are ripped open, the escape is an action sequence, not
+// just clicks: run (WASD) to the rooftop ladder, dodging the rolling
+// barriers on the street; climb up (hold SPACE); run across the rooftop,
+// dodging the searchlight; climb down the fire escape (hold SPACE); run
+// to the SUV. A hit costs 5 seconds on the backup timer - never a fail
+// state. The old click targets still work as a fallback, and if the
+// player clicks ahead the action syncs to the new step, so this beat can
+// never block progress. While a dialogue is open the action pauses.
+let escapeActionActive = false, escapePhase = 0, escapeInvuln = 0, escapeClimbing = false;
+let escapeMarkers = {}, escapeBarriers = [], escapeLight = null, escapeBeam = null, escapeBeamX = -4;
+function buildEscapeAction() {
+  if (escapeMarkers.ladder) return;
+  try {
+    escapeMarkers.ladder = makeActionMarker('LADDER', '#7ac74f');
+    if (escapeMarkers.ladder) { escapeMarkers.ladder.position.set(-4, 1.8, -2); escapeMarkers.ladder.visible = false; gEscape.add(escapeMarkers.ladder); }
+    escapeMarkers.fire = makeActionMarker('FIRE ESCAPE', '#ffd166');
+    if (escapeMarkers.fire) { escapeMarkers.fire.position.set(1.5, 3.8, -2); escapeMarkers.fire.visible = false; gEscape.add(escapeMarkers.fire); }
+    escapeMarkers.suv = makeActionMarker('SUV', '#7ac74f');
+    if (escapeMarkers.suv) { escapeMarkers.suv.position.set(5.5, 1.8, -1); escapeMarkers.suv.visible = false; gEscape.add(escapeMarkers.suv); }
+    for (const z of [-2, -3.5, -0.5]) {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), new THREE.MeshStandardMaterial({ color: 0x3a2a18, roughness: 0.9 }));
+      b.position.set(0, 0.35, z); b.castShadow = true; b.visible = false;
+      gEscape.add(b);
+      escapeBarriers.push({ mesh: b, z, phase: z * 1.3, speed: 0.9 + Math.random() * 0.3 });
+    }
+    // Searchlight sweeping the rooftop: a spotlight plus a visible beam cone.
+    escapeLight = new THREE.SpotLight(0xfff2d8, 0, 20, 0.35, 0.5, 1.2);
+    escapeLight.position.set(-4, 7, -6);
+    const tgt = new THREE.Object3D(); tgt.position.set(-4, 2.6, -6);
+    gEscape.add(tgt); escapeLight.target = tgt;
+    gEscape.add(escapeLight);
+    escapeBeam = new THREE.Mesh(new THREE.ConeGeometry(1.1, 5.5, 16, 1, true), new THREE.MeshBasicMaterial({ color: 0xfff2d8, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    escapeBeam.position.set(-4, 4.8, -6); escapeBeam.visible = false;
+    gEscape.add(escapeBeam);
+  } catch (e) { /* action props are best effort */ }
+}
+function startEscapeAction() {
+  try {
+    buildEscapeAction();
+    escapeActionActive = true; escapePhase = 1; escapeInvuln = 0; escapeClimbing = false;
+    if (escapeMarkers.ladder) escapeMarkers.ladder.visible = true;
+    for (const b of escapeBarriers) b.mesh.visible = true;
+    showActionBanner('RUN! Get to the rooftop ladder - dodge the rolling barriers. WASD to move.');
+    toast('Run to the glowing LADDER - dodge the barriers.');
+  } catch (e) { escapeActionActive = false; toast('Run - click the rooftop to climb up, then the fire escape down to the SUV.'); }
+}
+function endEscapeAction() {
+  if (!escapeActionActive) return;
+  escapeActionActive = false; escapePhase = 0;
+  hideActionBanner();
+  try {
+    for (const m of Object.values(escapeMarkers)) if (m) m.visible = false;
+    for (const b of escapeBarriers) b.mesh.visible = false;
+    if (escapeLight) escapeLight.intensity = 0;
+    if (escapeBeam) escapeBeam.visible = false;
+  } catch (e) { /* ignore */ }
+}
+function escapeClimb(label, sub, done) {
+  // A hold-SPACE climb. While it runs the action pauses (no hits).
+  escapeClimbing = true;
+  try {
+    const ok = runHoldQTE({
+      label, sub, holdMs: 1200, windowMs: 8000,
+      onDone: (ok) => { escapeClimbing = false; done(ok); }
+    });
+    if (!ok) { escapeClimbing = false; done(true); }
+  } catch (e) { escapeClimbing = false; done(true); }
+}
+function updateEscapeAction(dt) {
+  if (!escapeActionActive || escapeClimbing) return;
+  try {
+    if (state.chapter !== 3 || state.escapeStep >= 3) { endEscapeAction(); return; }
+    // While a dialogue is open the player is reading: pause the action.
+    if (!document.getElementById('dialogue').classList.contains('hidden')) return;
+    // Sync with the click fallback: if the player clicked ahead, jump to the right phase.
+    if (state.escapeStep === 2 && escapePhase === 1) {
+      escapePhase = 2;
+      if (escapeMarkers.ladder) escapeMarkers.ladder.visible = false;
+      for (const b of escapeBarriers) b.mesh.visible = false;
+      if (escapeMarkers.fire) escapeMarkers.fire.visible = true;
+      if (escapeLight) escapeLight.intensity = 8;
+      if (escapeBeam) escapeBeam.visible = true;
+      showActionBanner('Across the rooftop - stay out of the searchlight, reach the FIRE ESCAPE.');
+    }
+    if (escapeInvuln > 0) escapeInvuln -= dt;
+    const t = Date.now() / 1000;
+    if (escapePhase === 1) {
+      // Barriers roll across the street; a hit costs 5 seconds.
+      for (const b of escapeBarriers) {
+        b.mesh.position.x = Math.sin(t * b.speed + b.phase) * 4;
+        b.mesh.rotation.y += dt;
+        if (escapeInvuln <= 0 && camera.position.y < 2.5 && Math.abs(b.mesh.position.x - camera.position.x) < 0.6 && Math.abs(b.z - camera.position.z) < 0.6) {
+          escapeInvuln = 2;
+          escapePenalty(5);
+          flashScreen('rgba(255,40,30,0.35)');
+          try { sfxThud(); } catch (e) { /* ignore */ }
+        }
+      }
+      const dist = dist2D(camera.position.x, camera.position.z, -4, -2);
+      try { showActionBanner('RUN! Reach the glowing LADDER - ' + Math.max(0, Math.ceil(dist)) + ' m to go. Dodge the barriers.'); } catch (e) { /* ignore */ }
+      if (dist < 1.3) {
+        escapeClimb('CLIMB UP', 'Hold SPACE to climb the ladder to the rooftop.', () => {
+          if (!escapeActionActive) return;
+          camY = 3.4; camera.position.set(-4, 3.4, -4);
+          escapePhase = 2;
+          if (escapeMarkers.ladder) escapeMarkers.ladder.visible = false;
+          for (const b of escapeBarriers) b.mesh.visible = false;
+          if (escapeMarkers.fire) escapeMarkers.fire.visible = true;
+          if (escapeLight) escapeLight.intensity = 8;
+          if (escapeBeam) escapeBeam.visible = true;
+          escapeStep('rooftop');
+        });
+      }
+    } else if (escapePhase === 2) {
+      // Searchlight sweeps the rooftop; standing in the beam costs 5 seconds.
+      escapeBeamX = -4 + Math.sin(t * 0.45) * 4.5;
+      if (escapeLight) escapeLight.target.position.set(escapeBeamX, 2.6, -6);
+      if (escapeBeam) escapeBeam.position.set(escapeBeamX, 4.8, -6);
+      if (escapeInvuln <= 0 && camY > 3 && Math.abs(camera.position.x - escapeBeamX) < 0.9) {
+        escapeInvuln = 2;
+        escapePenalty(5);
+        flashScreen('rgba(255,240,180,0.3)');
+        try { sfxAlert(); } catch (e) { /* ignore */ }
+        toast('Searchlight! You were spotted - 5 seconds lost.');
+      }
+      const dist = dist2D(camera.position.x, camera.position.z, 1.5, -2);
+      try { showActionBanner('Across the rooftop - stay out of the searchlight, reach the FIRE ESCAPE - ' + Math.max(0, Math.ceil(dist)) + ' m.'); } catch (e) { /* ignore */ }
+      if (dist < 1.3) {
+        escapeClimb('CLIMB DOWN', 'Hold SPACE to climb down the fire escape.', () => {
+          if (!escapeActionActive) return;
+          camY = 1.9; camera.position.set(5.5, 1.9, 2);
+          escapePhase = 3;
+          if (escapeMarkers.fire) escapeMarkers.fire.visible = false;
+          if (escapeLight) escapeLight.intensity = 0;
+          if (escapeBeam) escapeBeam.visible = false;
+          if (escapeMarkers.suv) escapeMarkers.suv.visible = true;
+          showActionBanner('RUN! Get to the SUV - climb in and go.');
+        });
+      }
+    } else if (escapePhase === 3) {
+      const dist = dist2D(camera.position.x, camera.position.z, 5.5, -1);
+      try { showActionBanner('RUN! Get to the SUV - ' + Math.max(0, Math.ceil(dist)) + ' m to go.'); } catch (e) { /* ignore */ }
+      if (dist < 1.5) {
+        endEscapeAction();
+        escapeStep('suv');
+      }
+    }
+  } catch (e) { endEscapeAction(); }
 }
 
 // ---------- Chapter 4: The Safehouse ----------
@@ -592,6 +906,8 @@ function startChapter4() {
   reparentCast('jade', gSafe, -1.2, 3.5, Math.PI);
   reparentCast('caleb', gSafe, 1.2, 3.5, Math.PI);
   setObjectives(0); updateHUD();
+  setAmbient('room'); // the safehouse: quiet, just room tone
+  setTension(0.2);
   document.getElementById('timerLabel').textContent = 'Press conference';
   document.getElementById('timerVal').textContent = 'tomorrow 9 AM';
   document.getElementById('timerBar').style.width = '100%';
@@ -649,6 +965,8 @@ function startChapter5() {
   reparentCast('jade', gPress, -1.2, 1.5, 0);
   reparentCast('caleb', gPress, 1.2, 1.5, 0);
   setObjectives(0); updateHUD();
+  setAmbient('press'); // crowd murmur and camera shutters
+  setTension(0.35);
   document.getElementById('timerLabel').textContent = 'Press conference';
   document.getElementById('timerVal').textContent = 'live';
   document.getElementById('timerBar').style.width = '100%';
@@ -674,6 +992,55 @@ function pressConference() {
   ], () => { setObjectives(2); stopEscapeTimer(); setTimeout(() => startChapter6(), 1200); });
 }
 
+// Bridge exterior shot: after the train has run a while in chapter 6 the
+// camera cuts to a trackside shot of the full train body moving on its
+// track, holds a few seconds, then returns to the deck.
+const bridgeShot = { done: true, active: false, until: 0, startT: 0 };
+function spawnDust(x, y, z) {
+  for (const p of dustPuffs) {
+    if (p.life <= 0) {
+      p.life = p.maxLife = 0.9 + Math.random() * 0.5;
+      p.sprite.position.set(x + (Math.random() - 0.5) * 0.6, y, z + (Math.random() - 0.5) * 0.6);
+      p.sprite.material.opacity = 0.5;
+      p.sprite.scale.set(0.6, 0.6, 1);
+      return;
+    }
+  }
+}
+function updateVanChase(dt, t) {
+  if (!militantVan || state.chapter !== 3) return;
+  if (vanChase.phase === 'rammed') return;
+  if (vanChase.phase === 'pullback') {
+    vanChase.t += dt;
+    const k = Math.min(1, vanChase.t / 1.5);
+    const e = k * k * (3 - 2 * k); // smoothstep
+    militantVan.position.x = vanChase.fromX + (vanChase.toX - vanChase.fromX) * e;
+    militantVan.position.z = vanChase.fromZ + (vanChase.toZ - vanChase.fromZ) * e;
+    militantVan.rotation.y = vanChase.fromYaw + (vanChase.toYaw - vanChase.fromYaw) * e;
+    if (ramPuff) ramPuff.material.opacity = Math.max(0, 0.5 - k * 0.5);
+    if (k >= 1) { vanChase.phase = 'drift'; vanChase.z = militantVan.position.z; vanChase.spawnT = 0; }
+    return;
+  }
+  // Drift: the van runs down the road (toward -z) weaving across its lane,
+  // its nose pointed a slip angle away from its direction of travel so the
+  // rear reads as sliding out, with dust at the rear wheels. When it runs
+  // off the far end it loops back behind the camera, out of sight.
+  vanChase.z -= 4.5 * dt;
+  if (vanChase.z < -16) vanChase.z = 10;
+  const weave = Math.sin(vanChase.z * 0.25);
+  militantVan.position.z = vanChase.z;
+  militantVan.position.x = -2.0 + weave * 1.0;
+  const slip = 0.28 * Math.sin(vanChase.z * 0.25 + 0.8);
+  militantVan.rotation.y = Math.PI + slip;
+  vanChase.spawnT -= dt;
+  if (vanChase.spawnT <= 0) {
+    vanChase.spawnT = 0.07;
+    const bx = militantVan.position.x - Math.sin(militantVan.rotation.y) * 1.8;
+    const bz = militantVan.position.z - Math.cos(militantVan.rotation.y) * 1.8;
+    spawnDust(bx, 0.5, bz);
+  }
+}
+
 // ---------- Chapter 6: The Aftermath + The Bridge at dawn ----------
 function buildBridge() {
   // Dawn sky: warm gradient plane behind the deck, low sun glow.
@@ -696,6 +1063,16 @@ function buildBridge() {
     win.position.set(i * 3.4, 0.2, 0.85); trainMesh.add(win);
   }
   trainMesh.position.set(-30, 2.5, -30); trainMesh.name = 'train'; gBridge.add(trainMesh);
+  // The 4 train runs on a real track: a ballast deck, two steel rails and
+  // sleepers, carried on pillars, so the moving train reads as a train on
+  // a track and not a box floating over the river.
+  box(gBridge, 90, 0.4, 3.2, 0x2a2f33, 0, 1.5, -30, null, { roughness: 0.95 });
+  for (const rz of [-30.75, -29.25]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(90, 0.1, 0.08), stdMat({ color: 0x9aa2a8, metalness: 0.9, roughness: 0.25 }));
+    rail.position.set(0, 1.78, rz); gBridge.add(rail);
+  }
+  for (let sx = -44; sx <= 44; sx += 1.4) box(gBridge, 0.3, 0.08, 2.2, 0x1a1a1a, sx, 1.72, -30, null, { roughness: 1 });
+  for (const px of [-30, -10, 10, 30]) box(gBridge, 0.8, 4, 0.8, 0x3a3f42, px, -0.5, -30, null, { roughness: 0.95 });
   // The click target rides WITH the train: the old static hit box sat at
   // x=0 while the train moved, so only the leading car was clickable when
   // it happened to pass x=0. Now the whole train is clickable anywhere.
@@ -707,6 +1084,9 @@ function buildBridge() {
 }
 function startChapter6() {
   state.chapter = 6; resetView(); hideToast();
+  // The exterior train shot starts counting now: after the train has run a
+  // while on the bridge, the camera cuts to the trackside view.
+  bridgeShot.done = false; bridgeShot.active = false; bridgeShot.startT = Date.now() / 1000;
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 6);
   reparentCast('jade', gBridge, -0.8, 4, Math.PI);
   reparentCast('caleb', gBridge, 0.8, 4, Math.PI);
@@ -714,6 +1094,8 @@ function startChapter6() {
   sun.intensity = 1.4; sun.color.set(0xffd9a0); ambient.intensity = 0.55; hemi.intensity = 0.5;
   scene.background = new THREE.Color(0x2a1a2a); scene.fog.density = 0.008;
   setObjectives(0); updateHUD();
+  setAmbient('dawn'); // soft wind and birds at dawn on the bridge
+  setTension(0.15);
   document.getElementById('timerLabel').textContent = 'One month later';
   document.getElementById('timerVal').textContent = 'dawn';
   document.getElementById('timerBar').style.width = '100%';
@@ -799,6 +1181,12 @@ function interact(name) {
   if (name === 'ebs') { toast('EBS virus - dormant, triggers in 12 hours: a fake all-clear, then a fake evacuation order. The terminal holds the fix.'); return; }
   if (name === 'bench') { toast('The bench. Twenty-seven years on it, and Judge Ellsworth has seen people who thought they were right. Some of them were not.'); return; }
   if (name === 'judge') { toast('Judge Ellsworth, 60s. Weary, but fair. He read the buried audit.'); return; }
+  if (name === 'lawyerP') { toast('The prosecutor. Sharp suit, sharper questions. "Ninety days is lenient, Your Honour."'); return; }
+  if (name === 'lawyerD') { toast('The defence lawyer. "My clients broke the law to save lives. The city should be thanking them."'); return; }
+  if (name === 'witness') { toast('A witness in the stand - an ex-city worker, sworn in, telling the truth at last.'); return; }
+  if (name === 'gallery1' || name === 'gallery2' || name === 'gallery3' || name === 'gallery4') { toast('The public gallery - neighbours, reporters, city workers. The whole city is watching this case.'); return; }
+  if (name === 'officer') { toast('The court officer, standing by the bench. He has seen this courtroom full before - never like this.'); return; }
+  if (name === 'militant1' || name === 'militant2') { toast('A militant, face covered with a durag. No name, no badge - just the van and the plan.'); return; }
   if (name === 'nurse') { toast('Nurse Adeyemi - night shift, hospital, dialysis clinic. People are counting on her.'); return; }
   if (name === 'derrick') { toast('Derrick Shaw, in custody. He testified six times. Nobody listened. Now they will.'); return; }
   if (name === 'vanDoors') { escapeStep('vanDoors'); return; }
@@ -836,29 +1224,91 @@ document.getElementById('cinemaBtn').onclick = () => {
 function animate() {
   requestAnimationFrame(animate);
   const t = Date.now() / 1000;
-  const sp = 0.05;
-  if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
-  if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
-  camera.position.x = Math.max(camBounds.x[0], Math.min(camBounds.x[1], camera.position.x));
-  camera.position.z = Math.max(camBounds.z[0], Math.min(camBounds.z[1], camera.position.z));
-  camera.rotation.order = 'YXZ';
-  const sway = document.getElementById('dialogue').classList.contains('hidden') ? 1 : 0.4;
-  camera.rotation.y = state.yaw + Math.sin(t * 0.7) * 0.004 * sway;
-  camera.rotation.x = state.pitch + Math.sin(t * 0.9 + 1.3) * 0.003 * sway;
-  camera.position.y = camY + Math.sin(t * 0.8) * 0.012 * sway;
+  const dt = animate.lastT === undefined ? 0.016 : Math.min(0.1, t - animate.lastT);
+  animate.lastT = t;
+  // Bridge exterior shot: after the train has run a while, cut to a
+  // trackside shot of the full train body moving on its track, hold a few
+  // seconds, then return to the deck.
+  if (state.chapter === 6 && !bridgeShot.done) {
+    const now = Date.now() / 1000;
+    if (!bridgeShot.active && now - bridgeShot.startT > 25) {
+      bridgeShot.active = true; bridgeShot.until = now + 7;
+      toast('The 4 train crosses the bridge - full of passengers, moving.');
+    }
+    if (bridgeShot.active && now >= bridgeShot.until) {
+      bridgeShot.active = false; bridgeShot.done = true; resetView();
+    }
+  }
+  if (bridgeShot.active && trainMesh) {
+    // Trackside exterior shot: camera beside the track, tracking the train.
+    camera.position.set(16, 4.2, -22);
+    camera.lookAt(trainMesh.position.x, 2.5, -30);
+  } else {
+    const sp = 0.05;
+    if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
+    if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
+    camera.position.x = Math.max(camBounds.x[0], Math.min(camBounds.x[1], camera.position.x));
+    camera.position.z = Math.max(camBounds.z[0], Math.min(camBounds.z[1], camera.position.z));
+    camera.rotation.order = 'YXZ';
+    const sway = document.getElementById('dialogue').classList.contains('hidden') ? 1 : 0.4;
+    camera.rotation.y = state.yaw + Math.sin(t * 0.7) * 0.004 * sway;
+    camera.rotation.x = state.pitch + Math.sin(t * 0.9 + 1.3) * 0.003 * sway;
+    camera.position.y = camY + Math.sin(t * 0.8) * 0.012 * sway;
+  }
   // Press-conference camera flashes.
   for (const fl of flashSprites) {
-    fl.material.opacity = (state.chapter === 5 && Math.random() > 0.97) ? 0.9 : Math.max(0, fl.material.opacity - 0.05);
+    if (state.chapter === 5 && Math.random() > 0.97) {
+      fl.material.opacity = 0.9;
+      try { sfxShutter(); } catch (e) { /* ignore */ } // shutter click with the flash
+    } else {
+      fl.material.opacity = Math.max(0, fl.material.opacity - 0.05);
+    }
+  }
+  // The police bus roof bar flashes red and blue, alternating.
+  if (state.chapter === 3 && policeLightL && policeLightR) {
+    const on = Math.sin(t * 6) > 0;
+    policeLightL.material.emissiveIntensity = on ? 2.2 : 0.15;
+    policeLightR.material.emissiveIntensity = on ? 0.15 : 2.2;
   }
   // The 4 train crosses the distant bridge, over and over.
   if (trainMesh) {
     trainMesh.position.x += 0.03;
-    if (trainMesh.position.x > 40) trainMesh.position.x = -40;
+    if (trainMesh.position.x > 40) {
+      trainMesh.position.x = -40;
+      try { sfxTrainPass(); } catch (e) { /* ignore */ } // the train whooshes past again
+    }
+  }
+  updateVanChase(dt, t); // the militant van pulls away and drifts down the road
+  // Drift dust: puffs grow and fade.
+  for (const p of dustPuffs) {
+    if (p.life > 0) {
+      p.life -= dt;
+      const k = Math.max(0, p.life / p.maxLife);
+      p.sprite.material.opacity = 0.5 * k;
+      const s = 0.6 + (1 - k) * 1.6;
+      p.sprite.scale.set(s, s, 1);
+      p.sprite.position.y += dt * 0.5;
+      if (p.life <= 0) p.sprite.position.y = -10;
+    }
   }
   for (const h of humans) {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
   }
+  updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
+  // Sound: footsteps while moving, heartbeat and score tension by chapter.
+  // The escape is the tense one: sirens, engine, a fast heartbeat.
+  const moving = keys['w'] || keys['a'] || keys['s'] || keys['d'];
+  let tension = 0.2, hb = 0;
+  if (state.chapter === 1) tension = 0.3;
+  if (state.chapter === 2) tension = 0.25;
+  if (state.chapter === 3) { tension = 0.9; hb = 120; }
+  if (state.chapter === 5) tension = 0.35;
+  if (state.chapter === 6) tension = 0.15;
+  if (escapeActionActive) { tension = 0.95; hb = 125; }
+  setTension(tension);
+  soundTick(dt, { moving, heartbeatBpm: hb });
+  updateEscapeAction(dt); // the escape action sequence, no-op when inactive
   renderer.render(scene, camera);
 }
 animate();
@@ -875,7 +1325,10 @@ for (const [n, g] of Object.entries(GROUPS)) {
   g.traverse(o => { if (o.userData && o.userData.clickable) arr.push(o); });
   chapterTargets[n] = arr;
 }
-setObjectives(0); updateHUD();
+setObjectives(0); updateHUD(); initVoiceUI();
+initSoundUI(); // procedural sound: ambient, effects, score, sound toggle
+setAmbient('control'); // the control center: low hum and soft beeps
+setTension(0.2);
 initZamaUI({ onConnect: async () => {
   // If the player connects late, at the end card, the reveal button
   // appears then.
