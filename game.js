@@ -694,24 +694,26 @@ const relayFace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.1, 0.9), new THRE
 relayFace.position.set(-1.14, 1.6, -1.5); relayFace.name = 'relay'; relayFace.userData.clickable = true; scene.add(relayFace);
 const relayStrip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.7), new THREE.MeshStandardMaterial({ color: 0x2a2113, emissive: 0x2a1f00, emissiveIntensity: 0.2, roughness: 0.4 }));
 relayStrip.position.set(-1.10, 1.6, -1.5); scene.add(relayStrip);
-const relayGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffb700, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+const relayGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffb700, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
 relayGlow.scale.set(1.8, 1.8, 1); relayGlow.position.set(-1.05, 1.6, -1.5); scene.add(relayGlow);
 // The relay light sits further from the face now: at 0.3 m it blasted the
 // gold point-blank and read as bright lemon-yellow, whatever the paint.
-const relayLight = new THREE.PointLight(0xffb700, 0.5, 6, 1.8); relayLight.position.set(-0.6, 1.6, -1.5); scene.add(relayLight);
+const relayLight = new THREE.PointLight(0xffb700, 1.0, 6, 1.8); relayLight.position.set(-0.6, 1.6, -1.5); scene.add(relayLight);
 // The marker and arrow float in the aisle above the relay, NOT on the wall:
 // every pole in the car sits at x +/-0.82 on the same sightline as the relay,
 // so any wide sign near the wall gets a pole across its text. Centred in the
 // aisle the sign is clear of all poles from the default camera.
 // The RELAY marker is a wall plane, like the other signs in the car ("14 ST",
-// "STAND CLEAR") - the sprite version kept failing to read on screen: a
-// sprite in the transparent pass renders unreliably here, and at 0.8 m wide
-// its text was a blur. A 1.0 x 0.25 plane matches the 512x128 texture's 4:1
-// aspect exactly, sits just off the wall above the cabinet, and reads like
-// the other signs. It keeps the name relayMarker, so the gentle bob still runs.
-const relayMarker = wallPlane(1.0, 0.25, signTexture('▼ RELAY', '#ffd166', '#111111', ''), -1.41, 2.45, -1.5, Math.PI / 2);
+// "STAND CLEAR") - the sprite version kept failing to read on screen. It
+// hangs IN FRONT of the cabinet face (x -1.1), not at the wall: the cabinet
+// box spans x -1.44..-1.16 and its top is y 2.3, so a sign at the wall
+// (x -1.41) sits behind the cabinet from the low default camera and is
+// almost entirely hidden by it. At x -1.1 the sign is fully visible over the
+// cabinet, and the grab pole's angle falls on the ▼ symbol only, leaving
+// RELAY clear. 0.8 x 0.2 matches the 512x128 texture's 4:1 aspect exactly.
+const relayMarker = wallPlane(0.8, 0.2, signTexture('▼ RELAY', '#ffd166', '#111111', ''), -1.1, 2.45, -1.5, Math.PI / 2);
 const relayArrow = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.45, 12), new THREE.MeshStandardMaterial({ color: 0xffc94d, emissive: 0x7a5c00, emissiveIntensity: 1.0, roughness: 0.4 }));
-relayArrow.rotation.x = Math.PI; relayArrow.position.set(-1.35, 2.0, -1.5); scene.add(relayArrow);
+relayArrow.rotation.x = Math.PI; relayArrow.position.set(-1.0, 2.0, -1.5); scene.add(relayArrow); // in front of the cabinet face (x -1.16), not inside the cabinet box (x -1.44..-1.16) where it was buried
 // Generous invisible click target around the relay (transparent, still raycast).
 const relayHit = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 2.4), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
 relayHit.position.set(-1.15, 1.6, -1.5); relayHit.name = 'relay'; relayHit.userData.clickable = true; scene.add(relayHit);
@@ -920,7 +922,7 @@ function animate() {
   sdp.needsUpdate = true;
   // Relay beacon: pulse the gold glow and bob the marker/arrow so the relay stays unmissable.
   const pulse = 0.5 + 0.5 * Math.sin(t * 3);
-  relayGlow.material.opacity = 0.04 + 0.02 * pulse;
+  relayGlow.material.opacity = 0.10 + 0.05 * pulse;
   relayGlow.scale.set(1.5 + 0.2 * pulse, 1.5 + 0.2 * pulse, 1);
   relayMat.emissiveIntensity = 0.12 + 0.08 * pulse;
   relayMarker.position.y = 2.45 + Math.sin(t * 2) * 0.06;
