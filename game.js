@@ -691,6 +691,7 @@ const relay = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.4, 1.2), relayMat);
 relay.position.set(-1.30, 1.6, -1.5); relay.castShadow = true; relay.receiveShadow = true;
 relay.name = 'relay'; relay.userData.clickable = true; scene.add(relay);
 const relayFace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.1, 0.9), new THREE.MeshStandardMaterial({ color: 0x3d2f0a, emissive: 0x2a1f00, emissiveIntensity: 0.12, roughness: 0.55 }));
+const relayFaceSign = wallPlane(0.9, 0.225, signTexture('▼ RELAY', '#ffd166', '#111111', ''), -1.09, 1.95, -1.5, Math.PI / 2); // the label ON the cabinet door itself, upper face, clear of the dark strip (y 1.55..1.65) - big, central, lit, and the raycaster only tests its explicit list so this plane cannot block relay clicks
 relayFace.position.set(-1.14, 1.6, -1.5); relayFace.name = 'relay'; relayFace.userData.clickable = true; scene.add(relayFace);
 const relayStrip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.7), new THREE.MeshStandardMaterial({ color: 0x2a2113, emissive: 0x2a1f00, emissiveIntensity: 0.2, roughness: 0.4 }));
 relayStrip.position.set(-1.10, 1.6, -1.5); scene.add(relayStrip);
@@ -921,10 +922,15 @@ function animate() {
   }
   sdp.needsUpdate = true;
   // Relay beacon: pulse the gold glow and bob the marker/arrow so the relay stays unmissable.
+  // In blackout the cabinet itself glows bright gold (the prompt promises a
+  // "glowing gold signal relay" and the player has to find it in the dark);
+  // in normal/battery light it stays dark brass.
   const pulse = 0.5 + 0.5 * Math.sin(t * 3);
-  relayGlow.material.opacity = 0.10 + 0.05 * pulse;
+  const isBlackout = state.stage === 'blackout';
+  relayGlow.material.opacity = (isBlackout ? 0.25 : 0.10) + 0.05 * pulse;
   relayGlow.scale.set(1.5 + 0.2 * pulse, 1.5 + 0.2 * pulse, 1);
-  relayMat.emissiveIntensity = 0.12 + 0.08 * pulse;
+  relayMat.emissive.setHex(isBlackout ? 0xaa7d00 : 0x2a1f00);
+  relayMat.emissiveIntensity = (isBlackout ? 0.7 : 0.12) + 0.08 * pulse;
   relayMarker.position.y = 2.45 + Math.sin(t * 2) * 0.06;
   relayArrow.position.y = 2.05 + Math.sin(t * 2) * 0.06;
   // Tunnel lights stream past the windows while the train is moving (intro
@@ -1079,7 +1085,7 @@ function sealedChoice() {
       { label: 'Residential - dialysis clinic line', effect: () => { state.sealedChoice = 'Residential'; integrity('Power', -5); } },
       { label: 'Industrial - water treatment plant', effect: () => { state.sealedChoice = 'Industrial'; integrity('Transit', -5); } }
     ] }
-  ], () => { setObjectives(5); toast('Choice sealed (encrypted in prototype - hidden until reveal). Click the green circuit board on the right wall in the car.'); });
+  ], () => { setObjectives(5); toast('Choice sealed. Find the green RESET board.'); });
 }
 function findBoard() {
   if (state.boardFound) return;
