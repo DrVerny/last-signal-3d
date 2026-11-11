@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { canvas, renderer, disposeScene } from './core.js';
 import { FINAL_VALUES, sealFinalChoice, wasSealedOnChain, initZamaUI, setupRevealButton } from './zama.js';
 import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
 import { registerHumans, updateSpeakingGestures } from './gestures.js';
@@ -18,6 +19,12 @@ import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMark
 // the ending is revealed. In demo mode it is simulated locally; when a wallet
 // is connected on Sepolia (see zama.js), the choice is ALSO encrypted with
 // FHEVM as an euint8 vote, exactly like Sealed Fortune.
+// Single-page lifecycle (see acts.js): this module boots on import, and
+// the act manager calls stopAct() before the next act loads. actActive
+// gates the animate loop and input handlers so a stopped act cannot keep
+// rendering or responding. It starts true because import is the start.
+let actActive = true;
+let actRaf = 0;
 let act2 = { trust: 6, integrity: { Transit: 80, Water: 75, Power: 70, Comms: 40 }, evidence: [], waterChoice: 'Hospital', bombDisarmed: true, bridgePath: 'undecided' };
 try {
   const saved = JSON.parse(localStorage.getItem('lastSignalAct2') || 'null');
@@ -158,15 +165,10 @@ function roadTexture() {
 }
 
 // ---------- Renderer / scene ----------
-const canvas = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// Renderer and canvas are shared with the other acts (see core.js): one
+// WebGL context for the whole single-page game. This act sets only its
+// own exposure on the shared renderer.
 renderer.toneMappingExposure = 1.0;
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0d10);
 scene.fog = new THREE.FogExp2(0x0a0d10, 0.02);
@@ -210,6 +212,7 @@ const VIEWS = {
 let camBounds = VIEWS[1];
 let camY = 1.7; // camera height; the rooftop stage raises it, dawn raises it a little
 function resetView() {
+  if (!actActive) return;
   const v = VIEWS[state.chapter];
   camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
   state.yaw = v.yaw; state.pitch = 0; camBounds = v;
@@ -219,11 +222,13 @@ document.getElementById('resetViewBtn').onclick = resetView;
 canvas.style.touchAction = 'none';
 let dragging = false, lx = 0, ly = 0, dragMoved = 0;
 canvas.addEventListener('pointerdown', e => {
+  if (!actActive) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   dragging = true; dragMoved = 0; lx = e.clientX; ly = e.clientY;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* fallback */ }
 });
 canvas.addEventListener('pointermove', e => {
+  if (!actActive) return;
   if (!dragging) return;
   const dx = e.clientX - lx, dy = e.clientY - ly;
   dragMoved += Math.abs(dx) + Math.abs(dy);
@@ -238,9 +243,9 @@ canvas.addEventListener('pointercancel', endDrag);
 addEventListener('pointerup', endDrag);
 addEventListener('blur', endDrag);
 const keys = {};
-addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); });
-addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('keydown', e => { if (!actActive) return; keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); });
+addEventListener('keyup', e => { if (!actActive) return; keys[e.key.toLowerCase()] = false; });
+addEventListener('resize', () => { if (!actActive) return; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
 // ---------- Characters ----------
 const humans = [];
@@ -373,6 +378,7 @@ async function loadHumans() {
 // EBS virus countdown (fiction: 12 hours; ticks in real seconds for drama).
 let ebsSeconds = 12 * 3600;
 function ebsTick() {
+  if (!actActive) return;
   if (state.chapter !== 1) return;
   if (ebsSeconds > 0) ebsSeconds--;
   const h = Math.floor(ebsSeconds / 3600), m = Math.floor(ebsSeconds % 3600 / 60), s = ebsSeconds % 60;
@@ -1137,6 +1143,21 @@ function endAct3() {
   // The on-chain reveal button appears only when there is something
   // to reveal: wallet connected and both choices sealed on-chain.
   setupRevealButton();
+  if (window.__lsActManager) window.__lsActManager.setEndCardButtons('act3');
+}
+
+// Stop this act cleanly (the game is complete, but stopAct keeps the
+// single-page lifecycle consistent and frees this act's scene): halt the
+// animate loop and the escape timer, silence speech, hide any open
+// dialogue, and dispose this act's scene (the shared renderer in core.js
+// is never disposed).
+export function stopAct() {
+  actActive = false;
+  if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
+  try { if (typeof stopEscapeTimer === 'function') stopEscapeTimer(); } catch (e) { /* ignore */ }
+  try { stopSpeaking(); } catch (e) { /* ignore */ }
+  try { document.getElementById('dialogue').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { disposeScene(scene); } catch (e) { /* ignore */ }
 }
 
 // ---------- Click to inspect ----------
@@ -1162,6 +1183,7 @@ function handleTap(clientX, clientY) {
   }
 }
 canvas.addEventListener('click', e => {
+  if (!actActive) return;
   if (dragMoved > 6) { dragMoved = 0; return; }
   dragMoved = 0;
   if (Date.now() - lastTapAt < 400) return;
@@ -1222,7 +1244,8 @@ document.getElementById('cinemaBtn').onclick = () => {
   document.getElementById('letterboxBottom').classList.toggle('hidden');
 };
 function animate() {
-  requestAnimationFrame(animate);
+  if (!actActive) return;
+  actRaf = requestAnimationFrame(animate);
   const t = Date.now() / 1000;
   const dt = animate.lastT === undefined ? 0.016 : Math.min(0.1, t - animate.lastT);
   animate.lastT = t;

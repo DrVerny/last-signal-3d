@@ -3,63 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>THE LAST SIGNAL - Act III: The Human Signal (3D Prototype)</title>
-<link rel="stylesheet" href="styles.css">
-<script type="importmap">{"imports": {"three": "./three.module.js"}}</script>
+<title>THE LAST SIGNAL - Act III: The Human Signal</title>
+<meta http-equiv="refresh" content="0; url=index.html?act=3">
+<script>location.replace('index.html?act=3');</script>
 </head>
 <body>
-<div id="app">
-  <div id="loading"><div class="load-box"><h2>THE LAST SIGNAL</h2><p id="loadingText">Loading characters...</p><p id="loadingError" class="hidden"></p><button id="loadingContinue" class="hidden">Continue without the missing characters</button></div></div>
-  <canvas id="scene"></canvas>
-  <div id="hud">
-    <div class="hud-title">THE LAST SIGNAL <span>- Act III: The Human Signal</span></div>
-    <div id="zamaBar">
-      <span id="zamaMode" class="zama-mode demo">DEMO MODE - choices sealed locally</span>
-      <button id="zamaConnectBtn" type="button">Connect wallet (Sepolia)</button>
-      <span id="zamaWallet"></span>
-    </div>
-    <div id="zamaStatus" class="zama-status"></div>
-    <div class="hud-row">
-      <div class="meter"><label>Trust - Jade ↔ Caleb</label><div class="bar"><div id="trustBar" style="width:30%"></div></div><span id="trustVal">3 / 10</span></div>
-      <div class="meter"><label id="timerLabel">EBS virus</label><div class="bar"><div id="timerBar" style="width:100%"></div></div><span id="timerVal">12:00:00</span></div>
-    </div>
-    <div class="hud-row" id="integrity">
-      <div class="meter small"><label>Transit</label><div class="bar"><div id="intTransit" style="width:70%"></div></div></div>
-      <div class="meter small"><label>Water</label><div class="bar"><div id="intWater" style="width:80%"></div></div></div>
-      <div class="meter small"><label>Power</label><div class="bar"><div id="intPower" style="width:60%"></div></div></div>
-      <div class="meter small"><label>Comms</label><div class="bar"><div id="intComms" style="width:40%"></div></div></div>
-    </div>
-    <div id="objectives"><strong>Objectives</strong><ul id="objList"></ul></div>
-    <div id="inventory"><strong>Inventory</strong><span id="invList">- empty -</span></div>
-  </div>
-  <div id="dialogue" class="hidden">
-    <div id="dlgName"></div>
-    <div id="dlgText"></div>
-    <div id="dlgChoices"></div>
-    <button id="dlgNext">Continue ▸</button>
-  </div>
-  <div id="endCard" class="hidden">
-    <h1>THE LAST SIGNAL</h1>
-    <p class="tagline">“Repair is a moral act.”</p>
-    <div id="endSummary"></div>
-    <button id="zamaRevealBtn" class="hidden">Reveal sealed choices on Sepolia</button>
-    <div id="zamaRevealResult"></div>
-    <button onclick="location.href='index.html'">Play Act I Again</button>
-    <button onclick="location.href='act2.html'">Play Act II Again</button>
-    <button onclick="location.reload()">Play Act III Again</button>
-  </div>
-  <div id="toast"></div>
-  <div id="vignette"></div>
-  <div id="grain"></div>
-  <div id="letterboxTop" class="letterbox hidden"></div>
-  <div id="letterboxBottom" class="letterbox hidden"></div>
-  <button id="cinemaBtn" title="Toggle cinematic letterbox">Cinema</button>
-  <button id="resetViewBtn" title="Reset camera view (or press R)">Reset view</button>
-  <button id="voiceBtn" title="Spoken dialogue is on - click to mute">🔊 Voice on</button>
-  <button id="soundBtn" title="Ambient sound, effects and score are on - click to mute">🔊 Sound on</button>
-  <div id="help">Drag to look around • Click glowing objects to inspect • WASD to move • R / Reset view to re-centre • Act III: the control center, the courtroom, the escape, the safehouse, the press conference, the bridge at dawn</div>
-</div>
-<script src="vendor/ethers.umd.min.js"></script>
-<script type="module" src="act3.js"></script>
+<p>Act III now plays on the single-page game. <a href="index.html?act=3">Continue to Act III - The Human Signal</a></p>
 </body>
 </html>

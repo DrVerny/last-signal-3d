@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { canvas, renderer, disposeScene } from './core.js';
 import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
 import { registerHumans, updateSpeakingGestures } from './gestures.js';
 import { registerLipSyncHumans } from './lipsync.js';
@@ -12,6 +13,12 @@ import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMark
 // 2. The Grid (Con Edison substation), 3. The Verrazzano (bridge, night).
 // Trust, System Integrity and the Act I sealed choice carry over from
 // localStorage (saved by Act I); defaults apply when played standalone.
+// Single-page lifecycle (see acts.js): this module boots on import, and
+// the act manager calls stopAct() before the next act loads. actActive
+// gates the animate loop and input handlers so a stopped act cannot keep
+// rendering or responding. It starts true because import is the start.
+let actActive = true;
+let actRaf = 0;
 let act1 = { trust: 6, integrity: { Transit: 80, Water: 75, Power: 70, Comms: 40 }, sealedChoice: null, inventory: [], boardFound: false };
 try {
   const saved = JSON.parse(localStorage.getItem('lastSignalAct1') || 'null');
@@ -129,15 +136,10 @@ function gaugeTexture(label) {
 }
 
 // ---------- Renderer / scene ----------
-const canvas = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// Renderer and canvas are shared with the other acts (see core.js): one
+// WebGL context for the whole single-page game. This act sets only its
+// own exposure on the shared renderer.
 renderer.toneMappingExposure = 1.0;
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a1218);
 scene.fog = new THREE.FogExp2(0x0a1218, 0.02);
@@ -171,6 +173,7 @@ const VIEWS = {
 };
 let camBounds = VIEWS[1];
 function resetView() {
+  if (!actActive) return;
   const v = VIEWS[state.mission];
   camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
   state.yaw = v.yaw; state.pitch = 0; camBounds = v;
@@ -179,11 +182,13 @@ document.getElementById('resetViewBtn').onclick = resetView;
 canvas.style.touchAction = 'none';
 let dragging = false, lx = 0, ly = 0, dragMoved = 0;
 canvas.addEventListener('pointerdown', e => {
+  if (!actActive) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   dragging = true; dragMoved = 0; lx = e.clientX; ly = e.clientY;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* fallback */ }
 });
 canvas.addEventListener('pointermove', e => {
+  if (!actActive) return;
   if (!dragging) return;
   const dx = e.clientX - lx, dy = e.clientY - ly;
   dragMoved += Math.abs(dx) + Math.abs(dy);
@@ -198,9 +203,9 @@ canvas.addEventListener('pointercancel', endDrag);
 addEventListener('pointerup', endDrag);
 addEventListener('blur', endDrag);
 const keys = {};
-addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); });
-addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('keydown', e => { if (!actActive) return; keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); });
+addEventListener('keyup', e => { if (!actActive) return; keys[e.key.toLowerCase()] = false; });
+addEventListener('resize', () => { if (!actActive) return; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
 // ---------- Characters (shared across missions) ----------
 const humans = []; // {group, name, baseScale, phase}
@@ -405,6 +410,7 @@ document.getElementById('valveClose').onclick = () => {
 };
 // Stability is checked once a second while the modal is open.
 setInterval(() => {
+  if (!actActive) return;
   if (!valveOpen || state.waterStable) return;
   if (Object.values(pressures).every(p => p >= 70)) {
     stableHold++;
@@ -934,6 +940,23 @@ function endAct2() {
     `<p><strong>Evidence:</strong> ${state.evidence.length ? state.evidence.join(' · ') : 'none yet'}</p>` +
     `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
     `<p>Next: Act III - The Human Signal (courtroom, ambush, press conference). Press "Begin Act III" below to continue.</p>`;
+  if (window.__lsActManager) window.__lsActManager.setEndCardButtons('act2');
+}
+
+// Stop this act cleanly so the next act can load on the same page: halt
+// the animate loop and the puzzle timers, silence speech, hide any open
+// dialogue or modal, and dispose this act's scene (the shared renderer
+// in core.js is never disposed).
+export function stopAct() {
+  actActive = false;
+  if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
+  try { if (typeof valveTimer !== 'undefined' && valveTimer) { clearInterval(valveTimer); valveTimer = null; } } catch (e) { /* ignore */ }
+  try { if (typeof bombInterval !== 'undefined' && bombInterval) { clearInterval(bombInterval); bombInterval = null; } } catch (e) { /* ignore */ }
+  try { stopSpeaking(); } catch (e) { /* ignore */ }
+  try { document.getElementById('dialogue').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { document.getElementById('valveModal').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { document.getElementById('scadaModal').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { disposeScene(scene); } catch (e) { /* ignore */ }
 }
 
 // ---------- Click to inspect ----------
@@ -969,6 +992,7 @@ function handleTap(clientX, clientY) {
   }
 }
 canvas.addEventListener('click', e => {
+  if (!actActive) return;
   if (dragMoved > 6) { dragMoved = 0; return; }
   dragMoved = 0;
   if (Date.now() - lastTapAt < 400) return; // already handled by pointerup
@@ -978,6 +1002,7 @@ canvas.addEventListener('click', e => {
 // Pointerup fallback: some harnesses and touch inputs deliver press/release
 // without a click event on the canvas. A tap (not a drag) is a click here.
 canvas.addEventListener('pointerup', e => {
+  if (!actActive) return;
   if (dragMoved > 6) { dragMoved = 0; return; }
   dragMoved = 0;
   if (Date.now() - lastTapAt < 400) return;
@@ -1042,7 +1067,8 @@ document.getElementById('cinemaBtn').onclick = () => {
   document.getElementById('letterboxBottom').classList.toggle('hidden');
 };
 function animate() {
-  requestAnimationFrame(animate);
+  if (!actActive) return;
+  actRaf = requestAnimationFrame(animate);
   const t = Date.now() / 1000;
   const dt = animate.lastT === undefined ? 0.016 : Math.min(0.1, t - animate.lastT);
   animate.lastT = t;
