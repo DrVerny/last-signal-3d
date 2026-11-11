@@ -273,7 +273,18 @@ function posterTexture(kind) {
 function signTexture(text, bg, fg, sub) {
   return canvasTexture(512, 128, (ctx, w, h) => {
     ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = fg; ctx.font = 'bold 52px Arial'; ctx.textAlign = 'center'; ctx.fillText(text, w / 2, 62);
+    ctx.fillStyle = fg; ctx.font = 'bold 52px Arial'; ctx.textAlign = 'center';
+    // The '▼' glyph does not render in Arial on the test browser - every
+    // round the testers reported no triangle on the sign, only the separate
+    // cone below it. Draw the triangle explicitly as a filled path.
+    let drawText = text, tri = false;
+    if (text.startsWith('▼')) { tri = true; drawText = text.slice(1).trim(); }
+    ctx.fillText(drawText, w / 2, 62);
+    if (tri) {
+      const tw = ctx.measureText(drawText).width;
+      const cx = w / 2 - tw / 2 - 38, cy = 46, s = 22;
+      ctx.beginPath(); ctx.moveTo(cx, cy + s); ctx.lineTo(cx - s * 0.9, cy - s * 0.7); ctx.lineTo(cx + s * 0.9, cy - s * 0.7); ctx.closePath(); ctx.fill();
+    }
     if (sub) { ctx.font = '26px Arial'; ctx.fillText(sub, w / 2, 102); }
     ctx.textAlign = 'left';
   });
@@ -705,17 +716,17 @@ const relayLight = new THREE.PointLight(0xffb700, 1.0, 6, 1.8); relayLight.posit
 // every pole in the car sits at x +/-0.82 on the same sightline as the relay,
 // so any wide sign near the wall gets a pole across its text. Centred in the
 // aisle the sign is clear of all poles from the default camera.
-// The marker hangs 1 m IN FRONT of the cabinet (z -0.5, not -1.5). At the
-// cabinet's own z, the grab pole at x -0.82, z -1.35 stands 0.15 m in front
-// of the sign and its hanging grab ring crosses it, hiding "RE" and "A" -
-// that is why round 9 read only "LAY" / "L...Y" from the default view. At
-// z -0.5 that pole is BEHIND the sign so it cannot occlude it, and the
-// other pole (x -0.82, z 2.15) projects to x -1.99 on the sign's plane,
-// left of the sign's left edge (-1.7), so it clears it too. The sign still
-// reads as labelling the cabinet below and behind it, with the arrow
-// pointing down at the relay.
+// The marker hangs in the CENTRE of the aisle (x 0, y 2.2, z -0.5), not
+// over the cabinet. Round 10 proved the left side is unusable: the
+// horizontal handrail at (x -0.82, y 2.35) runs the whole car and, seen in
+// perspective, cuts diagonally across any sign near it through "R" and "E",
+// and the hanging strap loops at the same x cross its left end. In the
+// centre the two rails converge toward the vanishing point and only cross
+// the sign's blank margins, never the centred text; the straps, loops and
+// poles all project outside the sign, and the ceiling tubes (y 2.92) sit
+// well above it. The arrow still points down-left at the relay itself.
 const relayMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('▼ RELAY', '#ffd166', '#111111', ''), transparent: true, depthWrite: false, fog: false }));
-relayMarker.scale.set(1.4, 0.35, 1); relayMarker.position.set(-1.0, 2.5, -0.5); scene.add(relayMarker);
+relayMarker.scale.set(1.4, 0.35, 1); relayMarker.position.set(0, 2.2, -0.5); scene.add(relayMarker);
 const relayArrow = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.35, 12), new THREE.MeshStandardMaterial({ color: 0xffc94d, emissive: 0x7a5c00, emissiveIntensity: 1.0, roughness: 0.4 }));
 relayArrow.rotation.x = Math.PI; relayArrow.position.set(-1.0, 1.95, -1.5); scene.add(relayArrow); // smaller and lower than before, clear of the sign above it
 // Generous invisible click target around the relay (transparent, still raycast).
@@ -940,7 +951,7 @@ function animate() {
   relayFaceMat.emissiveIntensity = (isBlackout ? 0.7 : 0.12) + 0.08 * pulse;
   relayBackplateMat.emissive.setHex(isBlackout ? 0xaa7d00 : 0x2a1f00);
   relayBackplateMat.emissiveIntensity = (isBlackout ? 0.7 : 0.12) + 0.08 * pulse;
-  relayMarker.position.y = 2.5 + Math.sin(t * 2) * 0.06;
+  relayMarker.position.y = 2.2 + Math.sin(t * 2) * 0.06;
   relayArrow.position.y = 1.95 + Math.sin(t * 2) * 0.06;
   // Tunnel lights stream past the windows while the train is moving (intro
   // stage, and again after the repair when the train moves off); once the
