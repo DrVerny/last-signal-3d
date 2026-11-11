@@ -685,13 +685,14 @@ intercomBtn.rotation.z = Math.PI / 2; intercomBtn.position.set(1.38, 1.5, -1.6);
 // open car air (x -1.05, below the roof arch) instead of up at y 2.5 inside
 // the arch, and the glow/marker sprites ignore fog so they stay bright.
 const relayMat = new THREE.MeshStandardMaterial({ color: 0x3d2f0a, emissive: 0x2a1f00, emissiveIntensity: 0.15, roughness: 0.6, metalness: 0.2 });
-const relayBackplate = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.6, 1.4), new THREE.MeshStandardMaterial({ color: 0x3d2f0a, emissive: 0x2a1f00, emissiveIntensity: 0.12, roughness: 0.55 }));
+const relayBackplateMat = new THREE.MeshStandardMaterial({ color: 0x3d2f0a, emissive: 0x2a1f00, emissiveIntensity: 0.12, roughness: 0.55 });
+const relayBackplate = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.6, 1.4), relayBackplateMat);
 relayBackplate.position.set(-1.40, 1.6, -1.5); relayBackplate.name = 'relay'; relayBackplate.userData.clickable = true; scene.add(relayBackplate);
 const relay = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.4, 1.2), relayMat);
 relay.position.set(-1.30, 1.6, -1.5); relay.castShadow = true; relay.receiveShadow = true;
 relay.name = 'relay'; relay.userData.clickable = true; scene.add(relay);
-const relayFace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.1, 0.9), new THREE.MeshStandardMaterial({ color: 0x3d2f0a, emissive: 0x2a1f00, emissiveIntensity: 0.12, roughness: 0.55 }));
-const relayFaceSign = wallPlane(0.9, 0.225, signTexture('▼ RELAY', '#ffd166', '#111111', ''), -1.09, 1.95, -1.5, Math.PI / 2); // the label ON the cabinet door itself, upper face, clear of the dark strip (y 1.55..1.65) - big, central, lit, and the raycaster only tests its explicit list so this plane cannot block relay clicks
+const relayFaceMat = new THREE.MeshStandardMaterial({ color: 0x3d2f0a, emissive: 0x2a1f00, emissiveIntensity: 0.12, roughness: 0.55 });
+const relayFace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.1, 0.9), relayFaceMat);
 relayFace.position.set(-1.14, 1.6, -1.5); relayFace.name = 'relay'; relayFace.userData.clickable = true; scene.add(relayFace);
 const relayStrip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.7), new THREE.MeshStandardMaterial({ color: 0x2a2113, emissive: 0x2a1f00, emissiveIntensity: 0.2, roughness: 0.4 }));
 relayStrip.position.set(-1.10, 1.6, -1.5); scene.add(relayStrip);
@@ -704,17 +705,18 @@ const relayLight = new THREE.PointLight(0xffb700, 1.0, 6, 1.8); relayLight.posit
 // every pole in the car sits at x +/-0.82 on the same sightline as the relay,
 // so any wide sign near the wall gets a pole across its text. Centred in the
 // aisle the sign is clear of all poles from the default camera.
-// The RELAY marker is a wall plane, like the other signs in the car ("14 ST",
-// "STAND CLEAR") - the sprite version kept failing to read on screen. It
-// hangs IN FRONT of the cabinet face (x -1.1), not at the wall: the cabinet
-// box spans x -1.44..-1.16 and its top is y 2.3, so a sign at the wall
-// (x -1.41) sits behind the cabinet from the low default camera and is
-// almost entirely hidden by it. At x -1.1 the sign is fully visible over the
-// cabinet, and the grab pole's angle falls on the ▼ symbol only, leaving
-// RELAY clear. 0.8 x 0.2 matches the 512x128 texture's 4:1 aspect exactly.
-const relayMarker = wallPlane(0.8, 0.2, signTexture('▼ RELAY', '#ffd166', '#111111', ''), -1.1, 2.45, -1.5, Math.PI / 2);
-const relayArrow = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.45, 12), new THREE.MeshStandardMaterial({ color: 0xffc94d, emissive: 0x7a5c00, emissiveIntensity: 1.0, roughness: 0.4 }));
-relayArrow.rotation.x = Math.PI; relayArrow.position.set(-1.0, 2.0, -1.5); scene.add(relayArrow); // in front of the cabinet face (x -1.16), not inside the cabinet box (x -1.44..-1.16) where it was buried
+// The RELAY marker is a SPRITE, not a wall plane: a plane on the left wall
+// faces +x, but the default camera looks down the car (along -z), so any
+// wall-mounted sign is seen at a steep oblique angle and foreshortens to a
+// thin sliver - that is why every wall-plane version read as a tiny grey
+// sliver or "RE..." and why the door sign vanished. A sprite always faces
+// the camera, so at 1.4 m wide it reads full-size from the default view.
+// It hangs in front of the cabinet face (x -1.05) and above its top (y 2.3),
+// so the cabinet cannot hide it from the low default camera.
+const relayMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('▼ RELAY', '#ffd166', '#111111', ''), transparent: true, depthWrite: false, fog: false }));
+relayMarker.scale.set(1.4, 0.35, 1); relayMarker.position.set(-1.05, 2.5, -1.5); scene.add(relayMarker);
+const relayArrow = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.35, 12), new THREE.MeshStandardMaterial({ color: 0xffc94d, emissive: 0x7a5c00, emissiveIntensity: 1.0, roughness: 0.4 }));
+relayArrow.rotation.x = Math.PI; relayArrow.position.set(-1.0, 1.95, -1.5); scene.add(relayArrow); // smaller and lower than before, clear of the sign above it
 // Generous invisible click target around the relay (transparent, still raycast).
 const relayHit = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 2.4), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
 relayHit.position.set(-1.15, 1.6, -1.5); relayHit.name = 'relay'; relayHit.userData.clickable = true; scene.add(relayHit);
@@ -931,8 +933,14 @@ function animate() {
   relayGlow.scale.set(1.5 + 0.2 * pulse, 1.5 + 0.2 * pulse, 1);
   relayMat.emissive.setHex(isBlackout ? 0xaa7d00 : 0x2a1f00);
   relayMat.emissiveIntensity = (isBlackout ? 0.7 : 0.12) + 0.08 * pulse;
-  relayMarker.position.y = 2.45 + Math.sin(t * 2) * 0.06;
-  relayArrow.position.y = 2.05 + Math.sin(t * 2) * 0.06;
+  // The whole cabinet glows in blackout, door face included - before, only
+  // the body glowed and the face stayed dark brown.
+  relayFaceMat.emissive.setHex(isBlackout ? 0xaa7d00 : 0x2a1f00);
+  relayFaceMat.emissiveIntensity = (isBlackout ? 0.7 : 0.12) + 0.08 * pulse;
+  relayBackplateMat.emissive.setHex(isBlackout ? 0xaa7d00 : 0x2a1f00);
+  relayBackplateMat.emissiveIntensity = (isBlackout ? 0.7 : 0.12) + 0.08 * pulse;
+  relayMarker.position.y = 2.5 + Math.sin(t * 2) * 0.06;
+  relayArrow.position.y = 1.95 + Math.sin(t * 2) * 0.06;
   // Tunnel lights stream past the windows while the train is moving (intro
   // stage, and again after the repair when the train moves off); once the
   // blackout hits, the train is stopped and they freeze. Wall lamps stream
@@ -1085,7 +1093,7 @@ function sealedChoice() {
       { label: 'Residential - dialysis clinic line', effect: () => { state.sealedChoice = 'Residential'; integrity('Power', -5); } },
       { label: 'Industrial - water treatment plant', effect: () => { state.sealedChoice = 'Industrial'; integrity('Transit', -5); } }
     ] }
-  ], () => { setObjectives(5); toast('Choice sealed. Find the green RESET board.'); });
+  ], () => { setObjectives(5); toast('Choice sealed. Find the green RESET board behind you.'); });
 }
 function findBoard() {
   if (state.boardFound) return;
