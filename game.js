@@ -848,7 +848,17 @@ async function loadHumans() {
       group.position.set(def.x, -box2.min.y, def.z);
       group.rotation.y = def.faceYaw || 0;
       scene.add(group);
-      humans.push({ group, name: def.name, baseScale: s, phase: Math.random() * 6, seated: def.key === 'walter' });
+      // Walking: the standing characters patrol a short stretch of the aisle so
+      // the car feels alive instead of frozen. Walter stays seated. Each walker
+      // gets a patrol range around their home spot, a slow speed, and a step
+      // phase for the bob. The contact shadow follows them.
+      const walkRanges = {
+        jade: { minZ: -4.5, maxZ: -0.5, speed: 0.35 },
+        caleb: { minZ: -4.5, maxZ: 0.5, speed: 0.4 },
+        nurse: { minZ: -0.5, maxZ: 3.5, speed: 0.3 }
+      };
+      const wr = walkRanges[def.key];
+      humans.push({ group, name: def.name, baseScale: s, phase: Math.random() * 6, seated: def.key === 'walter', baseY: group.position.y, shadow: humanShadows[def.key] || null, walk: wr ? { minZ: wr.minZ, maxZ: wr.maxZ, speed: wr.speed, dir: Math.random() < 0.5 ? 1 : -1, stepPhase: Math.random() * 6 } : null });
       humanGroups.push(group);
       modelGroups[def.key] = { group };
     } catch (e) {
@@ -872,9 +882,11 @@ async function loadHumans() {
 }
 // Contact shadows: soft dark blobs grounding characters and benches (real shadows are
 // soft in a subway; these keep feet and seats from floating when lights are dim).
-contactShadow(-0.55, -2.6, 0.9, 0.9, 0.55); // Jade
-contactShadow(0.6, -2, 0.9, 0.9, 0.55); // Caleb
-contactShadow(0.55, 1, 0.9, 0.9, -0.5); // Nurse Adeyemi
+// The three walking characters keep their shadow mesh so it can follow them.
+const humanShadows = {};
+humanShadows.jade = contactShadow(-0.55, -2.6, 0.9, 0.9, 0.55); // Jade
+humanShadows.caleb = contactShadow(0.6, -2, 0.9, 0.9, 0.55); // Caleb
+humanShadows.nurse = contactShadow(0.55, 1, 0.9, 0.9, -0.5); // Nurse Adeyemi
 contactShadow(-1.18, 4.5, 1.1, 1.0, 0.55); // Walter, seated on the rear left bench
 for (const sx of [-1.21, 1.21]) for (let z = -5; z <= 5; z += 2.5) contactShadow(sx, z, 0.7, 2.3, 0.4); // benches
 // Platform outside the right-hand doors (visible when doors open). Near-black
@@ -1120,9 +1132,26 @@ function animate() {
   }
   // Human idle animation: subtle breathing (whole-group scale). The GLB models are
   // static scans with no skeleton, so there is no head-turn or blink to animate.
+  // Walking: the standing characters patrol a short stretch of the aisle (slow,
+  // with a small step bob and facing the direction they walk) so the car feels
+  // alive. They pause while a dialogue is open so the speaker stays put.
+  const dialogueOpen = !document.getElementById('dialogue').classList.contains('hidden');
   for (const h of humans) {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
+    if (h.walk && !dialogueOpen) {
+      const w = h.walk;
+      const g = h.group;
+      g.position.z += w.dir * w.speed * dt;
+      if (g.position.z > w.maxZ) { g.position.z = w.maxZ; w.dir = -1; }
+      if (g.position.z < w.minZ) { g.position.z = w.minZ; w.dir = 1; }
+      w.stepPhase += w.speed * dt * 6;
+      g.position.y = h.baseY + Math.abs(Math.sin(w.stepPhase)) * 0.025;
+      g.rotation.y = w.dir > 0 ? 0 : Math.PI;
+      if (h.shadow) { h.shadow.position.x = g.position.x; h.shadow.position.z = g.position.z; }
+    } else if (h.walk) {
+      h.group.position.y = h.baseY;
+    }
   }
   updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
   updateFlashlight(); // flashlight rides on the camera (no-op when off)
