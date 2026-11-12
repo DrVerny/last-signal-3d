@@ -6,6 +6,7 @@ import { registerHumans, updateSpeakingGestures } from './gestures.js';
 import { registerLipSyncHumans } from './lipsync.js';
 import { initSoundUI, setAmbient, setTension, soundTick, sfxRepair, sfxTick, sfxPowerRestored, sfxBoom, sfxThud, sfxWhoosh } from './sound.js';
 import { runQTE, runHoldQTE } from './qte.js';
+import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
@@ -211,6 +212,20 @@ addEventListener('resize', () => { if (!actActive) return; camera.aspect = inner
 const humans = []; // {group, name, baseScale, phase}
 const humanGroups = [];
 const modelGroups = {};
+// Guard patrol: the two substation guards walk the gate line (see
+// loadHumans). Each entry: {group, baseX, baseZ, phase}.
+const guardPatrol = [];
+const guardMarkers = [];
+// Gold "!" marker texture, drawn once and shared by both guard markers.
+const guardMarkerTex = (() => {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(64, 64, 56, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#111111'; ctx.font = 'bold 84px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('!', 64, 68);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+})();
 function placeHuman(group, name, x, z, faceYaw, baseScale) {
   group.position.set(x, 0, z); group.rotation.y = faceYaw;
   group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
@@ -273,6 +288,15 @@ async function loadHumans() {
       g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = dark; });
       g.children = g.children.filter(c => c.position.y <= 1.0); // drop Caleb's cap, brim and badge
       mission2.add(g); placeHuman(g, gname, gx, gz, Math.PI, calebBase.scale);
+      // Patrol data: the guards walk the gate line so the yard feels alive
+      // and the player can see they are interactive. They patrol in x
+      // around their post; after they stand down they stop where they are.
+      guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6 });
+      // A pulsing gold "!" above each guard until they stand down, so the
+      // player can see at a glance that the guards are the way in.
+      const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
+      marker.scale.set(0.55, 0.55, 1); marker.position.set(0, 2.35, 0); marker.name = 'guardMarker';
+      g.add(marker); guardMarkers.push(marker);
     }
   }
   registerHumans(humans); // speaking gestures use the loaded models
@@ -530,6 +554,128 @@ function buildMission2() {
   window._keycardHit = keycardHit;
   blobShadow(mission2, -3.5, 2, 0.9, 0.9, 0.55);
   blobShadow(mission2, 3.5, 2, 0.9, 0.9, 0.55);
+  // The living city around the yard: the substation sits in Long Island
+  // City, so beyond the north fence there is a road with moving cars,
+  // houses, an elevated train track with a passing train, and the
+  // Manhattan skyline. The fence is translucent, so all of it reads
+  // from inside the yard and the scene stops feeling like an empty lot.
+  buildCityEnvironment();
+}
+
+// ---------- Living city around the substation (Mission 2) ----------
+// Animated: cityCars drive the road, cityTrain runs the elevated track.
+const cityCars = [];
+let cityTrain = null;
+function buildingWindowTexture(litRatio) {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#14181d'; ctx.fillRect(0, 0, 128, 256);
+  for (let r = 0; r < 14; r++) for (let col = 0; col < 6; col++) {
+    const lit = Math.random() < litRatio;
+    ctx.fillStyle = lit ? (Math.random() < 0.7 ? '#ffd166' : '#9fd8ff') : '#0a0d10';
+    ctx.fillRect(8 + col * 20, 10 + r * 17, 12, 10);
+  }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+function buildCityEnvironment() {
+  // Road running east-west just beyond the north fence (z = -10).
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(90, 7), stdMat({ color: 0x1e2124, roughness: 0.95 }));
+  road.rotation.x = -Math.PI / 2; road.position.set(0, 0.03, -10); road.receiveShadow = true; mission2.add(road);
+  // Dashed yellow centre line and white edge lines.
+  for (let x = -42; x <= 42; x += 4) {
+    const dash = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.18), new THREE.MeshBasicMaterial({ color: 0xd8b13a }));
+    dash.rotation.x = -Math.PI / 2; dash.position.set(x, 0.05, -10); mission2.add(dash);
+  }
+  for (const z of [-13.2, -6.8]) {
+    const edge = new THREE.Mesh(new THREE.PlaneGeometry(90, 0.15), new THREE.MeshBasicMaterial({ color: 0xcfd4d8 }));
+    edge.rotation.x = -Math.PI / 2; edge.position.set(0, 0.05, z); mission2.add(edge);
+  }
+  // Cars: two lanes, one each way. Body + cabin + wheels + headlights.
+  const carColors = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a];
+  for (let i = 0; i < 6; i++) {
+    const east = i % 2 === 0; // even cars go east (+x) on the near lane
+    const car = new THREE.Group();
+    const col = carColors[i % carColors.length];
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.55, 1.1), stdMat({ color: col, roughness: 0.4, metalness: 0.5 }));
+    body.position.y = 0.45; body.castShadow = true; car.add(body);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.0), stdMat({ color: 0x18242e, roughness: 0.2, metalness: 0.6 }));
+    cabin.position.set(-0.15, 0.95, 0); cabin.castShadow = true; car.add(cabin);
+    const wheelMat = stdMat({ color: 0x111111, roughness: 0.9 });
+    for (const [wx, wz] of [[-0.75, 0.55], [0.75, 0.55], [-0.75, -0.55], [0.75, -0.55]]) {
+      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.18, 12), wheelMat);
+      w.rotation.x = Math.PI / 2; w.position.set(wx, 0.28, wz); car.add(w);
+    }
+    const headMat = new THREE.MeshBasicMaterial({ color: 0xfff2c0 });
+    for (const hz of [-0.35, 0.35]) {
+      const h = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.2), headMat);
+      h.position.set(east ? 1.12 : -1.12, 0.5, hz); car.add(h);
+    }
+    const tailMat = new THREE.MeshBasicMaterial({ color: 0xff2a22 });
+    for (const hz of [-0.35, 0.35]) {
+      const t = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.2), tailMat);
+      t.position.set(east ? -1.12 : 1.12, 0.5, hz); car.add(t);
+    }
+    car.position.set(-40 + i * 14 + Math.random() * 6, 0, east ? -8.4 : -11.6);
+    if (!east) car.rotation.y = Math.PI; // face the direction of travel
+    mission2.add(car);
+    cityCars.push({ group: car, speed: (5.5 + Math.random() * 3) * (east ? 1 : -1) });
+  }
+  // Houses beyond the road (z = -16), a small residential row.
+  const houseCols = [0x8a6a4a, 0x6a7a8a, 0x7a5a5a, 0x5a6a4a, 0x8a7a5a];
+  for (let i = 0; i < 7; i++) {
+    const hx = -30 + i * 10 + (Math.random() * 3 - 1.5);
+    const h = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.BoxGeometry(5, 2.6, 4.5), stdMat({ color: houseCols[i % houseCols.length], roughness: 0.9 }));
+    base.position.y = 1.3; base.castShadow = true; h.add(base);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(3.6, 1.6, 4), stdMat({ color: 0x3a2a22, roughness: 0.9 }));
+    roof.position.y = 3.4; roof.rotation.y = Math.PI / 4; roof.castShadow = true; h.add(roof);
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshStandardMaterial({ color: 0x201808, emissive: 0xffc978, emissiveIntensity: 0.9 }));
+    win.position.set(-1, 1.4, 2.28); h.add(win);
+    const win2 = win.clone(); win2.position.set(1.2, 1.4, 2.28); h.add(win2);
+    h.position.set(hx, 0, -16.5); mission2.add(h);
+  }
+  // Elevated train track (the 7 line) running east-west at z = -22,
+  // deck at y = 4.5 on pillars, with two rails the player can see.
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(90, 0.5, 3), stdMat({ color: 0x3a3f44, roughness: 0.9 }));
+  deck.position.set(0, 4.5, -22); deck.castShadow = true; mission2.add(deck);
+  for (const rz of [-22.7, -21.3]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(90, 0.12, 0.12), stdMat({ color: 0x9aa2a8, metalness: 0.9, roughness: 0.3 }));
+    rail.position.set(0, 4.85, rz); mission2.add(rail);
+  }
+  for (let x = -42; x <= 42; x += 7) {
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 4.3, 0.8), stdMat({ color: 0x4a4f54, roughness: 0.9 }));
+    pillar.position.set(x, 2.15, -22); pillar.castShadow = true; mission2.add(pillar);
+  }
+  // The train: three cars with lit windows, running the elevated track.
+  cityTrain = new THREE.Group();
+  for (let i = 0; i < 3; i++) {
+    const car = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(6.5, 2.2, 2.2), stdMat({ color: 0x2a4a6a, roughness: 0.5, metalness: 0.4 }));
+    body.position.y = 1.4; body.castShadow = true; car.add(body);
+    for (let w = 0; w < 4; w++) {
+      const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.7), new THREE.MeshStandardMaterial({ color: 0x201808, emissive: 0xffd166, emissiveIntensity: 1.0 }));
+      win.position.set(-2.4 + w * 1.6, 1.5, 1.12); car.add(win);
+      const winB = win.clone(); winB.position.z = -1.12; winB.rotation.y = Math.PI; car.add(winB);
+    }
+    car.position.set(i * 7, 4.8, -22);
+    cityTrain.add(car);
+  }
+  cityTrain.position.set(-30, 0, 0);
+  mission2.add(cityTrain);
+  // Manhattan skyline in the far background (z = -26 to -40): tall boxes
+  // with lit windows, hazed by the fog so the city reads at a distance.
+  const skyTexA = buildingWindowTexture(0.55);
+  const skyTexB = buildingWindowTexture(0.35);
+  for (let i = 0; i < 10; i++) {
+    const w = 6 + Math.random() * 5, h = 14 + Math.random() * 18, d = 6 + Math.random() * 4;
+    const tex = i % 2 === 0 ? skyTexA : skyTexB;
+    const side = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 0.9 });
+    const dark = stdMat({ color: 0x14181d, roughness: 0.95 });
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side, side, dark, dark, side, side]);
+    b.position.set(-42 + i * 9.5 + (Math.random() * 3 - 1.5), h / 2, -28 - Math.random() * 12);
+    mission2.add(b);
+  }
 }
 function reparentCast(name, group, x, z, yaw) {
   const g = modelGroups[name] && modelGroups[name].group;
@@ -553,8 +699,10 @@ function startMission2() {
     { who: 'Jade Morales', text: 'Two PM. Con Edison substation, Long Island City. A logic bomb is sitting in the SCADA system. At eight it cascades - one substation trips, overloads the next, and takes down the Northeast grid.' },
     { who: 'Caleb Bishop', text: 'And the guards are not his people. Private security, hired through a shell company. They do not know what they are protecting.' },
     { who: 'Jade Morales', text: 'So we do not fight them. You walk up as a city inspector. I feed you the jargon through your earpiece. Click a guard to start.' }
-  ], () => { toast('Click a guard - Caleb talks his way in.'); });
+  ], () => { toast('Walk up to a guard (or click one) - Caleb talks his way in.'); });
 }
+// Hide the gold "!" markers over the guards once they stand down.
+function hideGuardMarkers() { for (const m of guardMarkers) m.visible = false; }
 function guardDialogue() {
   if (guardsDown) { toast('The guards have stood down. The SCADA terminal is yours.'); return; }
   if (state.trust >= 6) {
@@ -566,7 +714,7 @@ function guardDialogue() {
       { who: 'Guard 1', text: 'What do you need?' },
       { who: 'Caleb Bishop', text: 'Names. Numbers. Who hired you. And the key card - the terminal needs it.' }
     ], () => {
-      guardsDown = true; keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(1, 'Caleb talked them down');
+      guardsDown = true; hideGuardMarkers(); keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(1, 'Caleb talked them down');
       setObjectives(OBJ2, 1);
       toast('The guards stood down. Click the white key card on the guard\u2019s belt, then the red log book on the desk.');
     });
@@ -576,7 +724,7 @@ function guardDialogue() {
       { who: 'Guard 1', text: 'Credentials? Work order number? You do not sound like an inspector.' },
       { who: 'Jade Morales', text: 'He is not ready for this. Plan B - I slip in through the side gate while they are watching him. It is slower, and it costs us goodwill.' }
     ], () => {
-      guardsDown = true; keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(-1, 'the bluff failed'); integrity('Power', -5);
+      guardsDown = true; hideGuardMarkers(); keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(-1, 'the bluff failed'); integrity('Power', -5);
       setObjectives(OBJ2, 1);
       toast('Jade slipped in through the side gate. Click the white key card, then the red log book.');
     });
@@ -1077,13 +1225,21 @@ function animate() {
   if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
   camera.position.x = Math.max(camBounds.x[0], Math.min(camBounds.x[1], camera.position.x));
   camera.position.z = Math.max(camBounds.z[0], Math.min(camBounds.z[1], camera.position.z));
+  const moving = keys['w'] || keys['a'] || keys['s'] || keys['d'];
+  const strafing = (keys['a'] ? -1 : 0) + (keys['d'] ? 1 : 0);
   camera.rotation.order = 'YXZ';
   const sway = document.getElementById('dialogue').classList.contains('hidden') ? 1 : 0.4;
   const wind = state.mission === 3 ? 0.02 : 0.004; // the bridge sways in the wind
   camera.rotation.y = state.yaw + Math.sin(t * 0.7) * 0.004 * sway;
   camera.rotation.x = state.pitch + Math.sin(t * 0.9 + 1.3) * 0.003 * sway;
-  camera.rotation.z = Math.sin(t * 0.5) * wind * sway;
-  camera.position.y = (state.mission === 3 ? 1.9 : 1.7) + Math.sin(t * 0.8) * 0.012 * sway;
+  // Lean into a strafe so sideways movement reads, and bob with the
+  // player's steps (not a constant sway): the bob is strong and quick
+  // while moving and settles to a faint idle sway when still, so WASD
+  // visibly moves the world instead of gliding through it.
+  camera.rotation.z = Math.sin(t * 0.5) * wind * sway - strafing * 0.02 * sway;
+  const bobAmp = moving ? 0.035 : 0.008;
+  const bobFreq = moving ? 5.2 : 0.8;
+  camera.position.y = (state.mission === 3 ? 1.9 : 1.7) + Math.sin(t * bobFreq) * bobAmp * sway;
   if (waterMesh) waterMesh.position.y = 0.05 + Math.sin(t * 0.6) * 0.02;
   for (const ch of chargeMeshes) {
     if (!state.derrickDown && ch.material.emissive) ch.material.emissiveIntensity = 1.2 + Math.sin(t * 5) * 0.8;
@@ -1092,10 +1248,65 @@ function animate() {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
   }
+  // Guards patrol the gate line while Mission 2 is active and they have
+  // not stood down, so the yard feels alive and the player can see the
+  // guards are the way in. They walk back and forth in x around their
+  // post and face the direction they walk (the old scan faces +z, so
+  // +x is rotation.y = PI/2 and -x is -PI/2). The key card rides on
+  // guard1's belt, so it follows him; the "!" markers pulse above them.
+  if (state.mission === 2 && !guardsDown) {
+    for (const gp of guardPatrol) {
+      const w = Math.sin(t * 0.45 + gp.phase);
+      gp.group.position.x = gp.baseX + w * 1.8;
+      gp.group.rotation.y = Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2;
+    }
+    for (const m of guardMarkers) {
+      const s = 0.55 + Math.sin(t * 4) * 0.12;
+      m.scale.set(s, s, 1);
+      m.material.opacity = 0.75 + Math.sin(t * 4) * 0.25;
+    }
+    // Walk up to a guard: if the player gets close, Caleb starts the
+    // bluff on his own. This is the forgiving path for players who do
+    // not think to click - walking up to the police is the natural move.
+    // (Only when no dialogue or modal is open, so it never fires over
+    // the intro scene or another interaction.)
+    if (document.getElementById('dialogue').classList.contains('hidden')
+      && document.getElementById('valveModal').classList.contains('hidden')
+      && document.getElementById('scadaModal').classList.contains('hidden')) {
+      for (const gp of guardPatrol) {
+        if (dist2D(camera.position.x, camera.position.z, gp.group.position.x, gp.group.position.z) < 2.5) {
+          guardDialogue();
+          break;
+        }
+      }
+    }
+  }
+  // The key card sits on guard1's belt: while it is visible, keep it on
+  // him even as he patrols, so the player always finds it where he is.
+  if (state.mission === 2 && keycardMesh && keycardMesh.visible && guardPatrol.length) {
+    const g1 = guardPatrol[0].group.position;
+    keycardMesh.position.set(g1.x, 1.0, g1.z + 0.15);
+    if (window._keycardHit) window._keycardHit.position.set(g1.x, 1.1, g1.z + 0.1);
+  }
+  // Living city traffic (Mission 2 only): cars drive the road in both
+  // directions and the train runs the elevated track, looping so the
+  // street never empties. This is the movement the player sees even
+  // when standing still, and it makes WASD travel read against it.
+  if (state.mission === 2) {
+    for (const c of cityCars) {
+      c.group.position.x += c.speed * dt;
+      if (c.group.position.x > 46) c.group.position.x = -46;
+      if (c.group.position.x < -46) c.group.position.x = 46;
+    }
+    if (cityTrain) {
+      cityTrain.position.x += 9 * dt;
+      if (cityTrain.position.x > 55) cityTrain.position.x = -55;
+    }
+  }
   updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
   // Sound: footsteps while moving, heartbeat and score tension. The bomb
   // countdown and the bridge gap are the tense moments here.
-  const moving = keys['w'] || keys['a'] || keys['s'] || keys['d'];
+  // (`moving` is computed above, with the camera bob.)
   let tension = state.mission === 3 ? 0.55 : (state.mission === 2 ? 0.4 : 0.15);
   let hb = 0;
   if (state.mission === 2 && bombInterval) { tension = 0.7 + (1 - bombTime / 90) * 0.2; hb = bombTime <= 30 ? 100 : 70; }
@@ -1115,4 +1326,9 @@ setObjectives(OBJ1, 0); updateHUD(); initVoiceUI();
 initSoundUI(); // procedural sound: ambient, effects, score, sound toggle
 setAmbient('field'); // the reservoir: wind and open air
 setTension(0.15);
+// Wire the wallet Connect button. Act I and Act III call initZamaUI on
+// their own boot, but Act II boots standalone when the player resumes
+// here (or loads ?act=2) and game.js is never imported, so without this
+// the Connect button has no handler and clicking it does nothing.
+initZamaUI();
 loadHumans();

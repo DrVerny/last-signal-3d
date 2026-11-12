@@ -279,6 +279,10 @@ export async function setupRevealButton() {
 // Wire the mode badge, connect button and status line in the HUD.
 // Safe to call on a page that has none of those elements. `options`
 // may carry onConnect, called after a successful wallet connect.
+// Called once per act boot (Act I, II and III each call it), so the
+// ethereum listeners are attached only once - otherwise the
+// accountsChanged / chainChanged handlers would stack on every act.
+let zamaListenersAttached = false;
 export function initZamaUI(options) {
   setModeBadge();
   const btn = el("zamaConnectBtn");
@@ -286,7 +290,8 @@ export function initZamaUI(options) {
     btn.onclick = () => { connectWallet(options && options.onConnect); };
     if (!isConfigured()) btn.textContent = "Connect wallet (Sepolia - not deployed yet)";
   }
-  if (window.ethereum) {
+  if (window.ethereum && !zamaListenersAttached) {
+    zamaListenersAttached = true;
     window.ethereum.on("accountsChanged", () => {
       zama = null; sealedOnChain.priority = false; sealedOnChain.final = false;
       setModeBadge(); setZamaStatus("Wallet account changed - connect again.");
