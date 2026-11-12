@@ -772,21 +772,27 @@ const boardHit = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.5), new THREE.
 boardHit.position.set(1.38, 1.1, 3.9); boardHit.name = 'board'; boardHit.userData.clickable = true; scene.add(boardHit);
 board.rotation.y = Math.PI / 2; // moved to z 3.9, onto a solid pillar between windows (was z 3, inside a window opening)
 board.visible = false; // appears on the platform after evacuation
-// ---------- Human characters: CC0 scanned 3D people (Innerscene / MakeHuman) ----------
-// GLB models in models/ - real scanned figures (Riley, Daniel, nurse, Rowan), not
-// procedural geometry. They are static (no skeleton, no animations), so idle motion
-// is a subtle whole-group breathing scale, and poses come from the models themselves.
-// Walter's file includes his bench - those Bench nodes are hidden, the game already
-// has benches in the car. Caleb's olive jacket is recoloured navy in code (his suit
-// material is replaced with a plain navy material) and he gets a simple navy cap
-// and a gold badge disc, since the scan has neither.
-const humans = []; // {group, name, baseScale, phase, seated}
+// ---------- Human characters: rigged CC0 3D people (Quaternius) ----------
+// GLB models in models/rigged/ - rigged figures with a real skeleton and an
+// embedded Walk animation, so arms swing from the shoulder, elbows bend,
+// and legs step with knees bending. Jade is the Casual Female, Caleb is
+// the plain civilian Matt (not the BlueSoldier, whose helmet and vest
+// would clash with the police cap and badge added in code), the nurse is
+// Lis, Walter is Sam. The walkers play the plain "Walk" clip on loop
+// while they patrol; Walter stays seated, so no Walk clip is played for
+// him. The Walk clips walk in place (the skeleton root does not travel),
+// so the group's patrol translation does the moving. Caleb gets a simple
+// navy cap and a gold badge disc in code, since the model has neither.
+// (The old navy recolour looked for a 'casualsuit' material on the scan;
+// the rigged Matt model uses a single "Atlas" material, so that recolour
+// is now a no-op and Caleb keeps his own outfit colours.)
+const humans = []; // {group, name, baseScale, phase, seated, mixer, rootBone, rootRest}
 const humanGroups = []; // THREE.Group per loaded character, for raycast clicking
 const modelGroups = {}; // key -> {group}
 const MODEL_DEFS = [
-  { key: 'jade', file: 'models/jade.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.70 },
-  { key: 'caleb', file: 'models/caleb.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.88, recolourNavy: true },
-  { key: 'nurse', file: 'models/adeyemi.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.68 },
+  { key: 'jade', file: 'models/rigged/jade-rigged.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.70 },
+  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.88, recolourNavy: true },
+  { key: 'nurse', file: 'models/rigged/nurse-rigged.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.68 },
   { key: 'walter', file: 'models/walter.glb', name: 'walter', x: -1.18, z: 4.5, faceYaw: 0.6, targetHeight: null, hideBench: true }
 ];
 let introStarted = false;
@@ -861,7 +867,33 @@ async function loadHumans() {
         nurse: { minZ: -0.5, maxZ: 3.5, speed: 0.3 }
       };
       const wr = walkRanges[def.key];
-      humans.push({ group, name: def.name, baseScale: s, phase: Math.random() * 6, seated: def.key === 'walter', baseY: group.position.y, shadow: humanShadows[def.key] || null, walk: wr ? { minZ: wr.minZ, maxZ: wr.maxZ, speed: wr.speed, dir: Math.random() < 0.5 ? 1 : -1, stepPhase: Math.random() * 6 } : null });
+      // Walk animation (rigged models only): the standing characters play
+      // the plain "Walk" clip on loop while they patrol, so arms swing
+      // from the shoulder, elbows bend, and legs step with knees bending.
+      // Walter is seated, so no Walk clip is played for him. The Walk
+      // clips walk in place: the skeleton root (Bone on the 23-joint rig,
+      // Root on the 43-joint rig) does not travel, so the group's patrol
+      // translation does the moving. The root bone's horizontal position
+      // is still reset to its rest pose after each mixer update (see
+      // animate), which keeps the character in place if a clip ever does
+      // carry root motion. If no "Walk" clip is found the character
+      // simply patrols with the step bob as before.
+      let mixer = null, rootBone = null, rootRest = null;
+      if (wr) {
+        try {
+          const walkClip = THREE.AnimationClip.findByName(gltf.animations || [], 'Walk');
+          if (walkClip) {
+            mixer = new THREE.AnimationMixer(group);
+            mixer.clipAction(walkClip).play();
+            group.traverse((o) => {
+              if (!rootBone && o.isBone && (o.name === 'Bone' || o.name === 'Root')) rootBone = o;
+            });
+            if (!rootBone) group.traverse((o) => { if (!rootBone && o.isBone) rootBone = o; });
+            if (rootBone) rootRest = rootBone.position.clone();
+          }
+        } catch (e) { mixer = null; rootBone = null; rootRest = null; }
+      }
+      humans.push({ group, name: def.name, baseScale: s, phase: Math.random() * 6, seated: def.key === 'walter', baseY: group.position.y, shadow: humanShadows[def.key] || null, walk: wr ? { minZ: wr.minZ, maxZ: wr.maxZ, speed: wr.speed, dir: Math.random() < 0.5 ? 1 : -1, stepPhase: Math.random() * 6 } : null, mixer, rootBone, rootRest });
       humanGroups.push(group);
       modelGroups[def.key] = { group };
     } catch (e) {
@@ -1138,6 +1170,12 @@ function animate() {
   for (const h of humans) {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
+    // Seated humans (Walter) hold a posed clip (SitDown): keep their mixer
+    // ticking so the pose is re-applied every frame. Walkers update their
+    // own mixer in the walking loop below.
+    if (!h.walk && h.mixer) {
+      try { h.mixer.update(dt); } catch (e) { /* a failed mixer update must never stop the game */ }
+    }
   }
   updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
   // Walking: the standing characters patrol a short stretch of the aisle (slow,
@@ -1148,10 +1186,26 @@ function animate() {
   // is open (people talk while walking); the click target follows them.
   // The gesture module's rest pose follows the walkers via its 0.002 m
   // outside-move threshold, so it never snaps them back.
+  // Rigged walk: each walker also plays its embedded "Walk" clip (arm swing,
+  // elbow bend, leg step, knee bend) through an AnimationMixer. The clip
+  // walks in place, and the root bone's horizontal position is reset to its
+  // rest pose after each mixer update, so the clip can never drag the
+  // character away from its patrol path; the group's patrol translation
+  // below does the moving. Only the horizontal (x, z) root position is
+  // reset, never the rotation, so the clip's turning and bob survive.
   for (const h of humans) {
     if (!h.walk) continue;
     const w = h.walk;
     const g = h.group;
+    if (h.mixer) {
+      try {
+        h.mixer.update(dt);
+        if (h.rootBone && h.rootRest) {
+          h.rootBone.position.x = h.rootRest.x;
+          h.rootBone.position.z = h.rootRest.z;
+        }
+      } catch (e) { /* a failed mixer update must never stop the patrol */ }
+    }
     g.position.z += w.dir * w.speed * dt;
     if (g.position.z > w.maxZ) { g.position.z = w.maxZ; w.dir = -1; }
     if (g.position.z < w.minZ) { g.position.z = w.minZ; w.dir = 1; }

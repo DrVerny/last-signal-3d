@@ -205,6 +205,12 @@ function addJawMorphToMesh(mesh, mouthWorld, forwardWorld) {
 
 // Build the jaw morph for one loaded character group. Returns the list of
 // meshes that got a working jaw, each with its morph index.
+// Guard: the rigged Quaternius models have NO teeth mesh, so there is no
+// mouth landmark and no jaw morph is built for them - the function returns
+// an empty list and the character simply keeps a static face. That skip is
+// silent and the game plays as before; the speaking gestures (bob, nod,
+// lean) still make the character read as talking. Models that DO have a
+// teeth mesh still get the full jaw morph exactly as before.
 function buildJawMorph(group) {
   const meshes = [];
   try {
@@ -213,7 +219,7 @@ function buildJawMorph(group) {
     group.traverse((o) => {
       if (o.isMesh && o.name && o.name.toLowerCase().indexOf('teeth') !== -1) teeth = o;
     });
-    if (!teeth) return meshes; // no mouth landmark, no morph
+    if (!teeth) return meshes; // no mouth landmark (rigged models), no morph, no error
     const mouthWorld = new THREE.Box3().setFromObject(teeth).getCenter(new THREE.Vector3());
     let brow = null;
     group.traverse((o) => {
