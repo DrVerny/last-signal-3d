@@ -71,13 +71,16 @@ function integrity(key, n) { state.integrity[key] = Math.max(0, Math.min(100, st
 
 // ---------- Dialogue ----------
 let dlgQueue = [], dlgCb = null;
+let dialogueActive = false; // source of truth for "a dialogue is open"; the walkers
+// pause while this is true. (Do not gate on the dialogue panel's CSS class:
+// the panel's class is managed in several places and is not a reliable signal.)
 function showDialogue(lines, cb) {
   hideToast(); // a new dialogue clears any stale hint, e.g. the BLACKOUT prompt after the repair
-  dlgQueue = lines.slice(); dlgCb = cb || null; nextLine();
+  dlgQueue = lines.slice(); dlgCb = cb || null; dialogueActive = true; nextLine();
 }
 function nextLine() {
   const box = document.getElementById('dialogue');
-  if (!dlgQueue.length) { box.classList.add('hidden'); stopSpeaking(); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
+  if (!dlgQueue.length) { box.classList.add('hidden'); dialogueActive = false; stopSpeaking(); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
   const line = dlgQueue.shift(); box.classList.remove('hidden');
   document.getElementById('dlgName').textContent = line.who;
   document.getElementById('dlgText').textContent = line.text;
@@ -1135,7 +1138,7 @@ function animate() {
   // Walking: the standing characters patrol a short stretch of the aisle (slow,
   // with a small step bob and facing the direction they walk) so the car feels
   // alive. They pause while a dialogue is open so the speaker stays put.
-  const dialogueOpen = !document.getElementById('dialogue').classList.contains('hidden');
+  const dialogueOpen = dialogueActive;
   for (const h of humans) {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
@@ -1453,7 +1456,7 @@ function endAct() {
 // dialogue or modal, and dispose this act's scene (the shared renderer
 // in core.js is never disposed).
 export function stopAct() {
-  actActive = false;
+  actActive = false; dialogueActive = false; dlgQueue = []; dlgCb = null;
   if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
   if (batteryInterval) { try { clearInterval(batteryInterval); } catch (e) { /* ignore */ } batteryInterval = 0; }
   try { stopSpeaking(); } catch (e) { /* ignore */ }
