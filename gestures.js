@@ -122,10 +122,14 @@ export function updateSpeakingGestures(t) {
       if (!g) continue;
       // Outside move detection: if the group was moved by something other
       // than this module since the last frame (Act III re-parents Jade and
-      // Caleb between chapter groups), adopt the new spot as the rest pose
-      // and drop any gesture in progress, so the model never snaps back.
+      // Caleb between chapter groups, Act I walkers patrol the aisle in
+      // small per-frame steps), adopt the new spot as the rest pose and
+      // drop any gesture in progress, so the model never snaps back.
+      // The position threshold must be smaller than one walking step
+      // (about 0.006 m per frame) or the walkers get snapped back to
+      // their rest pose every frame and never appear to move.
       if (e.applied) {
-        const moved = Math.abs(g.position.x - e.lastX) > 0.05 || Math.abs(g.position.y - e.lastY) > 0.05 || Math.abs(g.position.z - e.lastZ) > 0.05 || Math.abs(g.rotation.y - e.lastYaw) > 0.05;
+        const moved = Math.abs(g.position.x - e.lastX) > 0.002 || Math.abs(g.position.y - e.lastY) > 0.002 || Math.abs(g.position.z - e.lastZ) > 0.002 || Math.abs(g.rotation.y - e.lastYaw) > 0.05;
         if (moved) {
           e.restX = g.position.x; e.restY = g.position.y; e.restZ = g.position.z;
           e.restYaw = g.rotation.y;
