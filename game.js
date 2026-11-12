@@ -1135,28 +1135,31 @@ function animate() {
   }
   // Human idle animation: subtle breathing (whole-group scale). The GLB models are
   // static scans with no skeleton, so there is no head-turn or blink to animate.
-  // Walking: the standing characters patrol a short stretch of the aisle (slow,
-  // with a small step bob and facing the direction they walk) so the car feels
-  // alive. They pause while a dialogue is open so the speaker stays put.
-  const dialogueOpen = dialogueActive;
   for (const h of humans) {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
-    if (h.walk && !dialogueOpen) {
-      const w = h.walk;
-      const g = h.group;
-      g.position.z += w.dir * w.speed * dt;
-      if (g.position.z > w.maxZ) { g.position.z = w.maxZ; w.dir = -1; }
-      if (g.position.z < w.minZ) { g.position.z = w.minZ; w.dir = 1; }
-      w.stepPhase += w.speed * dt * 6;
-      g.position.y = h.baseY + Math.abs(Math.sin(w.stepPhase)) * 0.025;
-      g.rotation.y = w.dir > 0 ? 0 : Math.PI;
-      if (h.shadow) { h.shadow.position.x = g.position.x; h.shadow.position.z = g.position.z; }
-    } else if (h.walk) {
-      h.group.position.y = h.baseY;
-    }
   }
   updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
+  // Walking: the standing characters patrol a short stretch of the aisle (slow,
+  // with a small step bob and facing the direction they walk) so the car feels
+  // alive. This runs AFTER the gestures on purpose, so the walked position is
+  // the final word each frame and is never overwritten by the gesture rest
+  // pose in the same frame. The walkers keep walking even while a dialogue
+  // is open (people talk while walking); the click target follows them.
+  // The gesture module's rest pose follows the walkers via its 0.002 m
+  // outside-move threshold, so it never snaps them back.
+  for (const h of humans) {
+    if (!h.walk) continue;
+    const w = h.walk;
+    const g = h.group;
+    g.position.z += w.dir * w.speed * dt;
+    if (g.position.z > w.maxZ) { g.position.z = w.maxZ; w.dir = -1; }
+    if (g.position.z < w.minZ) { g.position.z = w.minZ; w.dir = 1; }
+    w.stepPhase += w.speed * dt * 6;
+    g.position.y = h.baseY + Math.abs(Math.sin(w.stepPhase)) * 0.025;
+    g.rotation.y = w.dir > 0 ? 0 : Math.PI;
+    if (h.shadow) { h.shadow.position.x = g.position.x; h.shadow.position.z = g.position.z; }
+  }
   updateFlashlight(); // flashlight rides on the camera (no-op when off)
   // Sound: footsteps while moving, heartbeat and score tension by stage.
   // Blackout is tense; a low battery is worse; the debris run is worst.
