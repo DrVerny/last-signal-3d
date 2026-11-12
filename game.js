@@ -831,20 +831,29 @@ async function loadHumans() {
       group.name = def.name;
       // Hide Walter's bench (the game already has benches in the car).
       if (def.hideBench) group.traverse((o) => { if (o.name && o.name.indexOf('Bench') === 0) o.visible = false; });
-      // Recolour Caleb's jacket navy: replace the suit material with plain navy.
+      // Caleb's officer markers: a navy cap and a gold badge disc on the chest.
+      // NOTE: the jacket recolour below is a no-op on the rigged model: the
+      // old scan had a 'casualsuit' material, but the rigged Matt uses a
+      // single "Atlas" texture material for the whole body, so recolouring
+      // it would tint the skin too. The cap + badge carry the officer look.
+      // Positions are calibrated for the rigged Matt (measured from its GLB):
+      // native height 1.508, head top local y 1.503, and it faces -z (local
+      // forward is -z, so the chest front and the brim are on the -z side).
+      // These are local units, added before the height normalisation scales
+      // the whole group, so they land on the head/chest after scaling.
       if (def.recolourNavy) {
         const navy = new THREE.MeshStandardMaterial({ color: 0x1a3a5a, roughness: 0.85, metalness: 0.02 });
         group.traverse((o) => {
           if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = navy;
         });
-        // Simple navy cap and a gold badge disc on the chest (the scan has neither).
+        // Simple navy cap and a gold badge disc on the chest.
         const capMat = new THREE.MeshStandardMaterial({ color: 0x16283f, roughness: 0.7 });
         const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.125, 0.13, 0.07, 16), capMat);
-        crown.position.set(0, 1.81, 0); crown.castShadow = true; group.add(crown);
+        crown.position.set(0, 1.51, -0.13); crown.castShadow = true; group.add(crown);
         const brim = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.012, 0.1), new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3 }));
-        brim.position.set(0, 1.775, 0.13); group.add(brim);
-        const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
-        badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.32, 0.17); group.add(badge);
+        brim.position.set(0, 1.47, -0.22); group.add(brim);
+        const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25, side: THREE.DoubleSide }));
+        badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.22, -0.38); group.add(badge);
       }
       group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       // Normalise height to the character's target height, then re-ground feet at y=0.
@@ -1211,7 +1220,11 @@ function animate() {
     if (g.position.z < w.minZ) { g.position.z = w.minZ; w.dir = 1; }
     w.stepPhase += w.speed * dt * 6;
     g.position.y = h.baseY + Math.abs(Math.sin(w.stepPhase)) * 0.025;
-    g.rotation.y = w.dir > 0 ? 0 : Math.PI;
+    // Face the direction of movement. The rigged Quaternius models face -z
+    // in local space (measured from their GLB geometry), so moving +z needs
+    // rotation.y = PI and moving -z needs 0 - the opposite of the old scans,
+    // which faced +z. Without this flip the walkers moonwalk.
+    g.rotation.y = w.dir > 0 ? Math.PI : 0;
     if (h.shadow) { h.shadow.position.x = g.position.x; h.shadow.position.z = g.position.z; }
   }
   updateFlashlight(); // flashlight rides on the camera (no-op when off)
