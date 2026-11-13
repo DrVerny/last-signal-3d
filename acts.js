@@ -18,6 +18,12 @@ const ACTS = {
   2: { file: './act2.js', name: 'Act II: City of Wires', help: 'Drag to look around • Click glowing objects to inspect • WASD to move • R / Reset view • B / Store • M / City Map • H / Home • Act II: three missions - the aqueduct, the substation, the bridge' },
   3: { file: './act3.js', name: 'Act III: The Human Signal', help: 'Drag to look around • Click glowing objects to inspect • WASD to move • R / Reset view • B / Store • H / Home • Act III: the control center, the courtroom, the escape, the safehouse, the press conference, the bridge at dawn' }
 };
+// Build version for cache-busting the act modules: the browser can hold
+// a stale game.js/act2.js/act3.js in its module cache even after a hard
+// reload, and a stale act module can hang the boot on "Loading
+// characters..." forever. Appending ?v= forces a fresh fetch. Bump this
+// on every push that changes an act module.
+const BUILD_VERSION = '4bf4b7c-2';
 const CUR_KEY = 'lastSignalCurrentAct';
 let currentAct = 0;
 const actModules = {};
@@ -171,7 +177,27 @@ export async function goToAct(n) {
   try { localStorage.setItem(CUR_KEY, String(n)); } catch (e) { /* ignore */ }
   currentAct = n;
   showLoading('Loading ' + ACTS[n].name + '...');
-  const mod = await import(ACTS[n].file);
+  // The act import races a 60 s timer: if the module (or one of its
+  // dependencies) never arrives, the player gets a Retry button instead
+  // of an endless loading screen. The ?v= cache-buster forces a fresh
+  // fetch of the act module, so a stale cached copy cannot hang the boot.
+  let mod;
+  try {
+    mod = await Promise.race([
+      import(ACTS[n].file + '?v=' + BUILD_VERSION),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('act module load timed out after 60s')), 60000))
+    ]);
+  } catch (e) {
+    const t = document.getElementById('loadingText');
+    if (t) t.textContent = 'The game took too long to load. Check your connection and try again.';
+    const c = document.getElementById('loadingContinue');
+    if (c) {
+      c.classList.remove('hidden');
+      c.textContent = 'Retry';
+      c.onclick = () => location.reload();
+    }
+    return;
+  }
   actModules[n] = mod;
 }
 
