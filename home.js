@@ -1310,6 +1310,13 @@ export function enterPlace(kind, onLeave, options) {
   showHomeToast(welcomes[kind] || kind);
   if (homeRaf) cancelAnimationFrame(homeRaf);
   homeRaf = requestAnimationFrame(homeAnimate);
+  // The loading overlay starts visible on page load, and only the acts
+  // hide it (in their start functions). A place (Mansion, Terminal,
+  // hotel...) is a full scene too, so hide the overlay once the room is
+  // built - otherwise a fresh player on the prologue stares at the opaque
+  // "Loading characters..." cover forever, even though the room rendered
+  // behind it.
+  try { const l = document.getElementById('loading'); if (l) l.classList.add('hidden'); } catch (e) { /* ignore */ }
 }
 export function leavePlace() {
   if (!homeActive) return;
