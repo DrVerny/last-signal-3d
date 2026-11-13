@@ -823,11 +823,20 @@ async function loadHumans() {
   const loader = new GLTFLoader();
   const failures = [];
   let done = 0;
+  // Each model load races a 30 s timeout: a network request that hangs
+  // (never resolves, never rejects) would otherwise stall Promise.all
+  // forever and leave the game stuck on "Loading characters...". A timed
+  // out model is treated as a failed load, so the game can still start
+  // and offer "Continue without the missing characters".
+  const loadWithTimeout = (def) => Promise.race([
+    loader.loadAsync(def.file, (ev) => {
+      if (ev.total > 0) loadingText.textContent = 'Loading characters... ' + def.key + ' ' + Math.min(100, Math.round(ev.loaded / ev.total * 100)) + '%';
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('load timed out after 30s')), 30000))
+  ]);
   const jobs = MODEL_DEFS.map(async (def) => {
     try {
-      const gltf = await loader.loadAsync(def.file, (ev) => {
-        if (ev.total > 0) loadingText.textContent = 'Loading characters... ' + def.key + ' ' + Math.min(100, Math.round(ev.loaded / ev.total * 100)) + '%';
-      });
+      const gltf = await loadWithTimeout(def);
       const group = gltf.scene;
       group.name = def.name;
       // Hide Walter's bench (the game already has benches in the car).

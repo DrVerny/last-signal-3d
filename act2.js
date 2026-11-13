@@ -1359,9 +1359,15 @@ export function openCityMap(fromKey, preselectKey) {
     };
     document.getElementById('travelSkipBtn').onclick = () => {
       if (!pendingMission) return;
-      const fn = pendingMission.fn; pendingMission = null;
+      const key = pendingMission.key;
       travelMapEl.style.display = 'none';
-      fn();
+      // Use the same arrival path as the Drive button (arriveAt), so the
+      // scene switches to the destination just like a completed drive.
+      // Then force the mission scene to match the mission state, so a
+      // skip can never leave the old scene showing under the new mission.
+      const arrive = arriveAt(key);
+      arrive();
+      restoreMissionScene();
     };
     document.getElementById('travelCloseBtn').onclick = () => { closeCityMap(); };
   }
