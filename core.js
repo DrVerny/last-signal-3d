@@ -19,10 +19,16 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // their textures) so a finished act does not leak into the next one.
 // Safe to call on a scene that was already disposed. The scene's
 // environment / background texture is disposed too when it is one.
+// Persistent objects (the player avatar, the player car) are marked
+// keepAlive: they are moved between scenes, so disposing them here would
+// break them in the next scene. A keepAlive subtree is skipped whole.
 export function disposeScene(scene) {
   if (!scene) return;
   try {
-    scene.traverse(o => {
+    const stack = [scene];
+    while (stack.length) {
+      const o = stack.pop();
+      if (o.userData && o.userData.keepAlive) continue;
       try {
         if (o.geometry) o.geometry.dispose();
         const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
@@ -38,7 +44,8 @@ export function disposeScene(scene) {
           } catch (e) { /* best effort */ }
         }
       } catch (e) { /* best effort */ }
-    });
+      for (const c of o.children) stack.push(c);
+    }
     if (scene.environment && typeof scene.environment.dispose === 'function') {
       try { scene.environment.dispose(); } catch (e) { /* ignore */ }
     }

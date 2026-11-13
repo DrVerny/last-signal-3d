@@ -10,6 +10,7 @@ import { initFlashlight, toggleFlashlight, updateFlashlight } from './flashlight
 import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
 import { grantPayout } from './economy.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame } from './player.js';
 // THE LAST SIGNAL - Act I: The 4 Train - 3D prototype
 // Original short dialogue in the spirit of the script; no long verbatim copying.
 // Sealed choice: hidden until reveal. In demo mode it is simulated locally;
@@ -1110,8 +1111,12 @@ function animate() {
     camera.position.set(Math.sin(state.yaw) * orbitR, orbitH, Math.cos(state.yaw) * orbitR);
     camera.lookAt(0, 1.3, 0);
   } else {
-    if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
-    if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
+    // In third-person the camera was left behind the avatar last frame;
+    // put it back on the player before moving, or movement starts from
+    // the wrong place.
+    beginPlayerFrame(camera, 1.6);
+    const mv = moveDelta(keys, state.yaw, sp);
+    camera.position.x += mv.dx; camera.position.z += mv.dz;
     camera.position.x = Math.max(-1.05, Math.min(1.05, camera.position.x));
     camera.position.z = Math.max(-7.0, Math.min(7.0, camera.position.z));
     camera.rotation.order = 'YXZ';
@@ -1248,6 +1253,12 @@ function animate() {
   setTension(tension);
   soundTick(dt, { moving, heartbeatBpm: hb });
   updateTrainRun(dt); // Act I dodge run, no-op when inactive
+  // Third-person: show the player avatar and put the camera behind it.
+  // Skipped in the exterior orbit view, which has its own camera.
+  if (!exteriorView) {
+    const mv2 = moveDelta(keys, state.yaw, 1);
+    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: 1.6 });
+  }
   renderer.render(scene, camera);
 }
 animate();

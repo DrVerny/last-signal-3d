@@ -5,6 +5,7 @@
 // if the DOM is unavailable, the helpers are silent no-ops.
 
 import * as THREE from 'three';
+import { makeRiggedPerson, updateRiggedPerson, queueUpgrade, processUpgradeQueue } from './crowd.js';
 
 let bannerEl = null, flashEl = null;
 
@@ -173,6 +174,14 @@ function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 export function makePedestrian(opts) {
   try {
+    // Realistic people first: if a rigged crowd model is loaded, build a
+    // real person from it (proper proportions, real walk cycle). If the
+    // models are not loaded yet, build the primitive figure below and
+    // queue it for an upgrade to a rigged clone when they arrive.
+    try {
+      const rigged = makeRiggedPerson(opts);
+      if (rigged) return rigged;
+    } catch (e) { /* fall through to the primitive figure */ }
     const o = opts || {};
     const age = o.age || (Math.random() < 0.2 ? 'old' : Math.random() < 0.5 ? 'young' : 'adult');
     const coat = o.coat !== undefined ? o.coat : Math.random() < 0.55;
@@ -256,7 +265,7 @@ export function makePedestrian(opts) {
     const heading = o.heading !== undefined ? o.heading : Math.random() * Math.PI * 2;
     const bounds = o.bounds || { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };
     const lane = o.lane || null; // { axis: 'x'|'z', fixed, min, max }
-    return {
+    const person = {
       group: g, legL, legR, armL, armR, headGroup, bagMeshes,
       phone, pockets, bags: bagCount, age,
       heading, bounds, lane,
@@ -265,6 +274,10 @@ export function makePedestrian(opts) {
       speed, phase: Math.random() * 6.28,
       leader: o.leader || null, latOffset: o.latOffset || 0
     };
+    // Queue this primitive for an upgrade to a rigged person when the
+    // crowd models finish loading.
+    try { queueUpgrade(person); } catch (e) { /* ignore */ }
+    return person;
   } catch (e) { return null; }
 }
 
@@ -276,6 +289,9 @@ export function makePedestrian(opts) {
 // stays on its sidewalk and wraps at the ends.
 export function updatePedestrian(p, dt) {
   if (!p || !p.group) return;
+  // Try to upgrade any primitive pedestrians to rigged models, now
+  // that the models may have finished loading.
+  try { processUpgradeQueue(); } catch (e) { /* ignore */ }
   if (p.leader) {
     const l = p.leader;
     const lx = Math.cos(l.heading), lz = -Math.sin(l.heading); // lateral
@@ -309,6 +325,16 @@ export function updatePedestrian(p, dt) {
   // faster than a stroll) and each pedestrian has its own phase, so no
   // two people step together.
   p.phase += dt * p.speed * 4.5;
+  if (p.rigged) {
+    // A rigged person walks with their own Walk clip, not the primitive
+    // limb swing. The models face -z, so add PI to face the movement
+    // direction (the primitive figure faces +z).
+    updateRiggedPerson(p, dt);
+    p.group.position.set(p.x, Math.abs(Math.sin(p.phase)) * 0.03, p.z);
+    p.group.rotation.y = p.heading + Math.PI;
+    p.group.rotation.z = 0;
+    return;
+  }
   p.group.position.set(p.x, Math.abs(Math.sin(p.phase)) * 0.03, p.z);
   p.group.rotation.y = p.heading;
   // A slight side-to-side sway, like a real walk.

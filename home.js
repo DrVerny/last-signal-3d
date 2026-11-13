@@ -12,12 +12,30 @@ import * as THREE from 'three';
 import { canvas, renderer, disposeScene } from './core.js';
 import { getBalance, moneyFmt } from './economy.js';
 import { makeCrowd, updatePedestrian } from './action.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar } from './player.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
 let homeKind = null, homeOnLeave = null;
 let homeYaw = 0, homePitch = 0;
 let homeBounds = { x: [-6, 6], z: [-4, 4] };
 let homeStart = { x: 0, y: 1.7, z: 4, yaw: 0 };
+// Walkable exit doors: each room has a real, visible door the player
+// walks up to and through to leave, instead of only a UI button. A door
+// is { x, z, ry, keyId, keyLabel, action, label, panel, glow }. The
+// button stays as a backup. A locked door needs its key first; the key
+// is always findable inside the room, so the player can never get stuck.
+let homeDoors = [];
+let homeDoorLockedAt = -10; // throttle for the "locked" toast at a door
+// Room keys: small glowing key pickups inside a room, one per locked
+// door. Each is { x, z, keyId, keyLabel, group, label }.
+let homeRoomKeys = [];
+// Ceiling fans: the spinning blade groups, so homeAnimate can turn them.
+let homeFans = [];
+// The bed the player sleeps in, for the sleep view: { x, z, w }.
+let currentBedPos = null;
+// Sleeping: while true the avatar lies on the bed and the camera shows
+// him from the bedside. sleepRestDone marks the rest as saved.
+let sleeping = false, sleepT = 0, sleepRestDone = false;
 let homeTargets = [];
 let homeDragging = false, homeLx = 0, homeLy = 0, homeDragMoved = 0;
 const homeKeys = {};
@@ -212,8 +230,58 @@ function saveHomeGame(kind) {
   showHomeToast('Game saved - ' + (kind === 'mansion' ? 'The Mansion' : kind === 'safehouse' ? 'Safe House' : kind) + '. Balance: ' + moneyFmt(getBalance()));
 }
 function doSleep() {
-  saveHomeGame(homeKind);
-  showHomeToast('You slept. Rested. Game saved.');
+  // Show the player sleeping: lay the avatar flat on his back on the
+  // bed and move the camera to a third-person bedside view, so the
+  // player SEES himself sleeping. The rest (save + "You slept") lands
+  // after a few seconds, and a Wake up button appears; the view stays
+  // until the player wakes, so he can watch himself sleep.
+  if (sleeping) return;
+  if (!currentBedPos) { saveHomeGame(homeKind); showHomeToast('You slept. Rested. Game saved.'); return; }
+  sleeping = true; sleepT = 0; sleepRestDone = false;
+  try {
+    const a = getAvatar();
+    if (a.parent) a.parent.remove(a);
+    setAvatarPose('lie');
+    a.visible = true;
+    // Lie along the bed, on his back, head at the north end.
+    a.position.set(currentBedPos.x, 0.62, currentBedPos.z - 0.4);
+    a.rotation.set(0, 0, 0);
+    a.scale.set(1, 1, 1);
+    homeScene.add(a);
+  } catch (e) { /* avatar is optional */ }
+  // Show the Wake up button in the home bar while sleeping.
+  try {
+    const bar = document.getElementById('homeBar');
+    if (bar) {
+      let wake = document.getElementById('homeWakeBtn');
+      if (!wake) {
+        wake = document.createElement('button');
+        wake.id = 'homeWakeBtn'; wake.type = 'button';
+        wake.textContent = 'Wake up';
+        wake.onclick = () => wakeUp();
+        bar.appendChild(wake);
+      }
+      wake.style.display = '';
+    }
+  } catch (e) { /* ignore */ }
+  showHomeToast('You are sleeping... (watch yourself rest, then Wake up)');
+}
+function wakeUp() {
+  // Stand the avatar back up and return the camera to the normal mode.
+  if (!sleeping) return;
+  sleeping = false; sleepRestDone = false;
+  try {
+    const a = getAvatar();
+    setAvatarPose('stand');
+    a.rotation.set(0, 0, 0);
+    a.scale.set(1, 1, 1);
+    detachAvatar();
+  } catch (e) { /* ignore */ }
+  try {
+    const wake = document.getElementById('homeWakeBtn');
+    if (wake) wake.style.display = 'none';
+  } catch (e) { /* ignore */ }
+  showHomeToast('You woke up. Rested.');
 }
 function doSave() {
   saveHomeGame(homeKind);
@@ -309,6 +377,93 @@ function roomShell(scene, w, d, h, floorColor, wallColor) {
   mkWall(w, 0, -d / 2); mkWall(w, 0, d / 2);
   mkWall(d, -w / 2, 0, Math.PI / 2); mkWall(d, w / 2, 0, Math.PI / 2);
 }
+// A real, visible, walkable exit door in a room wall. The player walks
+// up to it (WASD or the touch W/A/S/D buttons) and walks through it to
+// leave, the way he walks through the station door into the valve room.
+// The door is a frame, a wood panel with a handle, a gold glow strip and
+// an EXIT sign, so it is easy to find. Clicking it also opens it.
+// opts: { x, z, ry, keyId, keyLabel, action, label }.
+//   keyId/keyLabel: when set, the door is locked until the player has
+//     that key (the key is a pickup inside the room, see addRoomKey).
+//   action: 'leave' (default, leaves the place) or 'terminal' (the
+//     prologue path: go to the Train Terminal).
+function addExitDoor(scene, opts) {
+  const o = opts || {};
+  const ry = o.ry || 0;
+  const g = new THREE.Group();
+  g.position.set(o.x || 0, 0, o.z || 0);
+  g.rotation.y = ry;
+  // Frame: two posts and a lintel, in a warm wood tone.
+  const frameMat = mat(0x6b4226, { roughness: 0.6 });
+  for (const dx of [-0.65, 0.65]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.4, 0.2), frameMat);
+    post.position.set(dx, 1.2, 0); g.add(post);
+  }
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.44, 0.16, 0.2), frameMat);
+  lintel.position.set(0, 2.42, 0); g.add(lintel);
+  // The door panel: dark wood with a brass handle. It swings open on a
+  // hinge (the panel sits in a hinge group at the door's edge) when the
+  // player walks up to it.
+  const hinge = new THREE.Group();
+  hinge.position.set(-0.58, 0, 0);
+  g.add(hinge);
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(1.16, 2.3, 0.08), mat(0x4a3220, { roughness: 0.6 }));
+  panel.position.set(0.58, 1.15, 0); panel.castShadow = true;
+  panel.name = 'exitDoor'; panel.userData.homeAction = 'exitDoor';
+  hinge.add(panel);
+  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 }));
+  handle.position.set(1.0, 1.1, 0.08); hinge.add(handle);
+  // A gold glow strip above the door, so it is easy to spot across the room.
+  const glow = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 0.06), new THREE.MeshBasicMaterial({ color: 0xffd166 }));
+  glow.position.set(0, 2.62, 0.05); g.add(glow);
+  const sign = textSprite(o.label || 'EXIT', '#2a2118', '#ffd166', o.keyId ? 'Locked - needs the ' + (o.keyLabel || 'key') : 'Walk through to leave');
+  sign.scale.set(2.2, 0.55, 1); sign.position.set(0, 3.0, 0.05); g.add(sign);
+  scene.add(g);
+  const door = { x: o.x || 0, z: o.z || 0, ry, keyId: o.keyId || null, keyLabel: o.keyLabel || null, action: o.action || 'leave', panel, hinge, glow, group: g, open: 0 };
+  homeDoors.push(door);
+  // The panel is clickable, so a click on the door opens it too.
+  panel.userData.doorRef = door;
+  homeTargets.push(panel);
+  return door;
+}
+// A small glowing key pickup inside a room, for a locked exit door.
+// Clicking it (or walking up to it) picks it up. The key is always
+// inside the room, before the player needs its door, so the player can
+// never get permanently stuck at a locked door.
+function addRoomKey(scene, x, z, keyId, keyLabel) {
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.025, 8, 20), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
+  ring.position.set(0, 0.1, 0); g.add(ring);
+  const stem = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.22, 0.03), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
+  stem.position.set(0.05, -0.08, 0); g.add(stem);
+  const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.03), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
+  tooth.position.set(0.09, -0.16, 0); g.add(tooth);
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.18 }));
+  g.add(glow);
+  g.position.set(x, 1.0, z);
+  g.name = 'roomKey';
+  // An invisible hit box, so the key is easy to click (raycasting a
+  // Group does not hit its children, so the hit box carries the action).
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  hit.position.set(0, 0, 0); hit.name = 'roomKey'; hit.userData.homeAction = 'roomKey'; hit.userData.keyId = keyId; hit.userData.keyLabel = keyLabel;
+  g.add(hit);
+  scene.add(g);
+  homeTargets.push(hit);
+  const label = textSprite(keyLabel.toUpperCase(), '#2a2118', '#ffd166', 'Click or walk up to pick it up');
+  label.scale.set(1.8, 0.45, 1); label.position.set(x, 1.5, z); scene.add(label);
+  const rec = { x, z, keyId, keyLabel, group: g, label };
+  homeRoomKeys.push(rec);
+  return rec;
+}
+// Sync the room keys with the keys the player already has (a replay):
+// a key already owned is hidden so it cannot be picked up twice.
+function syncRoomKeys() {
+  for (const k of homeRoomKeys) {
+    const owned = hasKey(k.keyId);
+    try { k.group.visible = !owned; } catch (e) { /* ignore */ }
+    try { k.label.visible = !owned; } catch (e) { /* ignore */ }
+  }
+}
 function addWindow(scene, x, y, z, ry) {
   const win = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.4), new THREE.MeshStandardMaterial({ map: nightSkyTexture(), roughness: 0.2, metalness: 0.3 }));
   win.position.set(x, y, z); win.rotation.y = ry; scene.add(win);
@@ -317,6 +472,8 @@ function addWindow(scene, x, y, z, ry) {
   const frame2 = frame.clone(); frame2.position.y = y - 0.75; scene.add(frame2);
 }
 function addBed(scene, x, z, w, single) {
+  // Remember where the bed is, so the sleep view can lay the avatar on it.
+  currentBedPos = { x, z, w };
   const g = new THREE.Group(); scene.add(g);
   const frame = new THREE.Mesh(new THREE.BoxGeometry(w, 0.4, 3), mat(0x4a3220, { roughness: 0.7 }));
   frame.position.set(x, 0.2, z); frame.castShadow = true; g.add(frame);
@@ -333,22 +490,34 @@ function addBed(scene, x, z, w, single) {
   hitBox(scene, w + 0.6, 1.6, 3.4, x, 0.8, z, 'bed');
   return g;
 }
-function addSofa(scene, x, z, w, color, name) {
-  const g = new THREE.Group(); scene.add(g);
+function addSofa(scene, x, z, w, color, name, ry) {
+  // A sofa with a base, a back, arms, seat cushions and throw pillows.
+  // Built in a group so ry can turn it: ry = 0 faces south, PI faces
+  // north (toward a TV on the north wall), PI/2 faces east, -PI/2 west.
+  const g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = ry || 0;
   const base = new THREE.Mesh(new THREE.BoxGeometry(w, 0.5, 1.2), mat(color, { roughness: 0.95 }));
-  base.position.set(x, 0.35, z); base.castShadow = true; base.name = name || 'sofa'; base.userData.homeAction = name || 'sofa'; homeTargets.push(base); g.add(base);
+  base.position.set(0, 0.35, 0); base.castShadow = true; base.name = name || 'sofa'; base.userData.homeAction = name || 'sofa'; homeTargets.push(base); g.add(base);
   const back = new THREE.Mesh(new THREE.BoxGeometry(w, 0.9, 0.3), mat(color, { roughness: 0.95 }));
-  back.position.set(x, 0.9, z - 0.55); back.castShadow = true; g.add(back);
+  back.position.set(0, 0.9, -0.55); back.castShadow = true; g.add(back);
   for (const s of [-1, 1]) {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.7, 1.2), mat(color, { roughness: 0.95 }));
-    arm.position.set(x + s * (w / 2 - 0.15), 0.6, z); arm.castShadow = true; g.add(arm);
+    arm.position.set(s * (w / 2 - 0.15), 0.6, 0); arm.castShadow = true; g.add(arm);
   }
   const n = Math.max(2, Math.round(w / 1.1));
   for (let i = 0; i < n; i++) {
     const c = new THREE.Mesh(new THREE.BoxGeometry(w / n - 0.15, 0.18, 1.0), mat(0xd8cfc0, { roughness: 0.95 }));
-    c.position.set(x - w / 2 + (i + 0.5) * (w / n), 0.68, z); c.castShadow = true; g.add(c);
+    c.position.set(-w / 2 + (i + 0.5) * (w / n), 0.68, 0); c.castShadow = true; g.add(c);
+    // A throw pillow on each seat, in a warm gold accent.
+    const pil = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.35, 0.15), mat(0xffd166, { roughness: 0.95 }));
+    pil.position.set(-w / 2 + (i + 0.5) * (w / n), 0.85, -0.4);
+    pil.rotation.x = -0.15; pil.rotation.z = (i % 2 === 0 ? 0.08 : -0.08);
+    g.add(pil);
   }
-  hitBox(scene, w + 0.4, 1.6, 1.8, x, 0.8, z, name || 'sofa');
+  // A generous invisible click target that turns with the sofa.
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 1.6, 1.8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  hit.position.set(0, 0.8, 0); hit.name = name || 'sofa'; hit.userData.homeAction = name || 'sofa'; homeTargets.push(hit); g.add(hit);
+  scene.add(g);
   return g;
 }
 function addTV(scene, x, y, z, w, name) {
@@ -382,34 +551,290 @@ function addDiningTable(scene, x, z) {
     bk.position.set(x + dx * 1.15, 0.8, z + dz * 1.15); bk.rotation.y = ry; scene.add(bk);
   }
 }
-function addKitchen(scene, x, z, len) {
-  hbox(scene, 0.7, 0.9, len, 0x8a8a82, x, 0.45, z, null, { roughness: 0.6 });
-  hbox(scene, 0.5, 0.8, len - 0.6, 0x6a5a44, x - 0.1, 2.0, z, null, { roughness: 0.7 });
-  hbox(scene, 0.9, 2.0, 0.9, 0xd8d8d8, x, 1.0, z - len / 2 - 0.7, null, { metalness: 0.5, roughness: 0.3 });
+function addKitchen(scene, x, z, len, ry) {
+  // A proper kitchen run: counters with a stove (hob + oven), a sink
+  // with a tap, a fridge, upper cabinets, and a kettle and fruit bowl
+  // on the counter. Built in a group that runs along local z and faces
+  // local -x; ry rotates it (0 = against the east wall facing west,
+  // -PI/2 = against the south wall facing north).
+  const g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = ry || 0;
+  const half = len / 2;
+  const counter = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.9, len), mat(0x8a8a82, { roughness: 0.6 }));
+  counter.position.set(0, 0.45, 0); counter.castShadow = true; g.add(counter);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, len), mat(0x2a2a2a, { roughness: 0.4 }));
+  top.position.set(0, 0.92, 0); g.add(top);
+  // Stove: a hob with four burners on the counter, and an oven door.
+  const stoveZ = -half + 0.8;
+  const hob = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.04, 0.9), mat(0x111111, { roughness: 0.3, metalness: 0.4 }));
+  hob.position.set(0, 0.96, stoveZ); g.add(hob);
+  for (const [dz, dx] of [[-0.25, -0.15], [-0.25, 0.15], [0.25, -0.15], [0.25, 0.15]]) {
+    const burner = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.02, 12), mat(0x333333, { roughness: 0.4, metalness: 0.5 }));
+    burner.position.set(dx, 0.99, stoveZ + dz); g.add(burner);
+  }
+  const oven = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.5, 0.7), mat(0x1a1a1a, { roughness: 0.3, metalness: 0.4 }));
+  oven.position.set(-0.34, 0.45, stoveZ); g.add(oven);
+  // Sink: a basin set into the counter, with a tap.
+  const sinkZ = half - 0.8;
+  const basin = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.08, 0.6), mat(0x9aa2a8, { roughness: 0.3, metalness: 0.6 }));
+  basin.position.set(0, 0.92, sinkZ); g.add(basin);
+  const tapBase = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
+  tapBase.position.set(0.15, 1.1, sinkZ - 0.25); g.add(tapBase);
+  const tapArm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.28, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
+  tapArm.rotation.x = Math.PI / 2; tapArm.position.set(0.02, 1.24, sinkZ - 0.12); g.add(tapArm);
+  // Upper cabinets on the wall above the counter.
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.8, len - 0.8), mat(0x6a5a44, { roughness: 0.7 }));
+  cab.position.set(0.15, 2.0, 0); g.add(cab);
+  // Fridge at the north end of the run, with handles.
+  const fridge = new THREE.Mesh(new THREE.BoxGeometry(0.75, 1.9, 0.85), mat(0xd8d8d8, { metalness: 0.5, roughness: 0.3 }));
+  fridge.position.set(0, 0.95, -half - 0.55); fridge.castShadow = true; g.add(fridge);
+  for (const hy of [0.7, 1.3]) {
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.3, 0.04), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+    handle.position.set(-0.4, hy, -half - 0.55); g.add(handle);
+  }
+  // A kettle and a fruit bowl on the counter.
+  const kettle = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.18, 10), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+  kettle.position.set(-0.1, 1.03, 0); g.add(kettle);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.09, 0.07, 12), mat(0xc0392b, { roughness: 0.6 }));
+  bowl.position.set(0.05, 0.98, 0.5); g.add(bowl);
+  for (const [fx, fz] of [[-0.03, 0.45], [0.1, 0.52], [0.02, 0.56]]) {
+    const fruit = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), mat(0xffa500, { roughness: 0.6 }));
+    fruit.position.set(fx, 1.03, fz); g.add(fruit);
+  }
+  scene.add(g);
+  return g;
+}
+// A potted plant: a terracotta pot, a trunk, and a leafy crown.
+function addPlant(scene, x, z, scale) {
+  const s = scale || 1;
+  const g = new THREE.Group();
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.16 * s, 0.3 * s, 12), mat(0xa85a2a, { roughness: 0.8 }));
+  pot.position.set(x, 0.15 * s, z); pot.castShadow = true; g.add(pot);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.04 * s, 0.05 * s, 0.5 * s, 8), mat(0x4a3220, { roughness: 1 }));
+  trunk.position.set(x, 0.5 * s, z); g.add(trunk);
+  const crownMat = mat(0x3a6a2a, { roughness: 1 });
+  for (const [dx, dy, dz, r] of [[0, 0.95, 0, 0.35], [0.2, 0.8, 0.1, 0.25], [-0.18, 0.85, -0.08, 0.25], [0.05, 1.1, -0.12, 0.22]]) {
+    const leaf = new THREE.Mesh(new THREE.SphereGeometry(r * s, 10, 8), crownMat);
+    leaf.position.set(x + dx * s, dy * s, z + dz * s); leaf.castShadow = true; g.add(leaf);
+  }
+  scene.add(g);
+  return g;
+}
+// A low coffee table with a book and a mug on top.
+function addCoffeeTable(scene, x, z, w) {
+  const g = new THREE.Group();
+  const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, 0.7), mat(0x4a3220, { roughness: 0.5 }));
+  top.position.set(x, 0.42, z); top.castShadow = true; g.add(top);
+  for (const [dx, dz] of [[-w / 2 + 0.08, -0.28], [w / 2 - 0.08, -0.28], [-w / 2 + 0.08, 0.28], [w / 2 - 0.08, 0.28]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 0.06), mat(0x2a2118, { roughness: 0.6 }));
+    leg.position.set(x + dx, 0.2, z + dz); g.add(leg);
+  }
+  const book = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, 0.22), mat(0xc0392b, { roughness: 0.8 }));
+  book.position.set(x - w / 4, 0.47, z); book.rotation.y = 0.3; g.add(book);
+  const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.09, 10), mat(0x2e6fb0, { roughness: 0.5 }));
+  mug.position.set(x + w / 4, 0.5, z + 0.1); g.add(mug);
+  scene.add(g);
+  return g;
+}
+// A bedside nightstand with a drawer and a small lamp.
+function addNightstand(scene, x, z) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.55, 0.45), mat(0x4a3220, { roughness: 0.6 }));
+  body.position.set(x, 0.28, z); body.castShadow = true; g.add(body);
+  const drawer = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.18, 0.03), mat(0x6b4226, { roughness: 0.6 }));
+  drawer.position.set(x, 0.35, z + 0.24); g.add(drawer);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.8, roughness: 0.3 }));
+  knob.position.set(x, 0.35, z + 0.27); g.add(knob);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.04, 10), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+  base.position.set(x, 0.57, z); g.add(base);
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.22, 8), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+  stem.position.set(x, 0.68, z); g.add(stem);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.16, 10, 1, true), mat(0xffd166, { roughness: 0.8, side: THREE.DoubleSide }));
+  shade.position.set(x, 0.82, z); g.add(shade);
+  lamp(scene, x, 0.9, z, 0xffe0b0, 0.5, 5);
+  scene.add(g);
+  return g;
+}
+// A tall wardrobe with two doors and brass handles. ry turns it to
+// face into the room (PI/2 faces east from the west wall).
+function addWardrobe(scene, x, z, ry) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = ry || 0;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.2, 0.55), mat(0x4a3220, { roughness: 0.6 }));
+  body.position.set(0, 1.1, 0); body.castShadow = true; g.add(body);
+  for (const dx of [-0.35, 0.35]) {
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.62, 2.0, 0.04), mat(0x5a3a24, { roughness: 0.6 }));
+    door.position.set(dx, 1.1, 0.29); g.add(door);
+    const handle = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.8, roughness: 0.3 }));
+    handle.position.set(dx + (dx < 0 ? 0.22 : -0.22), 1.1, 0.33); g.add(handle);
+  }
+  scene.add(g);
+  return g;
+}
+// A low partition wall (a room divider, not a full wall): about 1.1 m
+// high with a wood top rail, so the layout reads room by room but the
+// player can see over it. It is a visual divider, like the furniture:
+// the game has no collision, so the player walks through the gaps.
+// ry = 0 runs along x, PI/2 runs along z.
+function addPartition(scene, x, z, len, ry) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = ry || 0;
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(len, 1.05, 0.12), mat(0xc9b8a0, { roughness: 0.95 }));
+  wall.position.set(0, 0.55, 0); wall.castShadow = true; wall.receiveShadow = true; g.add(wall);
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.06, 0.16), mat(0x6b4226, { roughness: 0.6 }));
+  rail.position.set(0, 1.1, 0); g.add(rail);
+  scene.add(g);
+  return g;
+}
+// A ceiling fan: a mount, a motor, and four blades. The blades are
+// stored in homeFans so homeAnimate can spin them slowly.
+function addCeilingFan(scene, x, z) {
+  const g = new THREE.Group();
+  g.position.set(x, 3.2, z);
+  const mount = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.25, 8), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+  mount.position.set(0, 0.12, 0); g.add(mount);
+  const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.18, 12), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+  motor.position.set(0, -0.05, 0); g.add(motor);
+  const blades = new THREE.Group();
+  blades.position.set(0, -0.12, 0);
+  for (let i = 0; i < 4; i++) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.03, 0.18), mat(0x6b4226, { roughness: 0.6 }));
+    const a = i * Math.PI / 2;
+    b.position.set(Math.cos(a) * 0.5, 0, Math.sin(a) * 0.5);
+    b.rotation.y = -a;
+    blades.add(b);
+  }
+  g.add(blades);
+  scene.add(g);
+  homeFans.push(blades);
+  return g;
+}
+// A bookshelf with colourful books, like the one in the reference.
+// An open frame (back, sides, top, bottom) so the books show.
+function addBookshelf(scene, x, z, ry) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = ry || 0;
+  const wood = mat(0x4a3220, { roughness: 0.7 });
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.2, 1.8), wood);
+  back.position.set(-0.17, 1.1, 0); back.castShadow = true; g.add(back);
+  for (const dz of [-0.87, 0.87]) {
+    const side = new THREE.Mesh(new THREE.BoxGeometry(0.4, 2.2, 0.06), wood);
+    side.position.set(0, 1.1, dz); g.add(side);
+  }
+  for (const y of [0.03, 2.17]) {
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 1.8), wood);
+    cap.position.set(0, y, 0); g.add(cap);
+  }
+  const bookCols = [0xc0392b, 0x2e6fb0, 0x7ac74f, 0xffd166, 0x8a5a9a, 0xd8d8d8, 0x2e8b8b, 0xe07a5f];
+  for (let s = 0; s < 3; s++) {
+    const shelfY = 0.35 + s * 0.65;
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.04, 1.7), mat(0x6b4226, { roughness: 0.7 }));
+    shelf.position.set(0, shelfY, 0); g.add(shelf);
+    for (let b = 0; b < 6; b++) {
+      const bc = bookCols[(s * 6 + b) % bookCols.length];
+      const book = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.42, 0.22), mat(bc, { roughness: 0.8 }));
+      book.position.set(0.02, shelfY + 0.23, -0.68 + b * 0.27);
+      if ((s + b) % 5 === 0) book.rotation.x = 0.18;
+      g.add(book);
+    }
+  }
+  scene.add(g);
+  return g;
+}
+// A bathtub: a white tub with a rim and a tap. ry turns it (0 = long
+// side along z, PI/2 = long side along x).
+function addBathtub(scene, x, z, ry) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = ry || 0;
+  const tub = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.55, 1.8), mat(0xf4f6f8, { roughness: 0.3 }));
+  tub.position.set(0, 0.28, 0); tub.castShadow = true; g.add(tub);
+  const inner = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.1, 1.6), mat(0x9fc8d8, { roughness: 0.2 }));
+  inner.position.set(0, 0.5, 0); g.add(inner);
+  const rim = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.06, 1.9), mat(0xffffff, { roughness: 0.3 }));
+  rim.position.set(0, 0.57, 0); g.add(rim);
+  const tapBase = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.25, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
+  tapBase.position.set(0, 0.7, -0.8); g.add(tapBase);
+  const tapArm = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
+  tapArm.rotation.x = Math.PI / 2; tapArm.position.set(0, 0.82, -0.65); g.add(tapArm);
+  scene.add(g);
+  return g;
+}
+// A toilet: a tank, a bowl and a seat. It faces local +z.
+function addToilet(scene, x, z, ry) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = ry || 0;
+  const tank = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.55, 0.16), mat(0xf4f6f8, { roughness: 0.3 }));
+  tank.position.set(0, 0.55, -0.28); tank.castShadow = true; g.add(tank);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.4, 14), mat(0xf4f6f8, { roughness: 0.3 }));
+  bowl.position.set(0, 0.2, 0.05); bowl.castShadow = true; g.add(bowl);
+  const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.06, 14), mat(0xffffff, { roughness: 0.3 }));
+  seat.position.set(0, 0.42, 0.05); g.add(seat);
+  scene.add(g);
+  return g;
+}
+// A bathroom sink: a pedestal, a basin, a tap and a mirror above it.
+// It faces local +z (the mirror is on the local -z side, against the wall).
+function addBathroomSink(scene, x, z, ry) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = ry || 0;
+  const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.7, 10), mat(0xf4f6f8, { roughness: 0.3 }));
+  ped.position.set(0, 0.35, 0); ped.castShadow = true; g.add(ped);
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.22, 0.15, 14), mat(0xffffff, { roughness: 0.3 }));
+  basin.position.set(0, 0.75, 0); g.add(basin);
+  const tap = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.18, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
+  tap.position.set(0, 0.9, -0.2); g.add(tap);
+  const mirror = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.7), new THREE.MeshStandardMaterial({ color: 0xb8d8e8, roughness: 0.1, metalness: 0.6 }));
+  mirror.position.set(0, 1.5, -0.28); g.add(mirror);
+  scene.add(g);
+  return g;
 }
 
 function buildMansion(scene) {
-  // A large furnished room: 14 wide, 10 deep. Bed at the north end, living
-  // area with a big TV and a soft couch, dining table, kitchen, bookshelf.
+  // A large furnished home, 14 wide, 10 deep, laid out room by room
+  // like the reference: a bedroom in the north-west, a living room in
+  // the centre with blue sofas and a TV, a kitchen along the east wall,
+  // a dining table in the south-east, and a bathroom in the south-west,
+  // with low partition walls between the areas so the layout reads
+  // room by room. The front door (north-east) and the phone stay where
+  // they were, so the prologue and the walk-out still work.
   roomShell(scene, 14, 10, 3.4, 0x6b4a2f, 0xc9b8a0);
-  const rug = new THREE.Mesh(new THREE.BoxGeometry(5, 0.04, 3.5), mat(0x7a2a2a, { roughness: 1 }));
-  rug.position.set(0, 0.12, -1); rug.receiveShadow = true; scene.add(rug);
+  // --- Bedroom (north-west): a rug, the bed, a nightstand, a wardrobe.
+  const bedRug = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.04, 4.2), mat(0x7a2a2a, { roughness: 1 }));
+  bedRug.position.set(-4.5, 0.12, -2.8); bedRug.receiveShadow = true; scene.add(bedRug);
   addBed(scene, -4.5, -3.2, 2.4, false);
-  addSofa(scene, 0, -0.6, 3.2, 0x4a7c7a, 'sofa');
+  addNightstand(scene, -6.2, -3.2);
+  addWardrobe(scene, -6.7, -1.2, Math.PI / 2);
+  addPlant(scene, -6.3, -4.5, 1);
+  // A low partition between the bedroom and the living room, with a gap
+  // to walk through at the south end.
+  addPartition(scene, -2.5, -3.5, 3, Math.PI / 2);
+  // --- Living room (centre): blue L-shaped sectional sofas around a
+  // coffee table and a dark rug, facing the TV on the north wall.
+  // A ceiling fan turns above the coffee table.
+  const liveRug = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.04, 3.2), mat(0x1a1a2a, { roughness: 1 }));
+  liveRug.position.set(0.6, 0.12, -0.9); liveRug.receiveShadow = true; scene.add(liveRug);
+  addSofa(scene, 0.3, -0.2, 3.2, 0x2e4a8a, 'sofa', Math.PI);
+  addSofa(scene, 2.4, -1.2, 2.0, 0x2e4a8a, 'sofa2', -Math.PI / 2);
+  addCoffeeTable(scene, 0.3, -1.2, 1.4);
   addTV(scene, 0, 1.7, -4.85, 2.6, 'tv');
+  addCeilingFan(scene, 0.3, -1.2);
+  addPlant(scene, 2.8, -4.3, 1);
+  // --- Kitchen (east wall): counters, stove, sink, fridge, cabinets.
+  addKitchen(scene, 6.5, 0, 4, 0);
+  // --- Dining area (south-east): a table with four chairs.
   addDiningTable(scene, 3.8, 3.2);
-  addKitchen(scene, 6.5, 1, 4);
-  // Bookshelf on the west wall.
-  hbox(scene, 0.4, 2.4, 2.2, 0x4a3220, -6.7, 1.2, 2, null, { roughness: 0.7 });
-  for (let s = 0; s < 3; s++) {
-    for (let b = 0; b < 6; b++) {
-      const bc = [0xc0392b, 0x2e6fb0, 0x7ac74f, 0xffd166, 0x8a5a9a, 0xd8d8d8][(s * 6 + b) % 6];
-      hbox(scene, 0.3, 0.45, 0.25, bc, -6.7, 0.45 + s * 0.7, 1.2 + b * 0.3, null, { roughness: 0.8 });
-    }
-  }
+  addPlant(scene, 6.3, 4.3, 0.9);
+  // --- Bathroom (south-west, partitioned): a tub, a toilet, a sink.
+  // The partitions leave a 1 m gap at the north-east corner to walk in.
+  addPartition(scene, -5.75, 2, 2.5, 0);
+  addPartition(scene, -3.5, 3.5, 3, Math.PI / 2);
+  addBathtub(scene, -6.2, 3.8, 0);
+  addToilet(scene, -4.2, 4.5, Math.PI);
+  addBathroomSink(scene, -3.9, 2.6, -Math.PI / 2);
+  // --- Bookshelf on the west wall, between the bedroom and bathroom.
+  addBookshelf(scene, -6.7, 0.5, 0);
   addWindow(scene, -6.9, 1.9, -1.5, Math.PI / 2);
   addWindow(scene, 6.9, 1.9, -2.5, -Math.PI / 2);
-  addFloorLamp(scene, -6, -4);
   addFloorLamp(scene, 6, 4);
   // Chandelier over the living area.
   const ch = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.05, 8, 24), mat(0xd8b13a, { metalness: 0.8, roughness: 0.3 }));
@@ -428,28 +853,53 @@ function buildMansion(scene) {
   // player cannot miss it. Clicking it (or Pick up) starts the call.
   if (homePrologue && !homeCallDone) {
     const side = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.6, 0.5), mat(0x4a3220, { roughness: 0.7 }));
-    side.position.set(-2.8, 0.3, -3.2); side.castShadow = true; scene.add(side);
+    side.position.set(-3.0, 0.3, -3.2); side.castShadow = true; scene.add(side);
     const phone = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.03, 0.32), mat(0x111111, { roughness: 0.3, metalness: 0.5 }));
-    phone.position.set(-2.8, 0.62, -3.2); phone.name = 'phone'; phone.userData.homeAction = 'phone'; homeTargets.push(phone); scene.add(phone);
+    phone.position.set(-3.0, 0.62, -3.2); phone.name = 'phone'; phone.userData.homeAction = 'phone'; homeTargets.push(phone); scene.add(phone);
     const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.26), new THREE.MeshBasicMaterial({ color: 0x7ac74f }));
-    scr.rotation.x = -Math.PI / 2; scr.position.set(-2.8, 0.64, -3.2); scene.add(scr);
+    scr.rotation.x = -Math.PI / 2; scr.position.set(-3.0, 0.64, -3.2); scene.add(scr);
     phoneGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffd166, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
-    phoneGlow.scale.set(1.6, 1.6, 1); phoneGlow.position.set(-2.8, 0.9, -3.2); scene.add(phoneGlow);
+    phoneGlow.scale.set(1.6, 1.6, 1); phoneGlow.position.set(-3.0, 0.9, -3.2); scene.add(phoneGlow);
     const ring = textSprite('PHONE RINGING', '#2a2118', '#ffd166', 'Click the phone or Pick up');
-    ring.scale.set(3.0, 0.75, 1); ring.position.set(-2.8, 1.6, -3.2); scene.add(ring);
+    ring.scale.set(3.0, 0.75, 1); ring.position.set(-3.0, 1.6, -3.2); scene.add(ring);
     startRinging();
   }
+  // The front door: a real, visible, walkable exit on the north wall.
+  // It is locked and needs the mansion key, which is on the dining
+  // table. In the prologue the door leads to the Train Terminal (the
+  // same as the button); after that it leaves the Mansion. The button
+  // stays as a backup.
+  addExitDoor(scene, { x: 4.5, z: -4.9, ry: 0, keyId: 'mansion', keyLabel: 'mansion key', label: 'EXIT - FRONT DOOR' });
+  addRoomKey(scene, 3.8, 3.2, 'mansion', 'mansion key');
 }
 
 function buildSafehouse(scene) {
-  // A smaller furnished apartment: 8 wide, 6 deep. Bed, small sofa, TV,
-  // a table, a lamp, a kitchenette, one window. This is the safe house.
+  // A smaller furnished apartment, 8 wide, 6 deep, laid out room by
+  // room like the reference: a bedroom corner in the north-west, a
+  // living area in the east with a blue sofa and a TV, a kitchenette
+  // along the south wall, and a table to save at. A low partition
+  // separates the bed from the living area.
   roomShell(scene, 8, 6, 3.0, 0x5a4632, 0xbfb09a);
-  const rug = new THREE.Mesh(new THREE.BoxGeometry(3, 0.04, 2.2), mat(0x4a5a7a, { roughness: 1 }));
-  rug.position.set(0.5, 0.12, -0.5); rug.receiveShadow = true; scene.add(rug);
+  // --- Bedroom corner (north-west): a rug, the bed, a nightstand, a wardrobe.
+  const bedRug = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.04, 3.0), mat(0x4a5a7a, { roughness: 1 }));
+  bedRug.position.set(-2.4, 0.12, -1.4); bedRug.receiveShadow = true; scene.add(bedRug);
   addBed(scene, -2.4, -1.4, 1.6, true);
-  addSofa(scene, 1.6, -1.4, 2.0, 0x6a6a72, 'sofa');
-  addTV(scene, 0.2, 1.4, -2.85, 1.6, 'tv');
+  addNightstand(scene, -1.2, -2.5);
+  addWardrobe(scene, -3.7, 0.5, Math.PI / 2);
+  // A low partition between the bed and the living area, with a gap at
+  // the south end to walk through.
+  addPartition(scene, 0, -1.5, 2.5, Math.PI / 2);
+  // --- Living area (east): a blue sofa facing the TV, a coffee table,
+  // a dark rug, and a ceiling fan above.
+  const liveRug = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.04, 2.4), mat(0x1a1a2a, { roughness: 1 }));
+  liveRug.position.set(1.8, 0.12, -1.2); liveRug.receiveShadow = true; scene.add(liveRug);
+  addSofa(scene, 1.8, -0.4, 2.2, 0x2e4a8a, 'sofa', Math.PI);
+  addCoffeeTable(scene, 1.8, -1.4, 1.1);
+  addTV(scene, 1.8, 1.4, -2.85, 1.6, 'tv');
+  addCeilingFan(scene, 1.8, -1.2);
+  addPlant(scene, 3.5, -2.5, 0.8);
+  // --- Kitchenette (south wall): counters, stove, sink, mini fridge.
+  addKitchen(scene, 0.5, 2.6, 2.4, -Math.PI / 2);
   // Small table (click it to save, like the bed).
   const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 1.0), mat(0x4a3220, { roughness: 0.6 }));
   top.position.set(0, 0.72, 1.6); top.castShadow = true; top.name = 'table'; top.userData.homeAction = 'save'; homeTargets.push(top); scene.add(top);
@@ -461,12 +911,15 @@ function buildSafehouse(scene) {
     const seat = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.08, 0.45), mat(0x6b4226, { roughness: 0.7 }));
     seat.position.set(dx, 0.45, dz); scene.add(seat);
   }
-  addKitchen(scene, 3.6, 0.5, 2.4);
   addWindow(scene, 3.9, 1.8, -1, -Math.PI / 2);
   addFloorLamp(scene, -3.2, 2);
   lamp(scene, 0, 2.5, 0, 0xffe0b0, 0.6, 10);
   const sign = textSprite('SAFE HOUSE', '#2a2118', '#7ac74f', 'Nobody knows this place');
   sign.scale.set(3.0, 0.75, 1); sign.position.set(0, 2.6, -2.8); scene.add(sign);
+  // The front door: a real, visible, walkable exit on the east wall.
+  // It is locked and needs the safehouse key, which is on the table.
+  addExitDoor(scene, { x: 3.9, z: 0, ry: -Math.PI / 2, keyId: 'safehouse', keyLabel: 'safehouse key', label: 'EXIT - FRONT DOOR' });
+  addRoomKey(scene, 0, 1.6, 'safehouse', 'safehouse key');
 }
 
 // ---------- Visitable exteriors (white modern buildings, like the photo) ----------
@@ -571,17 +1024,13 @@ function buildIndustry(scene) {
 
 // A simple parked car (body + cabin + wheels) for the car park and airport.
 function homeCar(scene, color, x, z, ry) {
-  const g = new THREE.Group(); scene.add(g);
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.55, 1.1), mat(color, { roughness: 0.4, metalness: 0.5 }));
-  body.position.y = 0.45; body.castShadow = true; g.add(body);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.0), mat(0x18242e, { roughness: 0.2, metalness: 0.6 }));
-  cabin.position.set(-0.15, 0.95, 0); g.add(cabin);
-  for (const [wx, wz] of [[-0.75, 0.55], [0.75, 0.55], [-0.75, -0.55], [0.75, -0.55]]) {
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.18, 12), mat(0x111111, { roughness: 0.9 }));
-    w.rotation.x = Math.PI / 2; w.position.set(wx, 0.28, wz); g.add(w);
-  }
-  g.position.set(x, 0, z); g.rotation.y = ry || 0;
-  return g;
+  // A realistic car, built from parts (see player.js buildCar): a shaped
+  // body with a hood, a glass cabin with a roof, four wheels with hubs,
+  // headlights, taillights, a grille and bumpers - not a box.
+  const car = buildCar(color, { type: 'sedan' });
+  car.position.set(x, 0, z); car.rotation.y = ry || 0;
+  scene.add(car);
+  return car;
 }
 function departuresTexture() {
   const c = document.createElement('canvas'); c.width = 512; c.height = 256;
@@ -664,30 +1113,59 @@ function buildTerminal(scene) {
   // different paces, some on a phone, some with bags.
   const crowd = makeCrowd({ count: 12, bounds: { minX: -10, maxX: 10, minZ: -8, maxZ: 13 } });
   for (const p of crowd) { scene.add(p.group); terminalPedestrians.push(p); }
+  // The main entrance: a real, visible, walkable exit at the south end.
+  // It is a public building, so the entrance is unlocked. Walking
+  // through it leaves the Terminal (the Leave button stays as a backup).
+  addExitDoor(scene, { x: 0, z: 14.9, ry: Math.PI, label: 'EXIT - MAIN ENTRANCE' });
 }
 function buildHotel(scene) {
-  // A hotel suite: 10 wide, 7 deep. A double bed, a sofa, a big TV, a
-  // desk with a chair, a window with a city view, a minibar. The bed
-  // sleeps (and saves), like the mansion.
+  // A hotel suite, 10 wide, 7 deep, laid out room by room like the
+  // reference: a bedroom area in the north-west, a living area in the
+  // north-east with a blue sofa and a TV, a desk in the south-east, and
+  // a bathroom in the south-west, with a low partition around the
+  // bathroom so the layout reads room by room. The bed sleeps (and
+  // saves), like the mansion.
   roomShell(scene, 10, 7, 3.2, 0x5a4632, 0xd8cfc0);
-  const rug = new THREE.Mesh(new THREE.BoxGeometry(4, 0.04, 2.6), mat(0x2e4a6b, { roughness: 1 }));
-  rug.position.set(0, 0.12, -0.5); rug.receiveShadow = true; scene.add(rug);
+  // --- Bedroom area (north-west): a rug, the bed, two nightstands, a wardrobe.
+  const bedRug = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.04, 3.6), mat(0x2e4a6b, { roughness: 1 }));
+  bedRug.position.set(-2.8, 0.12, -1.6); bedRug.receiveShadow = true; scene.add(bedRug);
   addBed(scene, -2.8, -1.8, 2.2, false);
-  addSofa(scene, 1.8, -1.8, 2.4, 0x7a2e2e, 'sofa');
-  addTV(scene, 0, 1.6, -3.35, 2.0, 'tv');
-  // A desk with a chair, and a minibar fridge.
+  addNightstand(scene, -1.4, -2.8);
+  addNightstand(scene, -4.2, -2.8);
+  addWardrobe(scene, -4.7, -0.5, Math.PI / 2);
+  // --- Living area (north-east): a blue sofa facing the TV, a coffee
+  // table, a dark rug, and a ceiling fan above.
+  const liveRug = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.04, 2.6), mat(0x1a1a2a, { roughness: 1 }));
+  liveRug.position.set(1.8, 0.12, -1.4); liveRug.receiveShadow = true; scene.add(liveRug);
+  addSofa(scene, 1.8, -0.6, 2.4, 0x2e4a8a, 'sofa', Math.PI);
+  addCoffeeTable(scene, 1.8, -1.6, 1.2);
+  addTV(scene, 1.8, 1.6, -3.35, 2.0, 'tv');
+  addCeilingFan(scene, 1.8, -1.4);
+  addPlant(scene, 4.5, -3.0, 0.9);
+  // --- Desk area (south-east): a desk with a chair, and a minibar fridge.
   hbox(scene, 1.8, 0.08, 0.9, 0x4a3220, 3.6, 0.75, 1.6, null, { roughness: 0.6 });
   for (const [dx, dz] of [[-0.8, -0.35], [0.8, -0.35], [-0.8, 0.35], [0.8, 0.35]]) {
     hcyl(scene, 0.04, 0.04, 0.75, 0x2a2118, 3.6 + dx, 0.37, 1.6 + dz, null, { roughness: 0.6 });
   }
   const chair = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.5), mat(0x6b4226, { roughness: 0.7 }));
   chair.position.set(3.6, 0.45, 2.6); scene.add(chair);
-  hbox(scene, 0.7, 1.1, 0.6, 0xd8d8d8, -4.4, 0.55, 2.6, null, { metalness: 0.5, roughness: 0.3 });
+  hbox(scene, 0.7, 1.1, 0.6, 0xd8d8d8, 4.6, 0.55, 2.8, null, { metalness: 0.5, roughness: 0.3 });
+  // --- Bathroom (south-west, partitioned): a tub along the south wall,
+  // a toilet and a sink. The partitions leave a 1 m gap to walk in.
+  addPartition(scene, -4, 1.2, 2, 0);
+  addPartition(scene, -2, 2.35, 2.3, Math.PI / 2);
+  addBathtub(scene, -3.5, 3.0, Math.PI / 2);
+  addToilet(scene, -4.6, 1.8, 0);
+  addBathroomSink(scene, -2.4, 1.8, -Math.PI / 2);
   addWindow(scene, 4.9, 1.8, -1, -Math.PI / 2);
-  addFloorLamp(scene, -4, 2);
+  addFloorLamp(scene, -0.5, 2.8);
   lamp(scene, 0, 2.6, 0, 0xffe0b0, 0.7, 10);
   const sign = textSprite('HOTEL - YOUR SUITE', '#2a2118', '#ffd166', 'Room 412 - sleep here');
   sign.scale.set(3.4, 0.85, 1); sign.position.set(0, 2.7, -3.3); scene.add(sign);
+  // The suite door: a real, visible, walkable exit on the east wall.
+  // It is locked and needs the hotel key, which is on the desk.
+  addExitDoor(scene, { x: 4.9, z: 0, ry: -Math.PI / 2, keyId: 'hotel', keyLabel: 'hotel key', label: 'EXIT - SUITE DOOR' });
+  addRoomKey(scene, 3.6, 1.6, 'hotel', 'hotel key');
 }
 function buildAirport(scene) {
   // JFK terminal exterior: a long white modern terminal with a glass
@@ -788,6 +1266,12 @@ export function enterPlace(kind, onLeave, options) {
   homeKind = kind; homeOnLeave = onLeave || null;
   homeScene = new THREE.Scene();
   homeTargets = [];
+  homeDoors = [];
+  homeRoomKeys = [];
+  homeFans = [];
+  currentBedPos = null;
+  sleeping = false; sleepT = 0; sleepRestDone = false;
+  try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
   terminalPedestrians = [];
   const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel';
   if (isRoom) {
@@ -804,6 +1288,9 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'airport') { buildAirport(homeScene); homeBounds = { x: [-20, 20], z: [-16, 20] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
   else if (kind === 'carpark') { buildCarpark(homeScene); homeBounds = { x: [-18, 18], z: [-14, 18] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
   else return;
+  // Hide any room key the player already owns (a replay), so it cannot
+  // be picked up twice.
+  syncRoomKeys();
   homeCamera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 300);
   homeCamera.position.set(homeStart.x, homeStart.y, homeStart.z);
   homeYaw = homeStart.yaw; homePitch = 0;
@@ -832,6 +1319,10 @@ export function leavePlace() {
   if (homeRaf) { try { cancelAnimationFrame(homeRaf); } catch (e) { /* ignore */ } homeRaf = 0; }
   try { disposeScene(homeScene); } catch (e) { /* ignore */ }
   homeScene = null; homeCamera = null; homeTargets = [];
+  homeDoors = []; homeRoomKeys = []; homeFans = []; currentBedPos = null;
+  sleeping = false; sleepT = 0; sleepRestDone = false;
+  try { const a = getAvatar(); setAvatarPose('stand'); detachAvatar(); } catch (e) { /* ignore */ }
+  try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
   phoneGlow = null; terminalPedestrians = [];
   const bar = document.getElementById('homeBar');
   if (bar) bar.classList.add('hidden');
@@ -841,15 +1332,43 @@ export function leavePlace() {
 function homeAnimate() {
   if (!homeActive) return;
   homeRaf = requestAnimationFrame(homeAnimate);
+  const t = Date.now() / 1000;
+  const dt = homeAnimate.lastT === undefined ? 0.016 : Math.min(0.1, t - homeAnimate.lastT);
+  homeAnimate.lastT = t;
+  // While sleeping, the avatar lies on the bed and the camera watches
+  // from the bedside, so the player sees himself sleeping. The rest
+  // (save + "You slept") lands after about 4 seconds, and the view
+  // stays until the player wakes up. Movement is paused while asleep.
+  if (sleeping && currentBedPos && homeCamera) {
+    sleepT += dt;
+    try {
+      const a = getAvatar();
+      if (a.parent !== homeScene) { try { homeScene.add(a); } catch (e) { /* ignore */ } }
+      a.visible = true;
+    } catch (e) { /* ignore */ }
+    // Bedside camera: from the foot/side of the bed, close enough to
+    // see him clearly, looking at the bed.
+    const bx = currentBedPos.x, bz = currentBedPos.z;
+    homeCamera.position.set(bx + 2.2, 1.6, bz + 2.6);
+    homeCamera.lookAt(bx, 0.7, bz);
+    if (!sleepRestDone && sleepT > 4) {
+      sleepRestDone = true;
+      saveHomeGame(homeKind);
+      showHomeToast('You slept. Rested. Game saved. (Wake up when ready)');
+    }
+    renderer.render(homeScene, homeCamera);
+    return;
+  }
+  // In third-person the camera was left behind the avatar last frame;
+  // put it back on the player before moving, or movement starts from
+  // the wrong place.
+  beginPlayerFrame(homeCamera, 1.7);
   const sp = 0.07;
-  if (homeKeys['w']) homeCamera.position.z -= sp;
-  if (homeKeys['s']) homeCamera.position.z += sp;
-  if (homeKeys['a']) homeCamera.position.x -= sp;
-  if (homeKeys['d']) homeCamera.position.x += sp;
+  const mv = moveDelta(homeKeys, homeYaw, sp);
+  homeCamera.position.x += mv.dx; homeCamera.position.z += mv.dz;
   homeCamera.position.x = Math.max(homeBounds.x[0], Math.min(homeBounds.x[1], homeCamera.position.x));
   homeCamera.position.z = Math.max(homeBounds.z[0], Math.min(homeBounds.z[1], homeCamera.position.z));
   const moving = homeKeys['w'] || homeKeys['a'] || homeKeys['s'] || homeKeys['d'];
-  const t = Date.now() / 1000;
   homeCamera.position.y = 1.7 + (moving ? Math.sin(t * 5.2) * 0.03 : Math.sin(t * 0.8) * 0.008);
   homeCamera.rotation.order = 'YXZ';
   homeCamera.rotation.y = homeYaw;
@@ -861,10 +1380,88 @@ function homeAnimate() {
     const s = 1.3 + Math.sin(t * 6) * 0.35;
     phoneGlow.scale.set(s, s, 1);
   }
+  // The ceiling fans turn slowly.
+  for (const f of homeFans) {
+    try { f.rotation.y += dt * 1.5; } catch (e) { /* ignore */ }
+  }
+  // Room keys bob gently, so they catch the eye.
+  for (const k of homeRoomKeys) {
+    if (k.group && k.group.visible) {
+      k.group.position.y = 1.0 + Math.sin(t * 2) * 0.06;
+      k.group.rotation.y = Math.sin(t * 1.2) * 0.4;
+    }
+  }
+  // Walk up to a room key to pick it up (a missed click is not a dead end).
+  for (const k of homeRoomKeys) {
+    if (k.group && k.group.visible && !hasKey(k.keyId)) {
+      const dx = homeCamera.position.x - k.x, dz = homeCamera.position.z - k.z;
+      if (dx * dx + dz * dz < 1.2 * 1.2) {
+        giveKey(k.keyId, k.keyLabel);
+        showHomeToast('Picked up the ' + k.keyLabel + '.');
+        try { k.group.visible = false; } catch (e) { /* ignore */ }
+        try { k.label.visible = false; } catch (e) { /* ignore */ }
+      }
+    }
+  }
+  // Walkable exit doors: walking up to a door swings it open. If the
+  // door is locked it shows what key it needs (throttled, so the toast
+  // does not spam); the key is inside the room, so the player can
+  // always go back and get it. If it is unlocked, walking through it
+  // leaves the room - in the prologue the Mansion door leads to the
+  // Train Terminal instead.
+  for (const d of homeDoors) {
+    const dx = homeCamera.position.x - d.x, dz = homeCamera.position.z - d.z;
+    const near = dx * dx + dz * dz < 1.4 * 1.4;
+    if (near && d.keyId && !hasKey(d.keyId)) {
+      d.open = Math.max(0, d.open - dt * 2);
+      if (t - homeDoorLockedAt > 3) {
+        homeDoorLockedAt = t;
+        showHomeToast('Locked - needs the ' + d.keyLabel + '. It is in this room.');
+      }
+    } else if (near) {
+      // Swing the panel open as the player reaches it, then leave.
+      // In the prologue the phone comes first: the player cannot leave
+      // the Mansion before answering Jade's call.
+      if (homePrologue && homeKind === 'mansion' && !homeCallDone) {
+        if (t - homeDoorLockedAt > 3) {
+          homeDoorLockedAt = t;
+          showHomeToast('The phone is ringing - answer it first.');
+        }
+        d.open = Math.max(0, d.open - dt * 2);
+      } else {
+        d.open = Math.min(1, d.open + dt * 3);
+        if (d.open > 0.6) {
+          if (homePrologue && homeKind === 'mansion' && homeCallDone) goToTerminal();
+          else leavePlace();
+          return;
+        }
+      }
+    } else {
+      d.open = Math.max(0, d.open - dt * 2);
+    }
+    try { d.hinge.rotation.y = -d.open * 1.5; } catch (e) { /* ignore */ }
+  }
+  // Walk to the train: in the Terminal, walking up to the 4 train
+  // boards it (the prologue path), instead of only a button. Outside
+  // the prologue it just says the train is already ridden.
+  if (homeKind === 'terminal' && !sleeping) {
+    const dx = homeCamera.position.x - 0, dz = homeCamera.position.z - (-12);
+    if (dx * dx + dz * dz < 2.2 * 2.2) {
+      if (homePrologue) { boardTrain(); return; }
+      else if (t - (homeAnimate.trainToastAt || -10) > 5) {
+        homeAnimate.trainToastAt = t;
+        showHomeToast('The 4 train - you already rode it. The story is in Act II now.');
+      }
+    }
+  }
   // People cross the terminal concourse, going to work.
   if (homeKind === 'terminal') {
-    const dt = 1 / 60;
     for (const p of terminalPedestrians) updatePedestrian(p, dt);
+  }
+  // Third-person: show the player avatar and put the camera behind it.
+  {
+    const mv2 = moveDelta(homeKeys, homeYaw, 1);
+    applyPlayerPresence({ scene: homeScene, camera: homeCamera, x: homeCamera.position.x, z: homeCamera.position.z, yaw: homeYaw, pitch: homePitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: 1.7 });
   }
   renderer.render(homeScene, homeCamera);
 }
@@ -881,6 +1478,39 @@ function homeHandleTap(clientX, clientY) {
   const hits = homeRay.intersectObjects(homeTargets.filter(o => o.visible !== false), false);
   if (!hits.length) return;
   const action = hits[0].object.userData.homeAction || hits[0].object.name;
+  if (action === 'exitDoor') {
+    // Clicking a walkable exit door opens it. A locked door needs its
+    // key first; the key is inside the room. In the prologue the phone
+    // comes first: the player cannot leave before answering the call.
+    const door = hits[0].object.userData.doorRef;
+    if (homePrologue && homeKind === 'mansion' && !homeCallDone) {
+      showHomeToast('The phone is ringing - answer it first.');
+      return;
+    }
+    if (door && door.keyId && !hasKey(door.keyId)) {
+      showHomeToast('Locked - needs the ' + door.keyLabel + '. It is in this room.');
+      return;
+    }
+    if (homePrologue && homeKind === 'mansion' && homeCallDone) goToTerminal();
+    else leavePlace();
+    return;
+  }
+  if (action === 'roomKey') {
+    // Clicking a room key picks it up and unlocks its door.
+    const keyId = hits[0].object.userData.keyId;
+    const keyLabel = hits[0].object.userData.keyLabel || 'key';
+    if (!keyId) return;
+    if (hasKey(keyId)) { showHomeToast('You already have the ' + keyLabel + '.'); return; }
+    giveKey(keyId, keyLabel);
+    showHomeToast('Picked up the ' + keyLabel + '.');
+    for (const k of homeRoomKeys) {
+      if (k.keyId === keyId) {
+        try { k.group.visible = false; } catch (e) { /* ignore */ }
+        try { k.label.visible = false; } catch (e) { /* ignore */ }
+      }
+    }
+    return;
+  }
   if (action === 'phone') {
     answerPhone();
   } else if (action === 'boardTrain') {
@@ -891,7 +1521,7 @@ function homeHandleTap(clientX, clientY) {
     else showHomeToast('A bed. Not yours to sleep in here.');
   } else if (action === 'save') doSave();
   else if (action === 'tv') showHomeToast('The TV is on - the news is all about the grid and the water.');
-  else if (action === 'sofa') showHomeToast('Soft. You could nap here - but the city needs you.');
+  else if (action === 'sofa' || action === 'sofa2') showHomeToast('Soft. You could nap here - but the city needs you.');
   else if (action === 'info') showHomeToast(homeKind === 'hospital' ? 'City Hospital - the tower from the photo. Emergency is open 24 hours.' : 'Water treatment plant - the industrial line feeds this place.');
 }
 // Input: registered once, guarded by homeActive so the acts never fight it.

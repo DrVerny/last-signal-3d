@@ -9,6 +9,7 @@ import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
 import { grantPayout, openStore, getEquippedCarDef } from './economy.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
 // no long verbatim copying): 1. The Delaware Line (Rondout Reservoir),
@@ -187,6 +188,7 @@ let camBounds = VIEWS[1];
 // WASD stays inside the room while he is in there.
 const VALVE_ROOM_BOUNDS = { pos: [0, 1.7, -2], yaw: 0, x: [-3.4, 3.4], z: [-5.4, -1.4] };
 let inValveRoom = false;
+let stationDoorLockedAt = -10; // throttle for the "locked" toast at the door
 function resetView() {
   if (!actActive) return;
   if (inValveRoom) {
@@ -423,6 +425,28 @@ function buildMission1() {
   const doorHit = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
   doorHit.position.set(0, 1.4, -0.5); doorHit.name = 'stationDoor'; doorHit.userData.clickable = true; mission1.add(doorHit);
   window._stationDoorHit = doorHit;
+  // The station key hangs on a hook beside the door, with a gold glow
+  // and a floating label, so the player can find it before he needs
+  // the door. Clicking it (or walking up to it) picks it up, and the
+  // door unlocks. The key is always here, so the player can never get
+  // stuck at the locked door.
+  const keyGroup = new THREE.Group();
+  const keyRing = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.025, 8, 20), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
+  keyRing.position.set(0, 0.1, 0); keyGroup.add(keyRing);
+  const keyStem = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.22, 0.03), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
+  keyStem.position.set(0.05, -0.08, 0); keyGroup.add(keyStem);
+  const keyTooth = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.03), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
+  keyTooth.position.set(0.09, -0.16, 0); keyGroup.add(keyTooth);
+  const keyGlow = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.18 }));
+  keyGroup.add(keyGlow);
+  keyGroup.position.set(1.5, 1.5, -0.6);
+  keyGroup.name = 'stationKey'; keyGroup.userData.clickable = true;
+  keyGroup.userData.keyId = 'station'; keyGroup.userData.keyLabel = 'station key';
+  mission1.add(keyGroup);
+  window._stationKey = keyGroup;
+  const keyLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.28), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.9 }));
+  keyLabel.position.set(1.5, 1.95, -0.6); keyLabel.name = 'stationKeyLabel'; mission1.add(keyLabel);
+  window._stationKeyLabel = keyLabel;
   for (const wx of [-3, 3]) {
     const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1), new THREE.MeshStandardMaterial({ color: 0x0e1a24, roughness: 0.1, metalness: 0.4 }));
     win.position.set(wx, 2, -0.72); mission1.add(win);
@@ -564,6 +588,13 @@ function startMission1() {
   resetView();
   setTimeOfDay('day'); // Mission 1 (aqueduct) is bright day.
   currentPlaceKey = 'reservoir';
+  // If the player already has the station key (a replay), the key
+  // mesh beside the door is hidden so it cannot be picked up twice.
+  try {
+    const hasIt = hasKey('station');
+    if (window._stationKey) window._stationKey.visible = !hasIt;
+    if (window._stationKeyLabel) window._stationKeyLabel.visible = !hasIt;
+  } catch (e) { /* ignore */ }
   setObjectives(OBJ1, 0); updateHUD();
   document.getElementById('timerLabel').textContent = 'Water pressure';
   document.getElementById('timerVal').textContent = 'dropping 2%/hr';
@@ -775,18 +806,12 @@ function mainStTexture() {
 }
 // A simple parked car (body + cabin + wheels), for the street sides and
 // the car park. Returns a group; the caller positions and rotates it.
+// A realistic street car, built from parts (see player.js buildCar):
+// a shaped body with a hood, a glass cabin with a roof, four wheels
+// with hubs, headlights, taillights, a grille and bumpers - not a box.
 function makeStreetCar(color) {
-  const car = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.55, 1.1), stdMat({ color, roughness: 0.4, metalness: 0.5 }));
-  body.position.y = 0.45; body.castShadow = true; car.add(body);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.0), stdMat({ color: 0x18242e, roughness: 0.2, metalness: 0.6 }));
-  cabin.position.set(-0.15, 0.95, 0); car.add(cabin);
-  const wheelMat = stdMat({ color: 0x111111, roughness: 0.9 });
-  for (const [wx, wz] of [[-0.75, 0.55], [0.75, 0.55], [-0.75, -0.55], [0.75, -0.55]]) {
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.18, 12), wheelMat);
-    w.rotation.x = Math.PI / 2; w.position.set(wx, 0.28, wz); car.add(w);
-  }
-  return car;
+  const hex = (color === undefined || color === null) ? 0x9aa5ad : color;
+  return buildCar(hex, { type: 'sedan' });
 }
 // A street tree: a trunk and a round canopy.
 function makeStreetTree() {
@@ -868,31 +893,14 @@ function buildCityEnvironment() {
     mission2.add(jc);
     jamCars.push(jc);
   }
-  // Cars: two lanes, one each way. Body + cabin + wheels + headlights.
+  // Cars: two lanes, one each way. Realistic cars (see player.js
+  // buildCar), not boxes, with a shaped body, glass cabin, wheels,
+  // headlights and taillights.
   const carColors = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a];
   for (let i = 0; i < 6; i++) {
     const east = i % 2 === 0; // even cars go east (+x) on the near lane
-    const car = new THREE.Group();
     const col = carColors[i % carColors.length];
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.55, 1.1), stdMat({ color: col, roughness: 0.4, metalness: 0.5 }));
-    body.position.y = 0.45; body.castShadow = true; car.add(body);
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.0), stdMat({ color: 0x18242e, roughness: 0.2, metalness: 0.6 }));
-    cabin.position.set(-0.15, 0.95, 0); cabin.castShadow = true; car.add(cabin);
-    const wheelMat = stdMat({ color: 0x111111, roughness: 0.9 });
-    for (const [wx, wz] of [[-0.75, 0.55], [0.75, 0.55], [-0.75, -0.55], [0.75, -0.55]]) {
-      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.18, 12), wheelMat);
-      w.rotation.x = Math.PI / 2; w.position.set(wx, 0.28, wz); car.add(w);
-    }
-    const headMat = new THREE.MeshBasicMaterial({ color: 0xfff2c0 });
-    for (const hz of [-0.35, 0.35]) {
-      const h = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.2), headMat);
-      h.position.set(east ? 1.12 : -1.12, 0.5, hz); car.add(h);
-    }
-    const tailMat = new THREE.MeshBasicMaterial({ color: 0xff2a22 });
-    for (const hz of [-0.35, 0.35]) {
-      const t = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.2), tailMat);
-      t.position.set(east ? -1.12 : 1.12, 0.5, hz); car.add(t);
-    }
+    const car = buildCar(col, { type: 'sedan' });
     car.position.set(-40 + i * 14 + Math.random() * 6, 0, east ? -9.0 : -11.0); // car lanes, inside the bike lanes
     if (!east) car.rotation.y = Math.PI; // face the direction of travel
     mission2.add(car);
@@ -1034,6 +1042,12 @@ function getMiles(a, b) {
 const MISSION_PLACE = { 1: 'reservoir', 2: 'substation', 3: 'bridge' };
 const MISSION_TIME = { 1: 'day', 2: 'dusk', 3: 'night' };
 let travelActive = false, travelT = 0, travelDur = 18, travelOnArrive = null, travelGroup = null, travelCars = [], travelPedestrians = [];
+// The player's own car in the drive, with the driver (player avatar)
+// seated inside, so the player sees himself driving in third-person.
+// The car is rebuilt each drive from the equipped car, and it lives in
+// travelGroup, so it is hidden again when the drive ends (this also
+// fixes the sedan mesh that used to stay stuck to the camera).
+let driveCar = null;
 // Trekking: some legs are done on foot. The trek is a real walk through
 // the busy street (the green tiled MAIN ST, sidewalks, shops, parked
 // cars, a traffic jam, pedestrians) from one end to a gold marker at the
@@ -1220,19 +1234,11 @@ function buildTravelScene() {
     bar.position.set(9, 1.3, pz); travelGroup.add(bar);
   }
   // Traffic: cars coming the other way and cars ahead in our lane.
+  // Realistic cars (see player.js buildCar), not boxes.
   const carCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0xc07a1a];
   for (let i = 0; i < 8; i++) {
     const oncoming = i % 2 === 0;
-    const car = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.55, 1.1), stdMat({ color: carCols[i % carCols.length], roughness: 0.4, metalness: 0.5 }));
-    body.position.y = 0.45; body.castShadow = true; car.add(body);
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.0), stdMat({ color: 0x18242e, roughness: 0.2, metalness: 0.6 }));
-    cabin.position.set(-0.15, 0.95, 0); car.add(cabin);
-    const headMat = new THREE.MeshBasicMaterial({ color: 0xfff2c0 });
-    for (const hz of [-0.35, 0.35]) {
-      const h = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.2), headMat);
-      h.position.set(oncoming ? -1.12 : 1.12, 0.5, hz); car.add(h);
-    }
+    const car = buildCar(carCols[i % carCols.length], { type: 'sedan' });
     car.position.set(oncoming ? -2.2 : 2.2, 0, -20 - i * 36 - Math.random() * 10);
     if (!oncoming) car.rotation.y = Math.PI;
     travelGroup.add(car);
@@ -1492,6 +1498,42 @@ function startTravelDrive(toKey, onArrive) {
   travelDur = Math.min(21, Math.max(10, 8 + travelMiles * 0.15));
   // The drive matches the time of the mission being driven to.
   if (to.type === 'mission') setTimeOfDay(MISSION_TIME[to.mission]);
+  // The player's own car, in the equipped colour, with the driver (the
+  // player avatar) seated inside. The car faces -z (the driving
+  // direction), so it is rotated PI from the builder's +z front. The
+  // old drive car is disposed first, so a car bought since the last
+  // drive shows up and no stale car stays in the scene.
+  try {
+    if (driveCar) {
+      try { travelGroup.remove(driveCar); } catch (e) { /* ignore */ }
+      try {
+        driveCar.traverse(m => {
+          try { if (m.geometry) m.geometry.dispose(); } catch (e) { /* ignore */ }
+          try {
+            const mats = Array.isArray(m.material) ? m.material : (m.material ? [m.material] : []);
+            for (const mm of mats) { try { mm.dispose(); } catch (e) { /* ignore */ } }
+          } catch (e) { /* ignore */ }
+        });
+      } catch (e) { /* ignore */ }
+      driveCar = null;
+    }
+    driveCar = buildPlayerCar();
+    driveCar.rotation.y = Math.PI;
+    driveCar.position.set(0, 0, 4);
+    travelGroup.add(driveCar);
+    const driver = getAvatar();
+    try { if (driver.parent) driver.parent.remove(driver); } catch (e) { /* ignore */ }
+    setAvatarPose('sit');
+    driver.visible = true;
+    // Driver's seat, left side, sitting in the cabin. The driver is
+    // scaled to 0.72 so his head fits under the cabin roof, and the
+    // cabin glass is semi-transparent (see buildCar) so he is visible
+    // from the chase camera. He faces the car's forward (+z local).
+    driver.position.set(-0.38, 0.02, 0.35);
+    driver.rotation.set(0, 0, 0);
+    driver.scale.set(0.72, 0.72, 0.72);
+    driveCar.add(driver);
+  } catch (e) { driveCar = null; }
   camera.position.set(0, 1.7, 4);
   state.yaw = 0; state.pitch = 0;
   showDriveHood();
@@ -1516,6 +1558,22 @@ function endTravelDrive() {
   if (travelGroup) travelGroup.visible = false;
   hideDriveHood();
   hideActionBanner();
+  // The driver (player avatar) gets out of the car: put him back on
+  // his feet, at full size, and detach him from the car so the next
+  // scene's presence hook can place him at the player position. The
+  // car stays in travelGroup, which is hidden, so no car mesh is left
+  // stuck to the camera after the drive.
+  try {
+    const driver = getAvatar();
+    if (driveCar && driver && driver.parent === driveCar) {
+      try { driveCar.remove(driver); } catch (e) { /* ignore */ }
+    }
+    setAvatarPose('stand');
+    driver.scale.set(1, 1, 1);
+    driver.rotation.set(0, 0, 0);
+    driver.visible = false;
+    detachAvatar();
+  } catch (e) { /* ignore */ }
   if (travelToKey) currentPlaceKey = travelToKey;
   const cb = travelOnArrive; travelOnArrive = null; travelToKey = null;
   if (cb) cb();
@@ -1523,13 +1581,24 @@ function endTravelDrive() {
 function updateTravelDrive(dt, t) {
   if (!travelActive) return;
   travelT += dt;
-  // Drive forward at ~12 m/s; the road is 320 long and the longest drive
-  // is 21 s (252 m), so the camera stays on the road.
-  camera.position.z -= 12 * dt;
-  camera.position.x = 0;
-  camera.position.y = 1.7 + Math.sin(t * 6) * 0.02;
-  camera.rotation.order = 'YXZ';
-  camera.rotation.y = 0; camera.rotation.x = 0; camera.rotation.z = 0;
+  // The player's car drives forward at ~12 m/s; the road is 320 long
+  // and the longest drive is 21 s (252 m), so the car stays on the road.
+  // The camera follows the car from behind and above (a third-person
+  // driving view), so the player sees himself driving. The camera
+  // distance follows the zoom setting, so the player can pull in close
+  // to the car or back out for a wider view of the road.
+  const zoomDist = getZoom();
+  if (driveCar) {
+    driveCar.position.z -= 12 * dt;
+    camera.position.set(0, 1.7 + zoomDist * 0.35 + Math.sin(t * 6) * 0.02, driveCar.position.z + zoomDist + 1.5);
+    camera.lookAt(0, 1.0, driveCar.position.z - 8);
+  } else {
+    camera.position.z -= 12 * dt;
+    camera.position.x = 0;
+    camera.position.y = 1.7 + Math.sin(t * 6) * 0.02;
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = 0; camera.rotation.x = 0; camera.rotation.z = 0;
+  }
   // Traffic moves: oncoming cars rush toward the camera, cars ahead
   // crawl forward. Wrap them so the street never empties. Pedestrians
   // walk the sidewalks in both directions as the car drives past.
@@ -1724,8 +1793,10 @@ function guardDialogue() {
       { who: 'Caleb Bishop', text: 'Names. Numbers. Who hired you. And the key card - the terminal needs it.' }
     ], () => {
       guardsDown = true; hideGuardMarkers(); keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(1, 'Caleb talked them down');
+      // The guard hands over the substation gate key with the key card.
+      giveKey('substation', 'substation key');
       setObjectives(OBJ2, 1);
-      toast('The guards stood down. Click the white key card on the guard\u2019s belt, then the red log book on the desk.');
+      toast('The guards stood down. Guard 1 handed you the substation key. Click the white key card on the guard\u2019s belt, then the red log book on the desk.');
     });
   } else {
     showDialogue([
@@ -1734,8 +1805,11 @@ function guardDialogue() {
       { who: 'Jade Morales', text: 'He is not ready for this. Plan B - I slip in through the side gate while they are watching him. It is slower, and it costs us goodwill.' }
     ], () => {
       guardsDown = true; hideGuardMarkers(); keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(-1, 'the bluff failed'); integrity('Power', -5);
+      // Jade slipped in and took the substation gate key from the guard
+      // post on her way through, so the player has it either way.
+      giveKey('substation', 'substation key');
       setObjectives(OBJ2, 1);
-      toast('Jade slipped in through the side gate. Click the white key card, then the red log book.');
+      toast('Jade slipped in through the side gate and left you the substation key. Click the white key card, then the red log book.');
     });
   }
 }
@@ -2165,7 +2239,7 @@ function handleTap(clientX, clientY) {
   mouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(mouse, camera);
   const targets = [];
-  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, window._stationDoor, window._stationDoorHit);
+  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, window._stationDoor, window._stationDoorHit, window._stationKey, window._stationKeyLabel);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
   if (state.mission === 3) targets.push(...chargeMeshes, window._catwalkHit, ...(window._catwalkPlanks || []));
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
@@ -2210,7 +2284,29 @@ function interact(name) {
     openValveModal(); return;
   }
   if (name === 'digitalPanel') { toast('Digital control - sabotaged. It overcorrects every valve you set. The physical valves still work.'); return; }
-  if (name === 'stationDoor') { enterValveRoom(); return; }
+  if (name === 'stationKey' || name === 'stationKeyLabel') {
+    // The station key, on its hook beside the door. Picking it up
+    // unlocks the station door. Walking up to it also picks it up
+    // (see the animate loop), so a missed click is not a dead end.
+    if (hasKey('station')) { toast('You already have the station key.'); return; }
+    giveKey('station', 'station key');
+    toast('Picked up the station key. The station door is unlocked.');
+    sfxRepair();
+    try { if (window._stationKey) window._stationKey.visible = false; } catch (e) { /* ignore */ }
+    try { if (window._stationKeyLabel) window._stationKeyLabel.visible = false; } catch (e) { /* ignore */ }
+    return;
+  }
+  if (name === 'stationDoor') {
+    // The station door is locked: it needs the station key, which is
+    // on the hook beside the door. Without the key the door shows it
+    // is locked instead of opening.
+    if (!hasKey('station')) {
+      toast('Locked - needs the station key. It is on the hook beside the door.');
+      sfxThud();
+      return;
+    }
+    enterValveRoom(); return;
+  }
   if (name === 'valveRoomExit') { exitValveRoom(); return; }
   if (name === 'device1' && window._device1.visible) {
     state.inventory.push('RESET device (aqueduct)'); state.evidence.push('RESET device + fingerprint: Derrick Shaw');
@@ -2246,7 +2342,17 @@ function interact(name) {
   }
   if (name === 'scada') { openScadaModal(); return; }
   if (name === 'camera') { toast('Security camera - it watches the yard. The guards are the way in, not the fence.'); return; }
-  if (name === 'controlDoor') { toast('Control room - the SCADA terminal is on the desk outside. The manifesto is pinned inside, on the wall.'); return; }
+  if (name === 'controlDoor') {
+    // The control-room door is locked: it needs the substation key,
+    // which the guards hand over when they stand down. Without it the
+    // door shows it is locked; with it, the room is open.
+    if (!hasKey('substation')) {
+      toast('Locked - needs the substation key. The guards at the gate have it.');
+      sfxThud();
+      return;
+    }
+    toast('Control room - unlocked with the substation key. The SCADA terminal is on the desk outside. The manifesto is pinned inside, on the wall.'); return;
+  }
   if (name === 'manifesto' && manifestoMesh.visible) {
     state.evidence.push('Manifesto addressed to Jade');
     missionsDone[2] = true;
@@ -2293,18 +2399,47 @@ function animate() {
       if (dist2D(camera.position.x, camera.position.z, vx, -5.7) < 1.8) { openValveModal(); break; }
     }
   }
+  // Station key: walking up to the hook picks it up, so a missed click
+  // is not a dead end. The key is right beside the door, before the
+  // player needs it.
+  if (state.mission === 1 && !inValveRoom && !hasKey('station')
+    && document.getElementById('dialogue').classList.contains('hidden')
+    && document.getElementById('valveModal').classList.contains('hidden')) {
+    if (dist2D(camera.position.x, camera.position.z, 1.5, -0.6) < 1.2) {
+      giveKey('station', 'station key');
+      toast('Picked up the station key. The station door is unlocked.');
+      sfxRepair();
+      try { if (window._stationKey) window._stationKey.visible = false; } catch (e) { /* ignore */ }
+      try { if (window._stationKeyLabel) window._stationKeyLabel.visible = false; } catch (e) { /* ignore */ }
+    }
+  }
   // Station door: walking up to the entrance enters the valve room, so
   // the player can get in by walking through the door even if the click
   // misses. The door is also clickable (see the Mission 1 targets).
-  // The player starts 8.7 m back, so this cannot fire at spawn.
+  // The player starts 8.7 m back, so this cannot fire at spawn. The
+  // door is locked: it needs the station key, which is on a hook beside
+  // the door (see buildMission1). Without the key the door shows it is
+  // locked instead of opening, so the player is never stuck - the key
+  // is right there before he needs the door.
   if (state.mission === 1 && !inValveRoom
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
-    if (dist2D(camera.position.x, camera.position.z, 0, -0.68) < 1.8) enterValveRoom();
+    if (dist2D(camera.position.x, camera.position.z, 0, -0.68) < 1.8) {
+      if (hasKey('station')) enterValveRoom();
+      else if (t - stationDoorLockedAt > 3) {
+        stationDoorLockedAt = t;
+        toast('Locked - needs the station key. It is on the hook beside the door.');
+        sfxThud();
+      }
+    }
   }
+  // In third-person the camera was left behind the avatar last frame;
+  // put it back on the player before moving, or movement starts from
+  // the wrong place.
+  beginPlayerFrame(camera, state.mission === 3 ? 1.9 : 1.7);
   const sp = 0.05;
-  if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
-  if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
+  const mv = moveDelta(keys, state.yaw, sp);
+  camera.position.x += mv.dx; camera.position.z += mv.dz;
   camera.position.x = Math.max(camBounds.x[0], Math.min(camBounds.x[1], camera.position.x));
   camera.position.z = Math.max(camBounds.z[0], Math.min(camBounds.z[1], camera.position.z));
   const moving = keys['w'] || keys['a'] || keys['s'] || keys['d'];
@@ -2390,6 +2525,11 @@ function animate() {
     if (hornTimer > 9) { hornTimer = 0; honkHorn(); }
   }
   updateTrek(dt, t); // on-foot trek, no-op when inactive
+  // The station key bobs gently on its hook, so it catches the eye.
+  if (window._stationKey && window._stationKey.visible) {
+    window._stationKey.position.y = 1.5 + Math.sin(t * 2) * 0.06;
+    window._stationKey.rotation.y = Math.sin(t * 1.2) * 0.4;
+  }
   updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
   // Sound: footsteps while moving, heartbeat and score tension. The bomb
   // countdown and the bridge gap are the tense moments here.
@@ -2402,6 +2542,11 @@ function animate() {
   setTension(tension);
   soundTick(dt, { moving, heartbeatBpm: hb });
   updateDeckChase(dt); // Verrazzano deck chase, no-op when inactive
+  // Third-person: show the player avatar and put the camera behind it.
+  {
+    const mv2 = moveDelta(keys, state.yaw, 1);
+    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: state.mission === 3 ? 1.9 : 1.7 });
+  }
   renderer.render(scene, camera);
 }
 animate();

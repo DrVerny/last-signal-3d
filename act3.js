@@ -9,6 +9,7 @@ import { initSoundUI, setAmbient, setTension, soundTick, sfxDoor, sfxBoom, sfxGa
 import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing } from './action.js';
 import { grantPayout } from './economy.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame } from './player.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -1304,9 +1305,13 @@ function animate() {
     camera.position.set(16, 4.2, -22);
     camera.lookAt(trainMesh.position.x, 2.5, -30);
   } else {
+    // In third-person the camera was left behind the avatar last frame;
+    // put it back on the player before moving, or movement starts from
+    // the wrong place.
+    beginPlayerFrame(camera, camY);
     const sp = 0.05;
-    if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
-    if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
+    const mv = moveDelta(keys, state.yaw, sp);
+    camera.position.x += mv.dx; camera.position.z += mv.dz;
     camera.position.x = Math.max(camBounds.x[0], Math.min(camBounds.x[1], camera.position.x));
     camera.position.z = Math.max(camBounds.z[0], Math.min(camBounds.z[1], camera.position.z));
     camera.rotation.order = 'YXZ';
@@ -1369,6 +1374,12 @@ function animate() {
   setTension(tension);
   soundTick(dt, { moving, heartbeatBpm: hb });
   updateEscapeAction(dt); // the escape action sequence, no-op when inactive
+  // Third-person: show the player avatar and put the camera behind it.
+  // Skipped during the bridge exterior shot, which has its own camera.
+  if (!bridgeShot.active) {
+    const mv2 = moveDelta(keys, state.yaw, 1);
+    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: camY });
+  }
   renderer.render(scene, camera);
 }
 animate();

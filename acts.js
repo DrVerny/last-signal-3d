@@ -11,6 +11,7 @@
 import './core.js';
 import { initEconomy, isStoreOpen } from './economy.js';
 import { enterPlace } from './home.js';
+import { initPlayer } from './player.js';
 
 const ACTS = {
   1: { file: './game.js', name: 'Act I: The 4 Train', help: 'Drag to look around • Click glowing objects to inspect • WASD to move • R / Reset view • F / Flashlight • B / Store • H / Home • Start: talk through the opening scene' },
@@ -218,6 +219,9 @@ window.__lsGoToAct = goToAct;
 // already finished) and the HUD buttons. No wallet needed - demo mode.
 try { initEconomy(); } catch (e) { /* economy is optional */ }
 try { wireLifeButtons(); } catch (e) { /* buttons are optional */ }
+// Player presence: third-person avatar, alphabet touch controller, zoom,
+// Restart and Camera buttons. No wallet needed - demo mode.
+try { initPlayer(); } catch (e) { /* player UI is optional */ }
 // A fresh player (no prologue done, no act save) starts in his room
 // with the phone ringing. Anyone who has boarded the train, or who has
 // an act save, loads straight into the act they reached.

@@ -98,9 +98,35 @@
 /* Life / economy bar in the HUD: wallet balance + Store / Home / Map. */
 #lifeBar{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 #walletLine{font-size:13px;color:#ffd166;font-weight:bold;background:#1a2a10;border:1px solid #4a6a2a;border-radius:6px;padding:4px 8px}
-#storeBtn,#homeBtn,#mapBtn{background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:6px;padding:4px 9px;cursor:pointer;font-size:11px}
-#storeBtn:hover,#homeBtn:hover,#mapBtn:hover{background:#1d4a5f}
+#storeBtn,#homeBtn,#mapBtn,#camBtn,#restartBtn{background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:6px;padding:4px 9px;cursor:pointer;font-size:11px}
+#storeBtn:hover,#homeBtn:hover,#mapBtn:hover,#camBtn:hover,#restartBtn:hover{background:#1d4a5f}
+#camBtn{border-color:#ffd166;color:#ffd166}
+#restartBtn{border-color:#ef476f;color:#ffb3c0}
 #mapBtn{border-color:#ffd166;color:#ffd166}
+
+/* Alphabet touch controller (player.js): on-screen W/A/S/D letter
+   buttons for movement on touch devices, plus zoom and camera toggles.
+   The pad sits bottom-left and never blocks the canvas drag-look,
+   because the buttons are HTML above the canvas. */
+#touchPad{position:fixed;left:14px;bottom:44px;z-index:9;display:flex;flex-direction:column;gap:8px;pointer-events:none;user-select:none;-webkit-user-select:none}
+#touchPad .touch-row{display:flex;gap:8px;justify-content:center;align-items:center}
+#touchPad .touch-row span{display:flex;align-items:center;justify-content:center;width:56px;height:56px}
+.touch-key{width:56px;height:56px;border-radius:12px;border:2px solid #4cc9f0;background:rgba(8,14,20,.72);color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px;cursor:pointer;pointer-events:auto;touch-action:none;font-family:Georgia,serif}
+.touch-key.pressed,.touch-key:active{background:#ffd166;color:#111;border-color:#ffd166}
+#touchZoom{position:fixed;right:14px;bottom:44px;z-index:9;display:flex;align-items:center;gap:8px;user-select:none;-webkit-user-select:none}
+#touchZoom button{width:48px;height:48px;border-radius:12px;border:2px solid #4cc9f0;background:rgba(8,14,20,.72);color:#fff;font-size:24px;font-weight:bold;cursor:pointer;touch-action:none}
+#touchZoom button:active{background:#ffd166;color:#111;border-color:#ffd166}
+#zoomLabel{color:#ffd166;font-size:13px;font-weight:bold;min-width:34px;text-align:center}
+#touchMisc{position:fixed;right:14px;bottom:104px;z-index:9;display:flex;gap:8px}
+#touchMisc button{border:2px solid #ffd166;background:rgba(8,14,20,.72);color:#ffd166;border-radius:10px;padding:8px 12px;font-size:13px;font-weight:bold;cursor:pointer;touch-action:none}
+#touchMisc button:active{background:#ffd166;color:#111}
+@media (max-width:640px){
+  #touchPad{bottom:56px}
+  #touchPad .touch-row span{width:52px;height:52px}
+  .touch-key{width:52px;height:52px;font-size:20px}
+  #touchZoom{bottom:56px}
+  #touchMisc{bottom:116px}
+}
 
 /* Store overlay (economy.js). */
 #storeOverlay{position:fixed;inset:0;background:rgba(5,8,12,.88);z-index:35;display:flex;align-items:center;justify-content:center}
