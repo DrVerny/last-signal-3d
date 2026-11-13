@@ -1035,7 +1035,10 @@ function applyDrag(dx, dy) {
   // a wall, so the player can turn all the way around and see behind.
   if (state.yaw > Math.PI) state.yaw -= Math.PI * 2;
   if (state.yaw < -Math.PI) state.yaw += Math.PI * 2;
-  state.pitch = Math.max(-0.6, Math.min(0.6, state.pitch));
+  // Look up and down freely, almost straight up and straight down, so
+  // the player can turn his head like a person. Stops just short of
+  // straight up/down (1.5 rad = 86 deg) so the view never flips over.
+  state.pitch = Math.max(-1.5, Math.min(1.5, state.pitch));
 }
 canvas.addEventListener('pointerdown', e => {
   if (!actActive) return;
