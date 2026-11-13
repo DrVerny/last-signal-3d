@@ -1031,13 +1031,10 @@ canvas.style.touchAction = 'none';
 let dragging = false, lx = 0, ly = 0, downX = 0, downY = 0, dragMoved = 0;
 function applyDrag(dx, dy) {
   state.yaw -= dx * 0.0012; state.pitch -= dy * 0.0012;
-  if (exteriorView) {
-    // Orbiting the train: let the yaw swing all the way around.
-    if (state.yaw > Math.PI) state.yaw -= Math.PI * 2;
-    if (state.yaw < -Math.PI) state.yaw += Math.PI * 2;
-  } else {
-    state.yaw = Math.max(-0.9, Math.min(0.9, state.yaw));
-  }
+  // Full 360-degree look: the yaw wraps around instead of stopping at
+  // a wall, so the player can turn all the way around and see behind.
+  if (state.yaw > Math.PI) state.yaw -= Math.PI * 2;
+  if (state.yaw < -Math.PI) state.yaw += Math.PI * 2;
   state.pitch = Math.max(-0.6, Math.min(0.6, state.pitch));
 }
 canvas.addEventListener('pointerdown', e => {

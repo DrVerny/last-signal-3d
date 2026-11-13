@@ -194,7 +194,10 @@ canvas.addEventListener('pointermove', e => {
   const dx = e.clientX - lx, dy = e.clientY - ly;
   dragMoved += Math.abs(dx) + Math.abs(dy);
   state.yaw -= dx * 0.0012; state.pitch -= dy * 0.0012;
-  state.yaw = Math.max(-1.2, Math.min(1.2, state.yaw));
+  // Full 360-degree look: the yaw wraps around instead of stopping at
+  // a wall, so the player can turn all the way around and see behind.
+  if (state.yaw > Math.PI) state.yaw -= Math.PI * 2;
+  if (state.yaw < -Math.PI) state.yaw += Math.PI * 2;
   state.pitch = Math.max(-0.6, Math.min(0.6, state.pitch));
   lx = e.clientX; ly = e.clientY;
 });
