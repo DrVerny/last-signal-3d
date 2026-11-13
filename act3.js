@@ -7,7 +7,8 @@ import { registerHumans, updateSpeakingGestures } from './gestures.js';
 import { registerLipSyncHumans } from './lipsync.js';
 import { initSoundUI, setAmbient, setTension, soundTick, sfxDoor, sfxBoom, sfxGavel, sfxShutter, sfxRev, sfxTrainPass, sfxThud, sfxAlert } from './sound.js';
 import { runHoldQTE } from './qte.js';
-import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
+import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing } from './action.js';
+import { grantPayout } from './economy.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -170,13 +171,16 @@ function roadTexture() {
 // own exposure on the shared renderer.
 renderer.toneMappingExposure = 1.0;
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a0d10);
-scene.fog = new THREE.FogExp2(0x0a0d10, 0.02);
+// Act III is dawn: the bridge at dawn. A soft mauve dawn sky and a low
+// warm sun, so the act reads as a different time of day from the night
+// bridge of Act II. The final bridge chapter sets its own dawn values.
+scene.background = new THREE.Color(0x2a2028);
+scene.fog = new THREE.FogExp2(0x2a2028, 0.016);
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 200);
 camera.position.set(0, 1.7, 8);
 const ambient = new THREE.AmbientLight(0xbfc8d4, 0.5); scene.add(ambient);
-const hemi = new THREE.HemisphereLight(0x9db8d4, 0x2a2418, 0.4); scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff2d8, 1.2); sun.position.set(12, 20, 8);
+const hemi = new THREE.HemisphereLight(0xd8a8a0, 0x2a2418, 0.45); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffd9a0, 1.1); sun.position.set(-14, 7, 8);
 sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024); scene.add(sun);
 function stdMat(opts) { return new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.8, metalness: 0.05 }, opts)); }
 function box(parent, w, h, d, color, x, y, z, name, matOpts) {
@@ -465,11 +469,20 @@ function startChapter1() {
   setObjectives(0); updateHUD();
   document.getElementById('timerLabel').textContent = 'EBS virus';
   ebsTick();
+  // The reason for Act III: who called, what is wrong, what is at stake.
+  // The final choice - how the city fixes itself - is the whole game.
+  showBriefing({
+    title: 'Act III - The Human Signal',
+    calledBy: 'Jade Morales - she called you at dawn, after the bridge.',
+    problem: 'Derrick Shaw left one last fail-safe: a virus in the Emergency Broadcast System. In twelve hours it broadcasts a fake all-clear, then a fake evacuation order.',
+    stakes: 'Mass panic across the city - and the choice of how to fix it is yours. Quick fix, rebuild, or a third way. The choice you make is the ending.'
+  }, () => {
   showDialogue([
     { who: 'Jade Morales', text: 'Four AM. Thirty-six hours after the first blackout. MTA Rail Control Center, Midtown. Derrick Shaw left one last fail-safe: a virus in the Emergency Broadcast System.' },
     { who: 'Caleb Bishop', text: 'Twelve hours, and it broadcasts a fake all-clear - then a fake evacuation order. Mass panic.' },
     { who: 'Jade Morales', text: 'I have the fix. But it needs a choice - and the choice is the whole game. Click the terminal when you are ready.' }
   ], () => { toast('Click the glowing terminal to decide how the city fixes the EBS.'); });
+  });
 }
 
 // ---------- Chapter 2: The Courtroom ----------
@@ -1126,6 +1139,8 @@ function endAct3() {
   try {
     localStorage.setItem('lastSignalAct3', JSON.stringify({ trust: state.trust, integrity: state.integrity, evidence: state.evidence, finalChoice: state.finalChoice, bridgePath: state.bridgePath }));
   } catch (e) { /* private mode */ }
+  // Mission pay: finishing Act III earns $40,000 (once only).
+  try { grantPayout('act3'); } catch (e) { /* economy is optional */ }
   const el = document.getElementById('endCard');
   el.classList.remove('hidden');
   const endings = {
@@ -1150,6 +1165,22 @@ function endAct3() {
   // to reveal: wallet connected and both choices sealed on-chain.
   setupRevealButton();
   if (window.__lsActManager) window.__lsActManager.setEndCardButtons('act3');
+}
+
+// Pause / resume for a home visit: freeze the render loop and input
+// WITHOUT disposing the scene (stopAct() disposes it, so it is only for
+// act transitions). The escape timer is stopped so it does not fire
+// while the player is away; the escape itself is not a fail state.
+export function pauseAct() {
+  actActive = false;
+  if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
+  try { if (typeof stopEscapeTimer === 'function') stopEscapeTimer(); } catch (e) { /* ignore */ }
+  try { document.getElementById('dialogue').classList.add('hidden'); } catch (e) { /* ignore */ }
+}
+export function resumeAct() {
+  if (actActive) return;
+  actActive = true;
+  animate();
 }
 
 // Stop this act cleanly (the game is complete, but stopAct keeps the

@@ -86,3 +86,71 @@
 #loadingText{color:#9fb8c8}
 #loadingError{color:#ef476f;font-size:13px;margin-top:10px}
 #loadingContinue{margin-top:14px;background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:8px;padding:9px 14px;cursor:pointer}
+
+/* Act II valve / SCADA modal rows (moved from act2.html so the single page carries them). */
+.valve-row,.feeder-row{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:13px}
+.valve-row label,.feeder-row label{width:110px;color:#9fb8c8}
+.valve-row .bar,.feeder-row .bar{flex:1}
+.valve-row .val,.feeder-row .val{width:44px;text-align:right;color:#ffd166}
+.valve-row button,.feeder-row button{background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:14px}
+#valveStatus,#scadaStatus{font-size:13px;color:#7ac74f;margin:6px 0;min-height:18px}
+#bombVal{color:#ef476f;font-weight:bold}
+/* Life / economy bar in the HUD: wallet balance + Store / Home / Map. */
+#lifeBar{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+#walletLine{font-size:13px;color:#ffd166;font-weight:bold;background:#1a2a10;border:1px solid #4a6a2a;border-radius:6px;padding:4px 8px}
+#storeBtn,#homeBtn,#mapBtn{background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:6px;padding:4px 9px;cursor:pointer;font-size:11px}
+#storeBtn:hover,#homeBtn:hover,#mapBtn:hover{background:#1d4a5f}
+#mapBtn{border-color:#ffd166;color:#ffd166}
+
+/* Store overlay (economy.js). */
+#storeOverlay{position:fixed;inset:0;background:rgba(5,8,12,.88);z-index:35;display:flex;align-items:center;justify-content:center}
+.store-panel{width:min(760px,94vw);max-height:92vh;overflow-y:auto;background:#101820;border:1px solid #2a3540;border-radius:12px;padding:16px 18px;color:#e8eef2;font-family:Georgia,serif}
+.store-head{display:flex;align-items:center;gap:12px;font-size:20px;font-weight:bold;letter-spacing:2px;color:#ffd166}
+.store-head #storeBalance{margin-left:auto;font-size:14px;color:#7ac74f;letter-spacing:0}
+.store-head button{background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;padding:7px 14px;cursor:pointer;font-size:14px}
+.store-tabs{display:flex;gap:8px;margin:14px 0}
+.store-tabs button{flex:1;padding:10px;font-size:15px;background:#1a2a33;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;cursor:pointer}
+.store-tabs button.active{background:#ffd166;color:#111;border-color:#ffd166;font-weight:bold}
+.store-body{display:flex;gap:16px;align-items:flex-start}
+.store-look{flex:0 0 220px;text-align:center}
+.store-look-label{font-size:12px;letter-spacing:2px;color:#9fb8c8;margin-bottom:6px}
+#lookCanvas{width:220px;height:320px;background:#0a141b;border:1px solid #2a3540;border-radius:8px}
+#lookCaption{font-size:12px;color:#9fb8c8;margin-top:6px;line-height:1.4;min-height:32px}
+.store-items{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.store-item{background:#0a141b;border:1px solid #2a3540;border-radius:8px;padding:10px 12px}
+.store-item-name{font-weight:bold;font-size:15px}
+.store-swatch{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.store-item-desc{font-size:12px;color:#9fb8c8;margin:4px 0 6px;line-height:1.3}
+.store-item-price{font-size:14px;color:#ffd166;margin-bottom:8px}
+.store-item button{width:100%;background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:6px;padding:7px 10px;cursor:pointer;font-size:13px}
+.store-item button:hover{background:#1d4a5f}
+.store-item button:disabled{opacity:.5;cursor:default}
+.store-msg{font-size:13px;color:#7ac74f;margin-top:12px;min-height:18px}
+@media (max-width:640px){.store-body{flex-direction:column}.store-look{flex:none;margin:0 auto}.store-items{width:100%}}
+
+/* Home bar (home.js): place name + Sleep / Save / Leave. */
+#homeBar{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:50;background:rgba(8,14,20,.92);border:1px solid #ffd166;border-radius:10px;padding:8px 14px;display:flex;gap:10px;align-items:center;max-width:94vw;flex-wrap:wrap;justify-content:center}
+#homeBarTitle{color:#ffd166;font-weight:bold;letter-spacing:1px;font-size:14px}
+#homeBarInfo{color:#9fb8c8;font-size:12px}
+#homeBar button{background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px}
+#homeBar button:hover{background:#1d4a5f}
+#homeLeaveBtn{border-color:#ffd166!important;color:#ffd166!important}
+
+/* Home chooser (acts.js): pick the Mansion or the Safe House. */
+#homeChooser{position:fixed;inset:0;background:rgba(5,8,12,.85);z-index:35;display:flex;align-items:center;justify-content:center}
+.home-chooser-panel{width:min(480px,92vw);background:#101820;border:1px solid #2a3540;border-radius:12px;padding:20px;color:#e8eef2;text-align:center}
+.home-chooser-panel h2{margin:0 0 6px;color:#ffd166;letter-spacing:2px;font-size:20px}
+.home-chooser-panel p{color:#9fb8c8;font-size:13px;margin:0 0 16px;line-height:1.4}
+.home-chooser-panel button{display:block;width:100%;margin:8px 0;padding:12px;font-size:15px;background:#12303f;color:#fff;border:1px solid #4cc9f0;border-radius:8px;cursor:pointer;text-align:left}
+.home-chooser-panel button:hover{background:#1d4a5f}
+.home-chooser-panel button small{display:block;color:#9fb8c8;font-size:12px;margin-top:3px}
+
+/* Car hood shown at the bottom of the screen during a drive (act2.js). */
+#driveHood{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(720px,92vw);height:84px;z-index:8;pointer-events:none;display:none}
+#driveHood .hood-shape{position:absolute;inset:0;clip-path:polygon(0% 100%,14% 0%,86% 0%,100% 100%);opacity:.96}
+#driveHood .hood-label{position:absolute;left:0;right:0;bottom:8px;text-align:center;color:#fff;font-size:13px;letter-spacing:2px;font-weight:bold;text-shadow:0 1px 4px rgba(0,0,0,.8)}
+
+/* End-card buttons are built by the act manager (acts.js) per act. */
+#endCardButtons{display:flex;flex-direction:column;gap:10px;margin-top:14px;align-items:stretch;min-width:min(420px,90vw)}
+#endSummary{max-width:640px;line-height:1.5}
+#endSummary p{margin:10px 0}

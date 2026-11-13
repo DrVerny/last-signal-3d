@@ -19,6 +19,12 @@
       <span id="zamaWallet"></span>
     </div>
     <div id="zamaStatus" class="zama-status"></div>
+    <div id="lifeBar">
+      <span id="walletLine" title="Money earned from missions - spend it in the Store">💵 <span id="walletBal">$0</span></span>
+      <button id="storeBtn" type="button" title="Open the Store - clothes, cars, accessories (or press B)">Store (B)</button>
+      <button id="homeBtn" type="button" title="Go home - the Mansion or the Safe House (or press H)">Home (H)</button>
+      <button id="mapBtn" type="button" style="display:none" title="Open the city map - drive anywhere (or press M)">Map (M)</button>
+    </div>
     <div class="hud-row">
       <div class="meter"><label>Trust - Jade ↔ Caleb</label><div class="bar"><div id="trustBar" style="width:30%"></div></div><span id="trustVal">3 / 10</span></div>
       <div class="meter"><label id="timerLabel">Battery (emergency lights)</label><div class="bar"><div id="timerBar" style="width:100%"></div></div><span id="timerVal">15:00</span></div>
@@ -88,7 +94,7 @@
   <button id="soundBtn" title="Ambient sound, effects and score are on - click to mute">🔊 Sound on</button>
   <button id="flashBtn" title="Flashlight is off - press F or click to turn it on">🔦 Light off</button>
   <div id="qtePrompt" class="hidden"><div id="qteLabel"></div><div id="qteSub"></div><div id="qteBarWrap"><div id="qteBar"></div></div><div id="qteKey"></div></div>
-  <div id="help">Drag to look around • Click glowing objects to inspect • WASD to move • R / Reset view to re-centre • F / Flashlight in the dark • Start: talk through the opening scene</div>
+  <div id="help">Drag to look around • WASD to move • Click glowing objects to inspect • B / Store (clothes, cars) • M / City map (Act II) • H / Home • F / Flashlight in the dark • R / Reset view</div>
 </div>
 <script src="vendor/ethers.umd.min.js"></script>
 <script type="module" src="acts.js"></script>

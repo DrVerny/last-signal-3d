@@ -9,6 +9,7 @@ import { initSoundUI, setAmbient, setTension, soundTick, sfxDoor, sfxRepair, sfx
 import { initFlashlight, toggleFlashlight, updateFlashlight } from './flashlight.js';
 import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
+import { grantPayout } from './economy.js';
 // THE LAST SIGNAL - Act I: The 4 Train - 3D prototype
 // Original short dialogue in the spirit of the script; no long verbatim copying.
 // Sealed choice: hidden until reveal. In demo mode it is simulated locally;
@@ -1508,6 +1509,9 @@ function endAct() {
       prioritySealedOnChain: wasSealedOnChain('priority')
     }));
   } catch (e) { /* private mode: Act II starts from its defaults */ }
+  // Mission pay: finishing Act I earns $8,000 (once only - the economy
+  // tracks paid missions, so a replay never pays twice).
+  try { grantPayout('act1'); } catch (e) { /* economy is optional */ }
   const el = document.getElementById('endCard');
   el.classList.remove('hidden');
   document.getElementById('endSummary').innerHTML =
@@ -1519,6 +1523,22 @@ function endAct() {
     `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
     `<p>Next: Act II - City of Wires. Press "Begin Act II" below to continue.</p>`;
   if (window.__lsActManager) window.__lsActManager.setEndCardButtons('act1');
+}
+
+// Pause / resume for a home visit: freeze the render loop and input
+// WITHOUT disposing the scene (stopAct() disposes it, so it is only for
+// act transitions). The battery timer already checks actActive, so it
+// pauses on its own. Resume restarts the loop exactly where it stopped.
+export function pauseAct() {
+  actActive = false;
+  if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
+  try { document.getElementById('dialogue').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { document.getElementById('repairModal').classList.add('hidden'); } catch (e) { /* ignore */ }
+}
+export function resumeAct() {
+  if (actActive) return;
+  actActive = true;
+  animate();
 }
 
 // Stop this act cleanly so the next act can load on the same page: halt

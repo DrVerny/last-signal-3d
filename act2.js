@@ -7,7 +7,8 @@ import { registerLipSyncHumans } from './lipsync.js';
 import { initSoundUI, setAmbient, setTension, soundTick, sfxRepair, sfxTick, sfxPowerRestored, sfxBoom, sfxThud, sfxWhoosh } from './sound.js';
 import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
-import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
+import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
+import { grantPayout, openStore, getEquippedCarDef } from './economy.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
 // no long verbatim copying): 1. The Delaware Line (Rondout Reservoir),
@@ -35,6 +36,7 @@ const state = {
 };
 const OBJ1 = [
   'Reach the Rondout control station - talk to Caleb',
+  'Enter the valve room through the station door',
   'Balance the pressure: all three lines to 70% or more',
   'Choose which line runs reduced for 2 hours',
   'Find the sabotage device - who built it?'
@@ -127,6 +129,13 @@ function signTexture(text, bg, fg, sub) {
     ctx.textAlign = 'left';
   });
 }
+// A floating text sprite (a label) from signTexture, for shop names and
+// street signs. Transparent background, so only the text shows. Returns
+// a THREE.Sprite; the caller sets its scale and position.
+function makeTextSprite(text, color) {
+  const tex = signTexture(text, 'rgba(0,0,0,0)', color || '#ffd166', '');
+  return new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
+}
 function gaugeTexture(label) {
   return canvasTexture(256, 256, (ctx, w, h) => {
     ctx.fillStyle = '#10141a'; ctx.fillRect(0, 0, w, h);
@@ -173,8 +182,18 @@ const VIEWS = {
   3: { pos: [0, 2.2, 10], yaw: 0, x: [-1.2, 1.2], z: [-14, 12] }
 };
 let camBounds = VIEWS[1];
+// The valve room inside the control station: the player enters through
+// the station door and walks to the valves. A separate bounds box, so
+// WASD stays inside the room while he is in there.
+const VALVE_ROOM_BOUNDS = { pos: [0, 1.7, -2], yaw: 0, x: [-3.4, 3.4], z: [-5.4, -1.4] };
+let inValveRoom = false;
 function resetView() {
   if (!actActive) return;
+  if (inValveRoom) {
+    camera.position.set(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[1], VALVE_ROOM_BOUNDS.pos[2]);
+    state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
+    return;
+  }
   const v = VIEWS[state.mission];
   camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
   state.yaw = v.yaw; state.pitch = 0; camBounds = v;
@@ -321,6 +340,65 @@ async function loadHumans() {
 
 // ---------- Mission 1: The Delaware Line (Rondout Reservoir) ----------
 let waterMesh;
+// The valve room, inside the control station (the station building is a
+// solid box, so the room is built as its own enclosed space within the
+// building footprint: x -4 to 4, z -6 to -1, 3.2 high). The front wall
+// has a doorway that lines up with the station door outside. The player
+// enters through the door, walks to a valve wheel, and the pressure
+// controls open when he reaches the valves. The EXIT door takes him back
+// outside to find the sabotage device.
+function buildValveRoom() {
+  const room = new THREE.Group(); mission1.add(room);
+  const wallMat = stdMat({ color: 0x8a7a68, roughness: 0.95 });
+  const mk = (w, h, d, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
+    m.position.set(x, y, z); m.receiveShadow = true; room.add(m); return m;
+  };
+  // Floor and ceiling.
+  mk(8, 0.1, 5, 0, 0.05, -3.5);
+  mk(8, 0.1, 5, 0, 3.25, -3.5);
+  // Back, left and right walls.
+  mk(8, 3.2, 0.15, 0, 1.6, -6);
+  mk(0.15, 3.2, 5, -4, 1.6, -3.5);
+  mk(0.15, 3.2, 5, 4, 1.6, -3.5);
+  // Front wall in two segments plus a lintel, leaving a doorway 1.2 wide.
+  mk(3.4, 3.2, 0.15, -2.3, 1.6, -1);
+  mk(3.4, 3.2, 0.15, 2.3, 1.6, -1);
+  mk(1.2, 1.0, 0.15, 0, 2.7, -1);
+  // Warm interior lights and a ceiling fixture.
+  const l1 = new THREE.PointLight(0xffe0b0, 0.9, 9); l1.position.set(0, 2.8, -2.5); room.add(l1);
+  const l2 = new THREE.PointLight(0xffe0b0, 0.7, 9); l2.position.set(0, 2.8, -5); room.add(l2);
+  const fix = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.3), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, emissive: 0xffe9a8, emissiveIntensity: 1.2 }));
+  fix.position.set(0, 3.15, -3.5); room.add(fix);
+  // VALVE ROOM sign above the door, inside.
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'WATER PRESSURE'), transparent: true, depthWrite: false }));
+  sign.scale.set(3.2, 0.8, 1); sign.position.set(0, 2.45, -1.2); room.add(sign);
+  // EXIT door in the doorway (click it to go back outside) + green EXIT sign.
+  const exit = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.1, 0.08), stdMat({ color: 0x2a2118, roughness: 0.7 }));
+  exit.position.set(0, 1.05, -1.08); exit.name = 'valveRoomExit'; exit.userData.clickable = true; room.add(exit);
+  window._valveRoomExit = exit;
+  const exitHit = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.4, 0.5), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  exitHit.position.set(0, 1.2, -1.1); exitHit.name = 'valveRoomExit'; exitHit.userData.clickable = true; room.add(exitHit);
+  window._valveRoomExitHit = exitHit;
+  const exitSign = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.35), new THREE.MeshStandardMaterial({ color: 0x0a3a0a, emissive: 0x2aff7a, emissiveIntensity: 0.9 }));
+  exitSign.position.set(0, 2.3, -1.05); room.add(exitSign);
+}
+function enterValveRoom() {
+  if (inValveRoom) return;
+  inValveRoom = true;
+  camera.position.set(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[1], VALVE_ROOM_BOUNDS.pos[2]);
+  state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
+  setObjectives(OBJ1, 2);
+  toast('Valve room - walk up to a valve wheel to open the pressure controls. Click the green EXIT door to go back outside.');
+}
+function exitValveRoom() {
+  if (!inValveRoom) return;
+  inValveRoom = false;
+  camera.position.set(0, 1.7, 2);
+  state.yaw = 0; state.pitch = 0; camBounds = VIEWS[1];
+  toast('Back outside the station.');
+}
+
 function buildMission1() {
   // Ground: grassy upstate field, dirt track to the station.
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), stdMat({ color: 0x4a5a34, roughness: 1 }));
@@ -345,9 +423,11 @@ function buildMission1() {
   }
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT RESERVOIR', '#2a2118', '#ffd166', 'CONTROL STATION'), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 4.6, -3.2); mission1.add(sign);
-  // Three valve assemblies on a concrete plinth, in front of the station.
-  const plinth = box(mission1, 10, 0.25, 2, 0x8a8a82, 0, 0.12, 2.5);
-  plinth.receiveShadow = true;
+  // The valve room, inside the control station: the player enters through
+  // the station door and walks to the valves. The three valve assemblies
+  // live on the back wall of the room, not outside on a plinth, so the
+  // valve puzzle only opens once he has walked in to reach them.
+  buildValveRoom();
   const valveDefs = [
     { key: 'hospital', label: 'HOSPITAL', color: 0x7ac74f, x: -3 },
     { key: 'residential', label: 'RESIDENTIAL', color: 0x4cc9f0, x: 0 },
@@ -356,26 +436,29 @@ function buildMission1() {
   window._valveMeshes = {};
   for (const v of valveDefs) {
     const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.6, 12), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 }));
-    pipe.rotation.z = Math.PI / 2; pipe.position.set(v.x, 0.55, 2.5); pipe.castShadow = true; mission1.add(pipe);
+    pipe.rotation.z = Math.PI / 2; pipe.position.set(v.x, 0.55, -5.7); pipe.castShadow = true; mission1.add(pipe);
     const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.06, 10, 24), new THREE.MeshStandardMaterial({ color: v.color, emissive: v.color, emissiveIntensity: 0.35, roughness: 0.4, metalness: 0.3 }));
-    wheel.position.set(v.x, 1.25, 2.5); wheel.castShadow = true;
+    wheel.position.set(v.x, 1.25, -5.7); wheel.castShadow = true;
     wheel.name = 'valve' + v.key[0].toUpperCase() + v.key.slice(1); wheel.userData.clickable = true; mission1.add(wheel);
     window._valveMeshes[v.key] = wheel;
     // Generous invisible click target around the whole valve assembly: the
     // torus is a thin ring with an empty hub, so a click dead-centre on the
     // wheel (the obvious place to click) would otherwise miss it entirely.
     const hit = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.6, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-    hit.position.set(v.x, 1.4, 2.5); hit.name = wheel.name; hit.userData.clickable = true; mission1.add(hit);
+    hit.position.set(v.x, 1.4, -5.7); hit.name = wheel.name; hit.userData.clickable = true; mission1.add(hit);
     window._valveMeshes[v.key + 'Hit'] = hit;
     for (let s = 0; s < 3; s++) {
       const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.8, 0.05), stdMat({ color: v.color, roughness: 0.5 }));
       spoke.position.copy(wheel.position); spoke.rotation.z = s * Math.PI / 3; mission1.add(spoke);
     }
     const gauge = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshStandardMaterial({ map: gaugeTexture(v.label), roughness: 0.6 }));
-    gauge.position.set(v.x, 2.3, 2.2); mission1.add(gauge);
+    gauge.position.set(v.x, 2.3, -5.85); mission1.add(gauge);
     const lbl = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture(v.label, '#111111', '#e8e8e8', ''), transparent: true, depthWrite: false }));
-    lbl.scale.set(2.2, 0.55, 1); lbl.position.set(v.x, 3.1, 2.5); mission1.add(lbl);
+    lbl.scale.set(2.2, 0.55, 1); lbl.position.set(v.x, 2.9, -5.7); mission1.add(lbl);
   }
+  // A long main pipe along the back wall, joining the three valves.
+  const mainPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 7.5, 12), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 }));
+  mainPipe.rotation.z = Math.PI / 2; mainPipe.position.set(0, 0.4, -5.85); mainPipe.castShadow = true; mission1.add(mainPipe);
   // Digital control panel, cracked screen, red warning light - sabotaged.
   const panel = box(mission1, 1.6, 2, 0.5, 0x2a2f33, 5.2, 1.2, -1, 'digitalPanel', { roughness: 0.5, metalness: 0.4 });
   panel.rotation.y = -0.5;
@@ -450,9 +533,9 @@ setInterval(() => {
       if (valveTimer) { clearInterval(valveTimer); valveTimer = null; }
       document.getElementById('valveModal').classList.add('hidden');
       integrity('Water', 10);
-      setObjectives(OBJ1, 2);
+      setObjectives(OBJ1, 3);
       window._device1.visible = true; window._device1Hit.visible = true;
-      toast('Pressure holding - the aqueduct is stable. Something on the station wall catches your eye.');
+      toast('Pressure holding - the aqueduct is stable. Head back outside - something on the station wall catches your eye.');
       moralChoiceWater();
     }
   } else stableHold = 0;
@@ -469,14 +552,25 @@ function moralChoiceWater() {
     { who: 'Radio', text: 'Copy, Bishop. We will make it work. Hospitals report pressure coming back up.' },
     { who: 'Caleb', text: 'It does not feel good.' },
     { who: 'Jade', text: 'It is not supposed to. Now - that board on the wall. Click it. It is not MTA issue.' }
-  ], () => { setObjectives(OBJ1, 3); toast('Click the small green circuit board on the station wall.'); });
+  ], () => { setObjectives(OBJ1, 4); toast('Click the small green circuit board on the station wall - it is outside, so leave the valve room first if you are still in it.'); });
 }
 function startMission1() {
   resetView();
+  setTimeOfDay('day'); // Mission 1 (aqueduct) is bright day.
+  currentPlaceKey = 'reservoir';
   setObjectives(OBJ1, 0); updateHUD();
   document.getElementById('timerLabel').textContent = 'Water pressure';
   document.getElementById('timerVal').textContent = 'dropping 2%/hr';
   document.getElementById('timerBar').style.width = '80%';
+  // Every mission starts with a briefing: who asked, what is wrong, and
+  // what is at stake. The phone call (Act I) covered the first mission;
+  // this is the reason for Mission 1.
+  showBriefing({
+    title: 'Mission 1 - The Water',
+    calledBy: 'Jade Morales, MTA signal engineer - she called you at dawn.',
+    problem: 'The Delaware Aqueduct pressure is dropping two percent an hour. The valves are inside the water facility, and someone has been tampering with them.',
+    stakes: 'Half the city\u2019s water. In 36 hours the taps run dry - hospitals, homes, the treatment plant. And the man behind it used to run the city\u2019s planning office.'
+  }, () => {
   showDialogue([
     { who: 'Jade Morales', text: 'Next morning, 6 AM. The Delaware Aqueduct - eighty-five miles, half the city\u2019s water. Pressure is dropping two percent an hour. Thirty-six hours and the taps run dry.' },
     { who: 'Caleb Bishop', text: 'And this Derrick Shaw - he used to work for the city?' },
@@ -485,7 +579,8 @@ function startMission1() {
     { who: 'Jade Morales', text: 'No. He watched the system fail and decided the only way to fix it was to break it. I agree with his diagnosis. Not his prescription.' }
   ], () => {
     setObjectives(OBJ1, 1);
-    toast('Click a valve wheel to open the pressure controls - balance all three lines to 70% or more.');
+    toast('Enter the valve room through the station door - the valves are inside. Walk up to a valve wheel to open the pressure controls.');
+  });
   });
 }
 
@@ -569,33 +664,203 @@ function buildMission2() {
 }
 
 // ---------- Living city around the substation (Mission 2) ----------
-// Animated: cityCars drive the road, cityTrain runs the elevated track.
+// Animated: cityCars drive the road, cityTrain runs the elevated track,
+// cityPedestrians walk the sidewalks, and the traffic jam honks.
 const cityCars = [];
+const cityPedestrians = [];
+const jamCars = [];
 let cityTrain = null;
-function buildingWindowTexture(litRatio) {
-  const c = document.createElement('canvas'); c.width = 128; c.height = 256;
+let hornTimer = 0;
+let hornCtx = null;
+function honkHorn() {
+  try {
+    if (!hornCtx) hornCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (hornCtx.state === 'suspended') hornCtx.resume();
+    const t0 = hornCtx.currentTime;
+    for (const start of [0, 0.22]) {
+      const osc = hornCtx.createOscillator();
+      osc.type = 'square'; osc.frequency.value = 370;
+      const g = hornCtx.createGain();
+      g.gain.setValueAtTime(0.0001, t0 + start);
+      g.gain.exponentialRampToValueAtTime(0.05, t0 + start + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + start + 0.18);
+      osc.connect(g); g.connect(hornCtx.destination);
+      osc.start(t0 + start); osc.stop(t0 + start + 0.2);
+    }
+  } catch (e) { /* no audio - the jam is still visible */ }
+}
+// White modern facade: a clean white wall with a regular grid of small
+// square windows, like the hospital in the photo the user sent (tall white
+// tower, rounded corner, rows of windows, lower white wing). The city
+// buildings use this so the whole city looks like the photo.
+function whiteFacadeTexture(cols, rows, litRatio) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#14181d'; ctx.fillRect(0, 0, 128, 256);
-  for (let r = 0; r < 14; r++) for (let col = 0; col < 6; col++) {
-    const lit = Math.random() < litRatio;
-    ctx.fillStyle = lit ? (Math.random() < 0.7 ? '#ffd166' : '#9fd8ff') : '#0a0d10';
-    ctx.fillRect(8 + col * 20, 10 + r * 17, 12, 10);
+  ctx.fillStyle = '#f4f6f8'; ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = '#e2e6ea'; ctx.fillRect(0, 0, 256, 10);
+  const gw = 256 / cols, gh = 256 / rows;
+  for (let r = 0; r < rows; r++) for (let col = 0; col < cols; col++) {
+    const lit = Math.random() < (litRatio || 0);
+    ctx.fillStyle = lit ? '#ffd166' : '#2a3a4a';
+    ctx.fillRect(col * gw + gw * 0.22, r * gh + gh * 0.25, gw * 0.56, gh * 0.5);
   }
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+function whiteFacadeMat(cols, rows, litRatio) {
+  return new THREE.MeshStandardMaterial({ map: whiteFacadeTexture(cols, rows, litRatio), roughness: 0.85, metalness: 0.02 });
+}
+// ---------- Tiled road (from the street photo the user sent) ----------
+// The city streets are a GREEN TILED road: hexagonal tiles, green bike
+// lanes with bicycle symbols, "MAIN ST" painted on the road, parked cars
+// on both sides, trees lining the street, shops with awnings, and a white
+// striped crosswalk. The hex tile pattern is drawn on a canvas and
+// repeated along the road.
+function hexTileTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#2a5a35'; ctx.fillRect(0, 0, 256, 256); // grout between tiles
+  const s = 18; // hexagon size (centre to vertex)
+  const hw = Math.sqrt(3) * s, hh = 1.5 * s;
+  let row = 0;
+  for (let y = -hh; y < 256 + hh; y += hh, row++) {
+    for (let x = -hw; x < 256 + hw; x += hw) {
+      const cx = x + (row % 2 === 0 ? 0 : hw / 2);
+      const cy = y;
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const a = Math.PI / 6 + k * Math.PI / 3; // pointy-top hexagon
+        const px = cx + Math.cos(a) * (s - 1.5), py = cy + Math.sin(a) * (s - 1.5);
+        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = (row + Math.round(cx / hw)) % 2 === 0 ? '#3d7a4d' : '#4a8a5a';
+      ctx.fill();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+// A white bicycle symbol (two wheels and a frame) for the bike lanes.
+function bikeSymbolTexture() {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 128, 128);
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(30, 88, 20, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(98, 88, 20, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(30, 88); ctx.lineTo(58, 52); ctx.lineTo(98, 88); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(58, 52); ctx.lineTo(78, 52); ctx.lineTo(98, 88); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(58, 52); ctx.lineTo(48, 88); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(72, 40); ctx.lineTo(86, 40); ctx.stroke();
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// "MAIN ST" painted on the road in white.
+function mainStTexture() {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 512, 128);
+  ctx.fillStyle = '#f2f2f2'; ctx.font = 'bold 64px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('MAIN ST', 256, 84);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// A simple parked car (body + cabin + wheels), for the street sides and
+// the car park. Returns a group; the caller positions and rotates it.
+function makeStreetCar(color) {
+  const car = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.55, 1.1), stdMat({ color, roughness: 0.4, metalness: 0.5 }));
+  body.position.y = 0.45; body.castShadow = true; car.add(body);
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.0), stdMat({ color: 0x18242e, roughness: 0.2, metalness: 0.6 }));
+  cabin.position.set(-0.15, 0.95, 0); car.add(cabin);
+  const wheelMat = stdMat({ color: 0x111111, roughness: 0.9 });
+  for (const [wx, wz] of [[-0.75, 0.55], [0.75, 0.55], [-0.75, -0.55], [0.75, -0.55]]) {
+    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.18, 12), wheelMat);
+    w.rotation.x = Math.PI / 2; w.position.set(wx, 0.28, wz); car.add(w);
+  }
+  return car;
+}
+// A street tree: a trunk and a round canopy.
+function makeStreetTree() {
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 1.4, 8), stdMat({ color: 0x5a3a22, roughness: 0.95 }));
+  trunk.position.y = 0.7; g.add(trunk);
+  const top = new THREE.Mesh(new THREE.SphereGeometry(0.85, 12, 10), stdMat({ color: 0x2e6a2e, roughness: 0.95 }));
+  top.position.y = 1.9; top.scale.y = 0.85; g.add(top);
+  return g;
+}
+// A shop awning: a sloped striped panel over a shopfront, with a sign.
+function makeShopAwning(color, label) {
+  const g = new THREE.Group();
+  const awn = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.12, 1.6), stdMat({ color, roughness: 0.8 }));
+  awn.position.set(0, 2.6, 0.8); awn.rotation.x = 0.35; g.add(awn);
+  if (label) {
+    const s = makeTextSprite(label, '#f2e9d8');
+    s.scale.set(3.2, 0.8, 1); s.position.set(0, 3.3, 0.9); g.add(s);
+  }
+  return g;
+}
 function buildCityEnvironment() {
-  // Road running east-west just beyond the north fence (z = -10).
-  const road = new THREE.Mesh(new THREE.PlaneGeometry(90, 7), stdMat({ color: 0x1e2124, roughness: 0.95 }));
+  // Road running east-west just beyond the north fence (z = -10). The
+  // street looks like the photo: a GREEN TILED road (hexagonal tiles),
+  // green bike lanes with bicycle symbols, "MAIN ST" painted on it,
+  // parked cars on both sides, trees lining the street, shops with
+  // awnings, and a white striped crosswalk. Layout from the curb in:
+  // parked cars, bike lane, car lanes, bike lane, parked cars.
+  const roadTex = hexTileTexture();
+  roadTex.repeat.set(20, 2);
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(90, 7), new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95 }));
   road.rotation.x = -Math.PI / 2; road.position.set(0, 0.03, -10); road.receiveShadow = true; mission2.add(road);
-  // Dashed yellow centre line and white edge lines.
+  // Green bike lanes along both edges of the road.
+  for (const z of [-8.0, -12.0]) {
+    const lane = new THREE.Mesh(new THREE.PlaneGeometry(90, 1.0), stdMat({ color: 0x2e7a4a, roughness: 0.95 }));
+    lane.rotation.x = -Math.PI / 2; lane.position.set(0, 0.05, z); mission2.add(lane);
+  }
+  // Bicycle symbols painted in the bike lanes.
+  const bikeTex = bikeSymbolTexture();
+  for (const z of [-8.0, -12.0]) for (const x of [-30, -10, 10, 30]) {
+    const sym = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), new THREE.MeshBasicMaterial({ map: bikeTex, transparent: true, opacity: 0.85, depthWrite: false }));
+    sym.rotation.x = -Math.PI / 2; sym.position.set(x, 0.06, z); mission2.add(sym);
+  }
+  // "MAIN ST" painted on the road.
+  const mainTex = mainStTexture();
+  for (const x of [-20, 20]) {
+    const t = new THREE.Mesh(new THREE.PlaneGeometry(8, 2), new THREE.MeshBasicMaterial({ map: mainTex, transparent: true, opacity: 0.9, depthWrite: false }));
+    t.rotation.x = -Math.PI / 2; t.position.set(x, 0.06, -10); mission2.add(t);
+  }
+  // A white striped crosswalk across the road (zebra stripes).
+  for (let i = 0; i < 6; i++) {
+    const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 6.4), new THREE.MeshBasicMaterial({ color: 0xf2f2f2 }));
+    stripe.rotation.x = -Math.PI / 2; stripe.position.set(8 + i * 1.15, 0.06, -10); mission2.add(stripe);
+  }
+  // Dashed yellow centre line.
   for (let x = -42; x <= 42; x += 4) {
     const dash = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.18), new THREE.MeshBasicMaterial({ color: 0xd8b13a }));
     dash.rotation.x = -Math.PI / 2; dash.position.set(x, 0.05, -10); mission2.add(dash);
   }
-  for (const z of [-13.2, -6.8]) {
-    const edge = new THREE.Mesh(new THREE.PlaneGeometry(90, 0.15), new THREE.MeshBasicMaterial({ color: 0xcfd4d8 }));
-    edge.rotation.x = -Math.PI / 2; edge.position.set(0, 0.05, z); mission2.add(edge);
+  // Parked cars along both curbs (in the parking lane, outside the bike lanes).
+  const parkCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a, 0x7a2e5a];
+  for (const [px, pz, faceEast] of [[-35, -7.0, true], [-25, -7.0, true], [15, -7.0, false], [30, -7.0, true], [-30, -13.0, false], [-10, -13.0, true], [20, -13.0, false], [35, -13.0, true]]) {
+    const pc = makeStreetCar(parkCols[Math.floor(Math.random() * parkCols.length)]);
+    pc.position.set(px, 0, pz);
+    if (!faceEast) pc.rotation.y = Math.PI;
+    mission2.add(pc);
+  }
+  // Trees lining the far sidewalk.
+  for (const tx of [-38, -26, -14, -2, 10, 22, 34, 42]) {
+    const tree = makeStreetTree();
+    tree.position.set(tx, 0, -15.6); mission2.add(tree);
+  }
+  // The traffic hold-up: a line of cars stopped bumper to bumper in the
+  // east lane, going nowhere, horns sounding. They are static (not in
+  // cityCars) - the jam is the point.
+  for (let i = 0; i < 5; i++) {
+    const jc = makeStreetCar(parkCols[i % parkCols.length]);
+    jc.position.set(-2 + i * 2.7, 0, -9.0);
+    mission2.add(jc);
+    jamCars.push(jc);
   }
   // Cars: two lanes, one each way. Body + cabin + wheels + headlights.
   const carColors = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a];
@@ -622,23 +887,36 @@ function buildCityEnvironment() {
       const t = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.2), tailMat);
       t.position.set(east ? -1.12 : 1.12, 0.5, hz); car.add(t);
     }
-    car.position.set(-40 + i * 14 + Math.random() * 6, 0, east ? -8.4 : -11.6);
+    car.position.set(-40 + i * 14 + Math.random() * 6, 0, east ? -9.0 : -11.0); // car lanes, inside the bike lanes
     if (!east) car.rotation.y = Math.PI; // face the direction of travel
     mission2.add(car);
     cityCars.push({ group: car, speed: (5.5 + Math.random() * 3) * (east ? 1 : -1) });
   }
-  // Houses beyond the road (z = -16), a small residential row.
-  const houseCols = [0x8a6a4a, 0x6a7a8a, 0x7a5a5a, 0x5a6a4a, 0x8a7a5a];
+  // Pedestrians on the sidewalks: a busy crowd, like the plaza video -
+  // singles and pairs, different paces, some on a phone, some with bags.
+  // They walk along the street (lane axis x) and wrap at the ends, so
+  // the crowd keeps entering and leaving.
+  const nearCrowd = makeCrowd({ count: 4, lane: { axis: 'x', fixed: -6.3, min: -44, max: 44 } });
+  const farCrowd = makeCrowd({ count: 8, lane: { axis: 'x', fixed: -14.5, min: -44, max: 44 } });
+  for (const p of [...nearCrowd, ...farCrowd]) { mission2.add(p.group); cityPedestrians.push(p); }
+  // Houses beyond the road (z = -16), a small residential row - clean
+  // white modern boxes with rows of windows, like the photo, flat roofs.
+  const shopNames = ['CAFE', 'DELI', 'BAKERY', 'PHARMACY', 'FLOWERS', 'BOOKS', 'PIZZA'];
+  const awnCols = [0xc0392b, 0x2e6fb0, 0x2e7a4a, 0xc07a1a, 0x7a2e5a, 0x3a3a3a, 0xd8b13a];
   for (let i = 0; i < 7; i++) {
     const hx = -30 + i * 10 + (Math.random() * 3 - 1.5);
     const h = new THREE.Group();
-    const base = new THREE.Mesh(new THREE.BoxGeometry(5, 2.6, 4.5), stdMat({ color: houseCols[i % houseCols.length], roughness: 0.9 }));
+    const houseMat = whiteFacadeMat(4, 2, 0.5);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(5, 2.6, 4.5), houseMat);
     base.position.y = 1.3; base.castShadow = true; h.add(base);
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(3.6, 1.6, 4), stdMat({ color: 0x3a2a22, roughness: 0.9 }));
-    roof.position.y = 3.4; roof.rotation.y = Math.PI / 4; roof.castShadow = true; h.add(roof);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.15, 4.7), stdMat({ color: 0xe8ecef, roughness: 0.9 }));
+    roof.position.y = 2.65; roof.castShadow = true; h.add(roof);
     const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshStandardMaterial({ color: 0x201808, emissive: 0xffc978, emissiveIntensity: 0.9 }));
     win.position.set(-1, 1.4, 2.28); h.add(win);
     const win2 = win.clone(); win2.position.set(1.2, 1.4, 2.28); h.add(win2);
+    // A shop awning over the shopfront, with the shop name.
+    const awn = makeShopAwning(awnCols[i % awnCols.length], shopNames[i % shopNames.length]);
+    awn.position.set(0, 0, 2.3); h.add(awn);
     h.position.set(hx, 0, -16.5); mission2.add(h);
   }
   // Elevated train track (the 7 line) running east-west at z = -22,
@@ -669,16 +947,17 @@ function buildCityEnvironment() {
   }
   cityTrain.position.set(-30, 0, 0);
   mission2.add(cityTrain);
-  // Manhattan skyline in the far background (z = -26 to -40): tall boxes
-  // with lit windows, hazed by the fog so the city reads at a distance.
-  const skyTexA = buildingWindowTexture(0.55);
-  const skyTexB = buildingWindowTexture(0.35);
+  // Manhattan skyline in the far background (z = -26 to -40): tall white
+  // modern towers with rows of windows, like the hospital in the photo,
+  // hazed by the fog so the city reads at a distance. Windows glow at dusk.
+  const skyTexA = whiteFacadeTexture(6, 12, 0.5);
+  const skyTexB = whiteFacadeTexture(6, 12, 0.35);
   for (let i = 0; i < 10; i++) {
     const w = 6 + Math.random() * 5, h = 14 + Math.random() * 18, d = 6 + Math.random() * 4;
     const tex = i % 2 === 0 ? skyTexA : skyTexB;
-    const side = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 0.9 });
-    const dark = stdMat({ color: 0x14181d, roughness: 0.95 });
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side, side, dark, dark, side, side]);
+    const side = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 0.85 });
+    const pale = stdMat({ color: 0xe8ecef, roughness: 0.9 });
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side, side, pale, pale, side, side]);
     b.position.set(-42 + i * 9.5 + (Math.random() * 3 - 1.5), h / 2, -28 - Math.random() * 12);
     mission2.add(b);
   }
@@ -691,45 +970,198 @@ function buildCityEnvironment() {
 // a map shows where he is and where he is going, then he drives there
 // through the city before the next mission starts. This is the part
 // that makes the game feel adventurous instead of a single room.
+// The city map is the hub for EVERYTHING: the three mission places plus
+// the clothing store, the car dealership, the mansion, the safe house,
+// the hospital and the industrial area. Every place is spread far apart
+// across the map, with real miles between them (a mile to a mile, like
+// travelling across a city), and the player drives to each one.
+// Types: mission (starts a mission), store (opens the store on a tab),
+// home (enters the mansion / safe house), visit (a walk-around exterior).
 const TRAVEL_PLACES = {
-  reservoir: { name: 'Rondout Reservoir', short: 'Reservoir', x: 0.16, y: 0.20, desc: 'Upstate New York - the Delaware Line' },
-  substation: { name: 'Con Edison Substation', short: 'Substation', x: 0.62, y: 0.52, desc: 'Long Island City, Queens' },
-  bridge: { name: 'Verrazzano Bridge', short: 'Bridge', x: 0.84, y: 0.82, desc: 'Verrazzano-Narrows, tonight' }
+  reservoir: { name: 'Rondout Reservoir', short: 'Reservoir', x: 0.10, y: 0.15, desc: 'Upstate New York - the Delaware Line', type: 'mission', mission: 1 },
+  hospital: { name: 'City Hospital', short: 'Hospital', x: 0.42, y: 0.10, desc: 'City hospital - north side', type: 'visit', kind: 'hospital' },
+  industry: { name: 'Industrial Area', short: 'Industry', x: 0.88, y: 0.16, desc: 'Water treatment plant', type: 'visit', kind: 'industry' },
+  mansion: { name: 'The Mansion', short: 'Mansion', x: 0.90, y: 0.48, desc: 'Your mansion - Long Island', type: 'home', kind: 'mansion' },
+  dealership: { name: 'Car Dealership', short: 'Dealership', x: 0.66, y: 0.38, desc: 'Buy cars - Queens', type: 'store', tab: 'cars' },
+  clothing: { name: 'Clothing Store', short: 'Clothing', x: 0.48, y: 0.42, desc: 'Buy clothes - Manhattan', type: 'store', tab: 'clothes' },
+  substation: { name: 'Con Edison Substation', short: 'Substation', x: 0.60, y: 0.60, desc: 'Long Island City, Queens', type: 'mission', mission: 2 },
+  safehouse: { name: 'Safe House Apartment', short: 'Safe House', x: 0.74, y: 0.74, desc: 'Your safe house - Brooklyn', type: 'home', kind: 'safehouse' },
+  bridge: { name: 'Verrazzano Bridge', short: 'Bridge', x: 0.86, y: 0.86, desc: 'Verrazzano-Narrows, tonight', type: 'mission', mission: 3 },
+  airport: { name: 'Airport', short: 'Airport', x: 0.08, y: 0.85, desc: 'JFK - flights out', type: 'visit', kind: 'airport' },
+  hotels: { name: 'Hotels', short: 'Hotels', x: 0.55, y: 0.25, desc: 'A hotel suite - Midtown', type: 'home', kind: 'hotel' },
+  terminal: { name: 'Train Terminal', short: 'Train Terminal', x: 0.30, y: 0.55, desc: 'Grand Central - board the 4 train', type: 'home', kind: 'terminal' },
+  carpark: { name: 'Car Park', short: 'Car Park', x: 0.35, y: 0.75, desc: 'Parking lot - Midtown South', type: 'visit', kind: 'carpark' }
 };
-const TRAVEL_ROUTES = {
-  'reservoir>substation': { miles: 85, label: 'Rondout Reservoir to Con Edison Substation' },
-  'substation>bridge': { miles: 9, label: 'Con Edison Substation to Verrazzano Bridge' }
+// Miles between every pair of places (symmetric: look up either order).
+// The far places are far: the reservoir is upstate, 85 miles from the
+// substation; the hospital and the industrial area are far from each other
+// and from the safe house, so the drive feels like a real distance.
+const DISTANCES = {
+  'reservoir>hospital': 38, 'reservoir>industry': 55, 'reservoir>mansion': 92, 'reservoir>dealership': 80,
+  'reservoir>clothing': 78, 'reservoir>substation': 85, 'reservoir>safehouse': 84, 'reservoir>bridge': 95,
+  'hospital>industry': 48, 'hospital>mansion': 58, 'hospital>dealership': 42, 'hospital>clothing': 35,
+  'hospital>substation': 33, 'hospital>safehouse': 40, 'hospital>bridge': 44,
+  'industry>mansion': 12, 'industry>dealership': 18, 'industry>clothing': 26, 'industry>substation': 30,
+  'industry>safehouse': 34, 'industry>bridge': 38,
+  'mansion>dealership': 8, 'mansion>clothing': 14, 'mansion>substation': 4, 'mansion>safehouse': 10, 'mansion>bridge': 12,
+  'dealership>clothing': 5, 'dealership>substation': 6, 'dealership>safehouse': 8, 'dealership>bridge': 13,
+  'clothing>substation': 2, 'clothing>safehouse': 4, 'clothing>bridge': 11,
+  'substation>safehouse': 3, 'substation>bridge': 9,
+  'safehouse>bridge': 7,
+  // The four new places (airport, hotels, train terminal, car park):
+  // each is far from the others, like a real city.
+  'airport>reservoir': 88, 'airport>hospital': 55, 'airport>industry': 62, 'airport>mansion': 70,
+  'airport>dealership': 48, 'airport>clothing': 40, 'airport>substation': 35, 'airport>safehouse': 28, 'airport>bridge': 32,
+  'hotels>reservoir': 70, 'hotels>hospital': 28, 'hotels>industry': 30, 'hotels>mansion': 25,
+  'hotels>dealership': 12, 'hotels>clothing': 8, 'hotels>substation': 15, 'hotels>safehouse': 18, 'hotels>bridge': 22,
+  'terminal>reservoir': 75, 'terminal>hospital': 32, 'terminal>industry': 35, 'terminal>mansion': 30,
+  'terminal>dealership': 10, 'terminal>clothing': 4, 'terminal>substation': 7, 'terminal>safehouse': 12, 'terminal>bridge': 16,
+  'carpark>reservoir': 82, 'carpark>hospital': 38, 'carpark>industry': 40, 'carpark>mansion': 35,
+  'carpark>dealership': 14, 'carpark>clothing': 10, 'carpark>substation': 8, 'carpark>safehouse': 6, 'carpark>bridge': 12,
+  'airport>hotels': 38, 'airport>terminal': 30, 'airport>carpark': 22,
+  'hotels>terminal': 10, 'hotels>carpark': 16, 'terminal>carpark': 9
 };
-let travelActive = false, travelT = 0, travelDur = 18, travelOnArrive = null, travelGroup = null, travelCars = [];
+function getMiles(a, b) {
+  if (a === b) return 0;
+  return DISTANCES[a + '>' + b] || DISTANCES[b + '>' + a] || 10;
+}
+const MISSION_PLACE = { 1: 'reservoir', 2: 'substation', 3: 'bridge' };
+const MISSION_TIME = { 1: 'day', 2: 'dusk', 3: 'night' };
+let travelActive = false, travelT = 0, travelDur = 18, travelOnArrive = null, travelGroup = null, travelCars = [], travelPedestrians = [];
+// Trekking: some legs are done on foot. The trek is a real walk through
+// the busy street (the green tiled MAIN ST, sidewalks, shops, parked
+// cars, a traffic jam, pedestrians) from one end to a gold marker at the
+// other end. No car, no skip - the player walks it with WASD.
+let trekActive = false, trekGroup = null, trekPedestrians = [], trekOnArrive = null, trekToKey = null;
+let trekDestX = 0, trekDestZ = -45;
 let travelMapEl = null;
+let travelToKey = null, travelMiles = 0, travelLastMilesShown = -1;
+let mapFromKey = 'reservoir', mapSelectedKey = null, pendingMission = null;
+let currentPlaceKey = 'reservoir';
+let missionsDone = { 1: false, 2: false, 3: false };
+let travelWindowMats = [];
+let currentTimeMode = 'day';
+window.__lsTravelActive = false;
+
+// Day and night: each mission has a different time of day. Mission 1
+// (aqueduct) is bright day, Mission 2 (substation) is dusk/evening,
+// Mission 3 (bridge) is night. The sky, sun, moon, fog and the glow of
+// the city windows all change, so the time is obvious. Act I stays
+// dark (train blackout) and Act III is dawn (its own module). The drive
+// sets the time of the mission being driven to, so the drive matches.
+function setTimeOfDay(mode) {
+  currentTimeMode = mode;
+  const winGlow = mode === 'day' ? 0.03 : mode === 'dusk' ? 0.55 : 0.85;
+  for (const m of travelWindowMats) { try { m.emissiveIntensity = winGlow; } catch (e) { /* ignore */ } }
+  if (mode === 'day') {
+    scene.background.set(0x87b5d9); // bright blue sky
+    scene.fog.color.set(0x87b5d9); scene.fog.density = 0.008;
+    sun.intensity = 1.8; sun.color.set(0xfff2d8); sun.position.set(12, 20, 8);
+    moon.intensity = 0;
+    hemi.intensity = 0.6; hemi.color.set(0xbfd8ff); hemi.groundColor.set(0x8a7a5a);
+    ambient.intensity = 0.5;
+  } else if (mode === 'dusk') {
+    scene.background.set(0x2a1e33); // dusky purple-orange evening
+    scene.fog.color.set(0x2a1e33); scene.fog.density = 0.012;
+    sun.intensity = 0.5; sun.color.set(0xff8a3c); sun.position.set(-14, 6, 8);
+    moon.intensity = 0.15;
+    hemi.intensity = 0.25; hemi.color.set(0x8a6a9a); hemi.groundColor.set(0x3a2a22);
+    ambient.intensity = 0.25;
+  } else { // night
+    scene.background.set(0x05070a);
+    scene.fog.color.set(0x05070a); scene.fog.density = 0.012;
+    sun.intensity = 0.08; sun.color.set(0xfff2d8); sun.position.set(12, 20, 8);
+    moon.intensity = 0.9;
+    hemi.intensity = 0.15; hemi.color.set(0x9db8d4); hemi.groundColor.set(0x2a2418);
+    ambient.intensity = 0.12;
+  }
+}
 
 function buildTravelScene() {
   if (travelGroup) return travelGroup;
   travelGroup = new THREE.Group();
   travelGroup.visible = false;
   scene.add(travelGroup);
-  // A long road running forward (-z). The camera drives along it.
-  const road = new THREE.Mesh(new THREE.PlaneGeometry(9, 320), stdMat({ color: 0x1e2124, roughness: 0.95 }));
+  // A long road running forward (-z). The camera drives along it. The
+  // street looks like the photo: a GREEN TILED road (hexagonal tiles),
+  // green bike lanes with bicycle symbols, "MAIN ST" painted on it,
+  // parked cars on both sides, trees lining the street, shops with
+  // awnings, and a white striped crosswalk.
+  const roadTex = hexTileTexture();
+  roadTex.repeat.set(2, 70);
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(9, 320), new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95 }));
   road.rotation.x = -Math.PI / 2; road.position.set(0, 0.02, -160); road.receiveShadow = true; travelGroup.add(road);
   for (let z = -4; z >= -316; z -= 8) {
     const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 3), new THREE.MeshBasicMaterial({ color: 0xd8b13a }));
     dash.rotation.x = -Math.PI / 2; dash.position.set(0, 0.04, z); travelGroup.add(dash);
   }
-  for (const x of [-4.2, 4.2]) {
-    const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 320), new THREE.MeshBasicMaterial({ color: 0xcfd4d8 }));
-    edge.rotation.x = -Math.PI / 2; edge.position.set(x, 0.04, -160); travelGroup.add(edge);
+  // Green bike lanes along both edges of the road, with bicycle symbols.
+  const bikeTex = bikeSymbolTexture();
+  for (const x of [-3.6, 3.6]) {
+    const lane = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 320), stdMat({ color: 0x2e7a4a, roughness: 0.95 }));
+    lane.rotation.x = -Math.PI / 2; lane.position.set(x, 0.04, -160); travelGroup.add(lane);
   }
+  for (const x of [-3.6, 3.6]) for (let z = -30; z >= -300; z -= 60) {
+    const sym = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), new THREE.MeshBasicMaterial({ map: bikeTex, transparent: true, opacity: 0.85, depthWrite: false }));
+    sym.rotation.x = -Math.PI / 2; sym.rotation.z = Math.PI / 2; sym.position.set(x, 0.05, z); travelGroup.add(sym);
+  }
+  // "MAIN ST" painted on the road, every so often.
+  const mainTex = mainStTexture();
+  for (const z of [-40, -140, -240]) {
+    const t = new THREE.Mesh(new THREE.PlaneGeometry(8, 2), new THREE.MeshBasicMaterial({ map: mainTex, transparent: true, opacity: 0.9, depthWrite: false }));
+    t.rotation.x = -Math.PI / 2; t.rotation.z = Math.PI / 2; t.position.set(0, 0.05, z); travelGroup.add(t);
+  }
+  // A white striped crosswalk across the road.
+  for (let i = 0; i < 6; i++) {
+    const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 8.4), new THREE.MeshBasicMaterial({ color: 0xf2f2f2 }));
+    stripe.rotation.x = -Math.PI / 2; stripe.position.set(-2.9 + i * 1.15, 0.05, -100); travelGroup.add(stripe);
+  }
+  // Parked cars along both curbs, trees lining the sidewalks.
+  const parkCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a];
+  for (let z = -24; z >= -300; z -= 28) {
+    for (const side of [-1, 1]) {
+      if (Math.random() < 0.4) continue;
+      const pc = makeStreetCar(parkCols[Math.floor(Math.random() * parkCols.length)]);
+      pc.position.set(side * 3.9, 0, z);
+      pc.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+      travelGroup.add(pc);
+    }
+  }
+  for (let z = -18; z >= -300; z -= 24) {
+    for (const side of [-1, 1]) {
+      if (Math.random() < 0.3) continue;
+      const tree = makeStreetTree();
+      tree.position.set(side * 6.2, 0, z); travelGroup.add(tree);
+    }
+  }
+  // Pedestrians on the sidewalks, walking along the street in both
+  // directions, like the plaza video. They scroll past as the car drives.
+  const driveCrowd = makeCrowd({ count: 10, lane: { axis: 'z', fixed: 5.6, min: -310, max: 0 } });
+  const driveCrowd2 = makeCrowd({ count: 10, lane: { axis: 'z', fixed: -5.6, min: -310, max: 0 } });
+  for (const p of [...driveCrowd, ...driveCrowd2]) { travelGroup.add(p.group); travelPedestrians.push(p); }
   // Buildings on both sides, scrolling past as the camera drives.
-  const winTex = buildingWindowTexture(0.5);
+  // Clean white modern style with rows of windows, like the hospital in
+  // the photo. The window glow is turned up at dusk/night and down in
+  // daylight by setTimeOfDay (the materials are kept in travelWindowMats).
+  const winTex = whiteFacadeTexture(6, 12, 0.4);
   for (let z = -10; z >= -310; z -= 14) {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.25) continue; // gaps so the street breathes
       const h = 8 + Math.random() * 16;
-      const sideMat = new THREE.MeshStandardMaterial({ map: winTex, emissiveMap: winTex, emissive: 0xffffff, emissiveIntensity: 0.5, roughness: 0.9 });
-      const dark = stdMat({ color: 0x14181d, roughness: 0.95 });
-      const b = new THREE.Mesh(new THREE.BoxGeometry(7 + Math.random() * 4, h, 8), [sideMat, sideMat, dark, dark, sideMat, sideMat]);
+      const sideMat = new THREE.MeshStandardMaterial({ map: winTex, emissiveMap: winTex, emissive: 0xffffff, emissiveIntensity: 0.4, roughness: 0.85 });
+      travelWindowMats.push(sideMat);
+      const pale = stdMat({ color: 0xe8ecef, roughness: 0.9 });
+      const b = new THREE.Mesh(new THREE.BoxGeometry(7 + Math.random() * 4, h, 8), [sideMat, sideMat, pale, pale, sideMat, sideMat]);
       b.position.set(side * (11 + Math.random() * 5), h / 2, z + (Math.random() * 4 - 2));
       travelGroup.add(b);
+      // A shop awning on the ground floor of the lower buildings, facing
+      // the road, so the street reads as shops, not blank towers.
+      if (h < 14 && Math.random() < 0.6) {
+        const awn = makeShopAwning([0xc0392b, 0x2e6fb0, 0x2e7a4a, 0xc07a1a][Math.floor(Math.random() * 4)], null);
+        awn.position.set(side * (11 + Math.random() * 5) - side * 4, 0, z + (Math.random() * 4 - 2));
+        awn.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        travelGroup.add(awn);
+      }
     }
     // Streetlights.
     if (Math.random() < 0.7) {
@@ -740,6 +1172,46 @@ function buildTravelScene() {
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
       glow.scale.set(3, 3, 1); glow.position.set(5.2, 5, z); travelGroup.add(glow);
     }
+  }
+  // Landmark on the drive: a tall white hospital tower with a rounded
+  // corner and rows of windows, like the photo, plus a lower white wing.
+  // It stands out from the other buildings so the city reads as the photo.
+  const towerMat = whiteFacadeMat(6, 14, 0.4);
+  travelWindowMats.push(towerMat);
+  const tower = new THREE.Mesh(new THREE.BoxGeometry(10, 22, 6), towerMat);
+  tower.position.set(16, 11, -150); tower.castShadow = true; travelGroup.add(tower);
+  const towerCorner = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 1.8, 22, 20), stdMat({ color: 0xf4f6f8, roughness: 0.85 }));
+  towerCorner.position.set(11, 11, -147); towerCorner.castShadow = true; travelGroup.add(towerCorner);
+  const wingMat = whiteFacadeMat(8, 3, 0.4);
+  travelWindowMats.push(wingMat);
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(12, 5, 5), wingMat);
+  wing.position.set(18, 2.5, -141); wing.castShadow = true; travelGroup.add(wing);
+  // The city pieces the player asked for: a gas station and a police
+  // station, so the drive passes a real city, not just towers.
+  // Gas station (west side, z = -90): a low white kiosk, a canopy on
+  // pillars, pumps, and a GAS sign.
+  const gasKiosk = new THREE.Mesh(new THREE.BoxGeometry(5, 3, 4), whiteFacadeMat(3, 1, 0.3));
+  gasKiosk.position.set(-15, 1.5, -90); travelGroup.add(gasKiosk);
+  const gasCanopy = new THREE.Mesh(new THREE.BoxGeometry(9, 0.3, 7), stdMat({ color: 0xc0392b, roughness: 0.7 }));
+  gasCanopy.position.set(-15, 4.2, -96); travelGroup.add(gasCanopy);
+  for (const [px, pz] of [[-17, -95], [-13, -95]]) {
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 4.2, 8), stdMat({ color: 0xd8d8d8, metalness: 0.6, roughness: 0.4 }));
+    pillar.position.set(px, 2.1, pz); travelGroup.add(pillar);
+    const pump = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.2, 0.5), stdMat({ color: 0xd8d8d8, roughness: 0.5 }));
+    pump.position.set(px, 0.6, pz + 1.5); travelGroup.add(pump);
+  }
+  const gasSign = makeTextSprite('GAS', '#ffd166'); gasSign.scale.set(4, 1, 1); gasSign.position.set(-15, 5.6, -93); travelGroup.add(gasSign);
+  // Police station (east side, z = -200): a white modern block with a
+  // POLICE sign and two police cars parked in front.
+  const policeMat = whiteFacadeMat(6, 3, 0.4);
+  const policeB = new THREE.Mesh(new THREE.BoxGeometry(9, 6, 6), policeMat);
+  policeB.position.set(15, 3, -200); travelGroup.add(policeB);
+  const policeSign = makeTextSprite('POLICE', '#7fb0ff'); policeSign.scale.set(5, 1.1, 1); policeSign.position.set(15, 7, -197); travelGroup.add(policeSign);
+  for (const pz of [-196, -203]) {
+    const pc = makeStreetCar(0xf2f2f2);
+    pc.position.set(9, 0, pz); pc.rotation.y = Math.PI / 2; travelGroup.add(pc);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 0.2), new THREE.MeshBasicMaterial({ color: 0x2a6ab0 }));
+    bar.position.set(9, 1.3, pz); travelGroup.add(bar);
   }
   // Traffic: cars coming the other way and cars ahead in our lane.
   const carCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0xc07a1a];
@@ -760,115 +1232,435 @@ function buildTravelScene() {
     travelGroup.add(car);
     travelCars.push({ group: car, speed: oncoming ? 14 : 4 });
   }
+  // Sync the window glow to the current time of day (the scene is built
+  // lazily on the first drive, so the materials start at the build-time
+  // value and need one sync).
+  setTimeOfDay(currentTimeMode);
   return travelGroup;
 }
 
-// Draw the mission map on a canvas: the three places, the route from
-// the current place to the next, and a pulsing marker on the destination.
+// Draw the city map on a canvas: all nine places, spread far apart, the
+// route from the current place to the selected one, and a pulsing marker
+// on the destination. Labels flip to the left near the right edge so they
+// never run off the canvas. The map tint matches the time of day of the
+// mission being headed to (day = lighter, dusk = purple, night = dark).
 function drawTravelMap(canvas, fromKey, toKey) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
-  ctx.fillStyle = '#0d141b'; ctx.fillRect(0, 0, W, H);
+  const mode = toKey && TRAVEL_PLACES[toKey].type === 'mission' ? MISSION_TIME[TRAVEL_PLACES[toKey].mission] : (pendingMission ? MISSION_TIME[TRAVEL_PLACES[pendingMission.key].mission] : MISSION_TIME[state.mission]);
+  ctx.fillStyle = mode === 'day' ? '#1a2a38' : mode === 'dusk' ? '#241a2e' : '#0d141b';
+  ctx.fillRect(0, 0, W, H);
   // A few faint roads.
   ctx.strokeStyle = '#2a3540'; ctx.lineWidth = 5;
   ctx.beginPath(); ctx.moveTo(0, H * 0.55); ctx.bezierCurveTo(W * 0.3, H * 0.45, W * 0.55, H * 0.6, W, H * 0.5); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(W * 0.2, 0); ctx.bezierCurveTo(W * 0.25, H * 0.4, W * 0.5, H * 0.6, W * 0.75, H); ctx.stroke();
   ctx.strokeStyle = '#1c2630'; ctx.lineWidth = 3;
   ctx.beginPath(); ctx.moveTo(0, H * 0.3); ctx.lineTo(W, H * 0.35); ctx.stroke();
-  const from = TRAVEL_PLACES[fromKey], to = TRAVEL_PLACES[toKey];
+  const from = TRAVEL_PLACES[fromKey], to = toKey ? TRAVEL_PLACES[toKey] : null;
   // Route: dashed gold line from current to destination.
-  ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
-  ctx.beginPath(); ctx.moveTo(from.x * W, from.y * H); ctx.lineTo(to.x * W, to.y * H); ctx.stroke();
-  ctx.setLineDash([]);
-  // All three places.
+  if (to) {
+    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
+    ctx.beginPath(); ctx.moveTo(from.x * W, from.y * H); ctx.lineTo(to.x * W, to.y * H); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // All nine places, spread across the map.
   for (const [key, p] of Object.entries(TRAVEL_PLACES)) {
     const x = p.x * W, y = p.y * H;
     const isFrom = key === fromKey, isTo = key === toKey;
-    ctx.fillStyle = isTo ? '#ffd166' : (isFrom ? '#7fb0ff' : '#5a6a75');
+    const st = placeStatus(key);
+    ctx.fillStyle = isTo ? '#ffd166' : isFrom ? '#7fb0ff' : st === 'next' ? '#ffd166' : st === 'done' ? '#3a4a58' : st === 'locked' ? '#2a3540' : '#5a6a75';
     ctx.beginPath(); ctx.arc(x, y, isTo ? 11 : 8, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#0d141b'; ctx.beginPath(); ctx.arc(x, y, isTo ? 5 : 3.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#e8eef2'; ctx.font = 'bold 15px Arial'; ctx.textAlign = 'left';
-    ctx.fillText(p.short, x + 14, y + 5);
+    ctx.fillStyle = mode === 'day' ? '#1a2a38' : mode === 'dusk' ? '#241a2e' : '#0d141b';
+    ctx.beginPath(); ctx.arc(x, y, isTo ? 5 : 3.5, 0, Math.PI * 2); ctx.fill();
+    // Labels flip to the left near the right edge so they stay on the map.
+    const flip = p.x > 0.72;
+    ctx.fillStyle = '#e8eef2'; ctx.font = 'bold 15px Arial'; ctx.textAlign = flip ? 'right' : 'left';
+    ctx.fillText(p.short, flip ? x - 14 : x + 14, y + 5);
     ctx.fillStyle = '#8a97a3'; ctx.font = '12px Arial';
-    ctx.fillText(p.desc, x + 14, y + 21);
+    ctx.fillText(p.desc, flip ? x - 14 : x + 14, y + 21);
   }
   // Pulsing ring on the destination.
-  const pr = 16 + Math.sin(Date.now() / 300) * 4;
-  ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(to.x * W, to.y * H, pr, 0, Math.PI * 2); ctx.stroke();
+  if (to) {
+    const pr = 16 + Math.sin(Date.now() / 300) * 4;
+    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(to.x * W, to.y * H, pr, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+// Status of a place on the map: 'next' (the mission to do), 'done'
+// (a finished mission), 'locked' (a future mission), 'here' (where the
+// player is), 'open' (a store, home or visit - always driveable).
+function placeStatus(key) {
+  const p = TRAVEL_PLACES[key];
+  if (!p) return 'open';
+  if (key === currentPlaceKey) return 'here';
+  if (p.type === 'mission') {
+    if (pendingMission && pendingMission.key === key) return 'next';
+    if (missionsDone[p.mission]) return 'done';
+    if (p.mission > state.mission) return 'locked';
+    return 'here';
+  }
+  return 'open';
+}
+function placeDriveable(key) {
+  const st = placeStatus(key);
+  return st === 'next' || st === 'open';
 }
 
-// Show the mission map, then drive to the next mission. onArrive runs
-// when the drive ends (it starts the next mission). The drive is
-// skippable: clicking Skip (or pressing any key) jumps straight there.
-function beginTravel(fromKey, toKey, onArrive) {
-  const route = TRAVEL_ROUTES[fromKey + '>' + toKey] || { miles: 12, label: TRAVEL_PLACES[fromKey].name + ' to ' + TRAVEL_PLACES[toKey].name };
-  const to = TRAVEL_PLACES[toKey];
-  // Build the overlay once, reuse it for every trip.
+// The bridge leg is a trek, not a drive: after Mission 2 the player
+// walks on foot from the substation to the bridge through the busy
+// street. No car for this leg, and no skip - it is a real walk.
+function isTrekLeg(key) {
+  return !!(pendingMission && pendingMission.key === key && key === 'bridge');
+}
+export function openCityMap(fromKey, preselectKey) {
+  if (travelActive || window.__lsHomeActive) return;
+  mapFromKey = fromKey || currentPlaceKey;
+  if (preselectKey) mapSelectedKey = preselectKey;
+  else if (!mapSelectedKey || !TRAVEL_PLACES[mapSelectedKey] || mapSelectedKey === mapFromKey) mapSelectedKey = pendingMission ? pendingMission.key : MISSION_PLACE[state.mission];
   if (!travelMapEl) {
     travelMapEl = document.createElement('div');
     travelMapEl.id = 'travelMap';
     travelMapEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,8,12,0.88);z-index:60;';
     travelMapEl.innerHTML = '<div style="width:min(640px,92vw);background:#101820;border:1px solid #2a3540;border-radius:12px;padding:18px 20px;color:#e8eef2;font-family:Arial,sans-serif;">'
-      + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;">MISSION MAP</div>'
+      + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;">CITY MAP - New York</div>'
       + '<div id="travelRoute" style="color:#ffd166;margin:6px 0 10px;font-size:15px;"></div>'
-      + '<canvas id="travelCanvas" width="600" height="340" style="width:100%;border-radius:8px;display:block;"></canvas>'
+      + '<canvas id="travelCanvas" width="600" height="340" style="width:100%;border-radius:8px;display:block;cursor:pointer;"></canvas>'
+      + '<div id="travelHint" style="color:#9fb8c8;font-size:12px;margin-top:8px;">Click a place on the map, then Drive. Gold = your next mission. The map shows the real miles - far places take a longer drive. The bridge leg is a trek on foot - no car, walk the busy street.</div>'
       + '<div style="display:flex;gap:10px;margin-top:14px;">'
       + '<button id="travelDriveBtn" type="button" style="flex:1;padding:12px;font-size:16px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:8px;cursor:pointer;"></button>'
       + '<button id="travelSkipBtn" type="button" style="padding:12px 18px;font-size:15px;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;cursor:pointer;">Skip drive</button>'
+      + '<button id="travelCloseBtn" type="button" style="padding:12px 18px;font-size:15px;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;cursor:pointer;">Close</button>'
       + '</div></div>';
     document.body.appendChild(travelMapEl);
+    document.getElementById('travelCanvas').addEventListener('click', (e) => {
+      const cv = document.getElementById('travelCanvas');
+      const rect = cv.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width * 600;
+      const y = (e.clientY - rect.top) / rect.height * 340;
+      let best = null, bestD = 34;
+      for (const [key, p] of Object.entries(TRAVEL_PLACES)) {
+        const d = Math.hypot(p.x * 600 - x, p.y * 340 - y);
+        if (d < bestD) { bestD = d; best = key; }
+      }
+      if (best) { mapSelectedKey = best; refreshMapUI(); }
+    });
+    document.getElementById('travelDriveBtn').onclick = () => {
+      if (!mapSelectedKey || !placeDriveable(mapSelectedKey)) return;
+      const key = mapSelectedKey;
+      travelMapEl.style.display = 'none';
+      if (isTrekLeg(key)) startTrek(key, arriveAt(key));
+      else startTravelDrive(key, arriveAt(key));
+    };
+    document.getElementById('travelSkipBtn').onclick = () => {
+      if (!pendingMission) return;
+      const fn = pendingMission.fn; pendingMission = null;
+      travelMapEl.style.display = 'none';
+      fn();
+    };
+    document.getElementById('travelCloseBtn').onclick = () => { closeCityMap(); };
   }
-  document.getElementById('travelRoute').textContent = route.label + '  -  ' + route.miles + ' miles';
-  document.getElementById('travelDriveBtn').textContent = 'Drive to ' + to.short + '  ▸';
-  drawTravelMap(document.getElementById('travelCanvas'), fromKey, toKey);
+  refreshMapUI();
   travelMapEl.style.display = 'flex';
-  document.getElementById('travelDriveBtn').onclick = () => { travelMapEl.style.display = 'none'; startTravelDrive(toKey, onArrive); };
-  document.getElementById('travelSkipBtn').onclick = () => { travelMapEl.style.display = 'none'; onArrive(); };
 }
+function refreshMapUI() {
+  const cv = document.getElementById('travelCanvas');
+  if (!cv) return;
+  drawTravelMap(cv, mapFromKey, mapSelectedKey);
+  const from = TRAVEL_PLACES[mapFromKey];
+  const sel = mapSelectedKey ? TRAVEL_PLACES[mapSelectedKey] : null;
+  const routeEl = document.getElementById('travelRoute');
+  const driveBtn = document.getElementById('travelDriveBtn');
+  const skipBtn = document.getElementById('travelSkipBtn');
+  if (!sel) {
+    routeEl.textContent = 'You are at ' + from.name + '. Click a place on the map.';
+    driveBtn.textContent = 'Drive ▸';
+    driveBtn.disabled = true; driveBtn.style.opacity = '0.5';
+  } else {
+    const miles = getMiles(mapFromKey, mapSelectedKey);
+    const st = placeStatus(mapSelectedKey);
+    const note = st === 'next' ? ' - NEXT MISSION' : st === 'done' ? ' - already completed' : st === 'locked' ? ' - finish the current mission first' : st === 'here' ? ' - you are here' : '';
+    const trekNote = isTrekLeg(mapSelectedKey) ? ' - TREK ON FOOT, no car: walk the busy street to the bridge' : '';
+    routeEl.textContent = from.name + ' to ' + sel.name + ' - ' + miles + ' miles' + note + trekNote;
+    if (isTrekLeg(mapSelectedKey)) {
+      driveBtn.textContent = 'Trek to ' + sel.short + ' on foot ▸';
+    } else {
+      const car = getEquippedCarDef();
+      driveBtn.textContent = 'Drive to ' + sel.short + ' in your ' + car.name + ' ▸';
+    }
+    const ok = placeDriveable(mapSelectedKey);
+    driveBtn.disabled = !ok; driveBtn.style.opacity = ok ? '1' : '0.5';
+  }
+  if (skipBtn) {
+    // No skip on a trek leg: the walk is the mission, it cannot be skipped.
+    if (pendingMission && !isTrekLeg(pendingMission.key)) {
+      skipBtn.style.display = '';
+      skipBtn.textContent = 'Skip drive - go to ' + TRAVEL_PLACES[pendingMission.key].short + ' now';
+    } else skipBtn.style.display = 'none';
+  }
+}
+// What happens when the drive arrives at a place.
+function arriveAt(key) {
+  const p = TRAVEL_PLACES[key];
+  if (!p) return () => restoreMissionScene();
+  if (p.type === 'mission') {
+    if (pendingMission && pendingMission.key === key) {
+      const fn = pendingMission.fn; pendingMission = null;
+      return () => { currentPlaceKey = key; fn(); };
+    }
+    return () => restoreMissionScene();
+  }
+  if (p.type === 'store') {
+    return () => { currentPlaceKey = key; openStore(p.tab, () => openCityMap(key)); };
+  }
+  if (p.type === 'home' || p.type === 'visit') {
+    return () => {
+      currentPlaceKey = key;
+      if (window.__lsActManager && typeof window.__lsActManager.enterHome === 'function') window.__lsActManager.enterHome(p.kind, 'map');
+    };
+  }
+  return () => restoreMissionScene();
+}
+// A mission just ended: the next mission is the destination, but the map
+// is the hub - the player can drive to a store, a home or a visit first,
+// then come back to the map and drive to the mission.
+function beginTravel(fromKey, toKey, onArrive) {
+  pendingMission = { key: toKey, fn: onArrive };
+  openCityMap(fromKey, toKey);
+}
+function closeCityMap() {
+  if (travelMapEl) travelMapEl.style.display = 'none';
+  restoreMissionScene();
+}
+function restoreMissionScene() {
+  mission1.visible = state.mission === 1;
+  mission2.visible = state.mission === 2;
+  mission3.visible = state.mission === 3;
+  if (travelGroup) travelGroup.visible = false;
+  if (trekGroup) trekGroup.visible = false;
+  trekActive = false;
+  hideDriveHood();
+  hideActionBanner();
+  // If the camera is far outside the mission (after a drive or a trek),
+  // put it back at the mission's default view; otherwise leave it.
+  const v = inValveRoom ? VALVE_ROOM_BOUNDS : VIEWS[state.mission];
+  camBounds = v;
+  if (camera.position.x < v.x[0] || camera.position.x > v.x[1] || camera.position.z < v.z[0] || camera.position.z > v.z[1]) resetView();
+}
+// The car hood at the bottom of the screen during a drive: a trapezoid in
+// the equipped car's colour, with the car name on it, so the player sees
+// which car he is driving.
+let driveHoodEl = null;
+function showDriveHood() {
+  const car = getEquippedCarDef();
+  if (!driveHoodEl) {
+    driveHoodEl = document.createElement('div');
+    driveHoodEl.id = 'driveHood';
+    driveHoodEl.innerHTML = '<div class="hood-shape"></div><div class="hood-label"></div>';
+    document.body.appendChild(driveHoodEl);
+  }
+  driveHoodEl.querySelector('.hood-shape').style.background = car.color;
+  driveHoodEl.querySelector('.hood-label').textContent = car.name;
+  driveHoodEl.style.display = 'block';
+}
+function hideDriveHood() { if (driveHoodEl) driveHoodEl.style.display = 'none'; }
 
 // The drive itself: hide the missions, show the road, and drive the
-// camera forward through the city. A HUD line names the destination
-// and counts the miles down. Any key or click skips to arrival.
+// camera forward through the city in the player's own car. The banner
+// names the car and counts the miles down. The drive takes longer for a
+// far place, so the distance feels real. Any key or click skips to arrival.
 function startTravelDrive(toKey, onArrive) {
   const to = TRAVEL_PLACES[toKey];
   buildTravelScene();
   mission1.visible = false; mission2.visible = false; mission3.visible = false;
   travelGroup.visible = true;
-  travelActive = true; travelT = 0; travelOnArrive = onArrive;
+  travelActive = true; window.__lsTravelActive = true;
+  travelT = 0; travelOnArrive = onArrive; travelToKey = toKey;
+  travelMiles = getMiles(mapFromKey, toKey);
+  travelLastMilesShown = -1;
+  travelDur = Math.min(21, Math.max(10, 8 + travelMiles * 0.15));
+  // The drive matches the time of the mission being driven to.
+  if (to.type === 'mission') setTimeOfDay(MISSION_TIME[to.mission]);
   camera.position.set(0, 1.7, 4);
   state.yaw = 0; state.pitch = 0;
-  showActionBanner('Driving to ' + to.name + '  -  hold on, the city is moving. (Click or press any key to skip)');
+  showDriveHood();
+  updateDriveBanner();
   const skip = () => { if (travelActive) endTravelDrive(); };
   travelGroup.userData.skip = skip;
   canvas.addEventListener('pointerdown', skip, { once: true });
   addEventListener('keydown', skip, { once: true });
 }
+function updateDriveBanner() {
+  const to = TRAVEL_PLACES[travelToKey];
+  if (!to) return;
+  const car = getEquippedCarDef();
+  const left = Math.max(0, Math.round(travelMiles * (1 - travelT / travelDur)));
+  if (left === travelLastMilesShown) return;
+  travelLastMilesShown = left;
+  showActionBanner('Driving your ' + car.name + ' to ' + to.name + ' - ' + left + ' miles to go. (Click or press any key to skip)');
+}
 function endTravelDrive() {
   if (!travelActive) return;
-  travelActive = false;
+  travelActive = false; window.__lsTravelActive = false;
   if (travelGroup) travelGroup.visible = false;
+  hideDriveHood();
   hideActionBanner();
-  const cb = travelOnArrive; travelOnArrive = null;
+  if (travelToKey) currentPlaceKey = travelToKey;
+  const cb = travelOnArrive; travelOnArrive = null; travelToKey = null;
   if (cb) cb();
 }
 function updateTravelDrive(dt, t) {
   if (!travelActive) return;
   travelT += dt;
-  // Drive forward at ~12 m/s; the road is 320 long, the drive is ~18 s.
+  // Drive forward at ~12 m/s; the road is 320 long and the longest drive
+  // is 21 s (252 m), so the camera stays on the road.
   camera.position.z -= 12 * dt;
   camera.position.x = 0;
   camera.position.y = 1.7 + Math.sin(t * 6) * 0.02;
   camera.rotation.order = 'YXZ';
   camera.rotation.y = 0; camera.rotation.x = 0; camera.rotation.z = 0;
   // Traffic moves: oncoming cars rush toward the camera, cars ahead
-  // crawl forward. Wrap them so the street never empties.
+  // crawl forward. Wrap them so the street never empties. Pedestrians
+  // walk the sidewalks in both directions as the car drives past.
   for (const c of travelCars) {
     c.group.position.z += c.speed * dt;
     if (c.group.position.z > 10) c.group.position.z = -310;
     if (c.group.position.z < -320) c.group.position.z = 0;
   }
-  if (travelT >= travelDur || camera.position.z <= -210) endTravelDrive();
+  for (const p of travelPedestrians) updatePedestrian(p, dt);
+  updateDriveBanner();
+  if (travelT >= travelDur) endTravelDrive();
+}
+
+// ---------- Trekking (on foot) ----------
+// A walkable busy street: the green tiled MAIN ST, sidewalks with shops
+// and awnings, trees, parked cars, a traffic jam, and pedestrians
+// walking in both directions. The player starts at the south end (z = 30)
+// and walks to the gold marker at the north end (z = -45), where the
+// bridge approach begins. About 75 metres, a real walk, not a skip.
+function buildTrekStreet() {
+  if (trekGroup) return trekGroup;
+  trekGroup = new THREE.Group();
+  trekGroup.visible = false;
+  scene.add(trekGroup);
+  const roadTex = hexTileTexture();
+  roadTex.repeat.set(2, 18);
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(9, 85), new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95 }));
+  road.rotation.x = -Math.PI / 2; road.position.set(0, 0.02, -7.5); road.receiveShadow = true; trekGroup.add(road);
+  // Sidewalks on both sides.
+  for (const x of [-6.5, 6.5]) {
+    const walk = new THREE.Mesh(new THREE.PlaneGeometry(4, 85), stdMat({ color: 0x8a8a86, roughness: 1 }));
+    walk.rotation.x = -Math.PI / 2; walk.position.set(x, 0.03, -7.5); walk.receiveShadow = true; trekGroup.add(walk);
+  }
+  // Green bike lanes, MAIN ST, and a crosswalk, like the city street.
+  const bikeTex = bikeSymbolTexture();
+  for (const x of [-3.6, 3.6]) {
+    const lane = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 85), stdMat({ color: 0x2e7a4a, roughness: 0.95 }));
+    lane.rotation.x = -Math.PI / 2; lane.position.set(x, 0.04, -7.5); trekGroup.add(lane);
+  }
+  for (const x of [-3.6, 3.6]) for (const z of [-30, 10]) {
+    const sym = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), new THREE.MeshBasicMaterial({ map: bikeTex, transparent: true, opacity: 0.85, depthWrite: false }));
+    sym.rotation.x = -Math.PI / 2; sym.rotation.z = Math.PI / 2; sym.position.set(x, 0.05, z); trekGroup.add(sym);
+  }
+  const mainTex = mainStTexture();
+  const t = new THREE.Mesh(new THREE.PlaneGeometry(8, 2), new THREE.MeshBasicMaterial({ map: mainTex, transparent: true, opacity: 0.9, depthWrite: false }));
+  t.rotation.x = -Math.PI / 2; t.rotation.z = Math.PI / 2; t.position.set(0, 0.05, 0); trekGroup.add(t);
+  for (let i = 0; i < 6; i++) {
+    const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 8.4), new THREE.MeshBasicMaterial({ color: 0xf2f2f2 }));
+    stripe.rotation.x = -Math.PI / 2; stripe.position.set(-2.9 + i * 1.15, 0.05, -20); trekGroup.add(stripe);
+  }
+  for (let z = 28; z >= -48; z -= 8) {
+    const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 3), new THREE.MeshBasicMaterial({ color: 0xd8b13a }));
+    dash.rotation.x = -Math.PI / 2; dash.position.set(0, 0.04, z); trekGroup.add(dash);
+  }
+  // Shops with awnings on both sides, white modern fronts.
+  const shopNames = ['CAFE', 'DELI', 'BAKERY', 'PHARMACY', 'FLOWERS', 'BOOKS', 'PIZZA', 'MARKET'];
+  const awnCols = [0xc0392b, 0x2e6fb0, 0x2e7a4a, 0xc07a1a, 0x7a2e5a, 0x3a3a3a, 0xd8b13a, 0x2e6a7a];
+  let si = 0;
+  for (let z = 22; z >= -44; z -= 11) {
+    for (const side of [-1, 1]) {
+      if (Math.random() < 0.2) continue;
+      const shop = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 6), whiteFacadeMat(3, 2, 0.4));
+      shop.position.set(side * 11, 2.5, z); shop.castShadow = true; trekGroup.add(shop);
+      const awn = makeShopAwning(awnCols[si % awnCols.length], shopNames[si % shopNames.length]);
+      awn.position.set(side * 8.2, 0, z);
+      awn.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+      trekGroup.add(awn);
+      si++;
+    }
+  }
+  // Parked cars along both curbs, and trees on the sidewalks.
+  const parkCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a];
+  for (let z = 16; z >= -40; z -= 14) {
+    for (const side of [-1, 1]) {
+      if (Math.random() < 0.35) continue;
+      const pc = makeStreetCar(parkCols[Math.floor(Math.random() * parkCols.length)]);
+      pc.position.set(side * 3.9, 0, z);
+      pc.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+      trekGroup.add(pc);
+    }
+    if (Math.random() < 0.7) {
+      const tree = makeStreetTree();
+      tree.position.set((Math.random() < 0.5 ? -1 : 1) * 6.5, 0, z + 5); trekGroup.add(tree);
+    }
+  }
+  // The traffic hold-up, here too: a line of cars stopped bumper to
+  // bumper in the east lane, horns sounding, blocking the road.
+  for (let i = 0; i < 5; i++) {
+    const jc = makeStreetCar(parkCols[i % parkCols.length]);
+    jc.position.set(-2, 0, -8 - i * 2.7);
+    trekGroup.add(jc);
+  }
+  // Pedestrians on the sidewalks, walking in both directions, in pairs
+  // and alone, like the plaza video. They are the crowd the player
+  // treks through.
+  const c1 = makeCrowd({ count: 7, lane: { axis: 'z', fixed: -6.5, min: -48, max: 32 } });
+  const c2 = makeCrowd({ count: 7, lane: { axis: 'z', fixed: 6.5, min: -48, max: 32 } });
+  for (const p of [...c1, ...c2]) { trekGroup.add(p.group); trekPedestrians.push(p); }
+  // The destination: a pulsing gold marker and a bridge sign at the far end.
+  const marker = makeActionMarker('BRIDGE', '#ffd166');
+  if (marker) { marker.position.set(trekDestX, 2.2, trekDestZ); trekGroup.add(marker); }
+  const sign = makeTextSprite('VERRAZZANO BRIDGE - 1 MILE', '#ffd166');
+  sign.scale.set(7, 1.4, 1); sign.position.set(0, 4.5, -47); trekGroup.add(sign);
+  setTimeOfDay(currentTimeMode);
+  return trekGroup;
+}
+// Start a trek: hide the missions, show the street, put the player at
+// the south end on foot. No car, no skip - he walks to the gold marker.
+function startTrek(toKey, onArrive) {
+  const to = TRAVEL_PLACES[toKey];
+  buildTrekStreet();
+  mission1.visible = false; mission2.visible = false; mission3.visible = false;
+  if (travelGroup) travelGroup.visible = false;
+  trekGroup.visible = true;
+  trekActive = true;
+  trekOnArrive = onArrive; trekToKey = toKey;
+  if (to && to.type === 'mission') setTimeOfDay(MISSION_TIME[to.mission]);
+  camera.position.set(0, 1.7, 30);
+  state.yaw = 0; state.pitch = 0;
+  camBounds = { x: [-4.2, 4.2], z: [-48, 32] };
+  showActionBanner('TREK ON FOOT - walk to the ' + (to ? to.name : 'destination') + '. No car - walk with the crowd. Reach the gold BRIDGE marker at the end of the street.');
+  toast('Trek on foot - walk the busy street to the gold marker. No car for this leg.');
+}
+function endTrek() {
+  if (!trekActive) return;
+  trekActive = false;
+  if (trekGroup) trekGroup.visible = false;
+  hideActionBanner();
+  if (trekToKey) currentPlaceKey = trekToKey;
+  const cb = trekOnArrive; trekOnArrive = null; trekToKey = null;
+  if (cb) cb();
+}
+// The trek update (called from animate): pedestrians walk, the jam
+// honks now and then, and reaching the gold marker ends the trek.
+function updateTrek(dt, t) {
+  if (!trekActive) return;
+  for (const p of trekPedestrians) updatePedestrian(p, dt);
+  hornTimer += dt;
+  if (hornTimer > 9) { hornTimer = 0; honkHorn(); }
+  if (dist2D(camera.position.x, camera.position.z, trekDestX, trekDestZ) < 3) {
+    toast('You reach the bridge approach. The Verrazzano is ahead.');
+    endTrek();
+  }
 }
 
 function reparentCast(name, group, x, z, yaw) {
@@ -881,6 +1673,9 @@ function reparentCast(name, group, x, z, yaw) {
 function startMission2() {
   mission1.visible = false; mission2.visible = true; mission3.visible = false;
   state.mission = 2; resetView();
+  setTimeOfDay('dusk'); // Mission 2 (substation) is dusk/evening.
+  currentPlaceKey = 'substation';
+  try { localStorage.setItem('lastSignalAct2Mission', '2'); } catch (e) { /* private mode */ }
   setAmbient('substation'); // electrical hum and whine inside the yard
   setTension(0.4);
   reparentCast('jade', mission2, -1.6, 5.5, Math.PI);
@@ -889,11 +1684,19 @@ function startMission2() {
   document.getElementById('timerLabel').textContent = 'Logic bomb - trips 8:00 PM';
   document.getElementById('timerVal').textContent = 'armed';
   document.getElementById('timerBar').style.width = '100%';
+  // The reason for Mission 2: who called, what is wrong, what is at stake.
+  showBriefing({
+    title: 'Mission 2 - The Grid',
+    calledBy: 'Jade Morales and Con Edison - they called you in after the aqueduct.',
+    problem: 'A logic bomb is sitting in the SCADA system at the Con Edison substation. The guards at the gate are private security, hired through a shell company - they do not know what they are protecting.',
+    stakes: 'At 8 PM the bomb cascades: one substation trips, overloads the next, and takes down the Northeast grid. The whole city goes dark.'
+  }, () => {
   showDialogue([
-    { who: 'Jade Morales', text: 'Two PM. Con Edison substation, Long Island City. A logic bomb is sitting in the SCADA system. At eight it cascades - one substation trips, overloads the next, and takes down the Northeast grid.' },
+    { who: 'Jade Morales', text: 'Six PM. Con Edison substation, Long Island City. A logic bomb is sitting in the SCADA system. At eight it cascades - one substation trips, overloads the next, and takes down the Northeast grid.' },
     { who: 'Caleb Bishop', text: 'And the guards are not his people. Private security, hired through a shell company. They do not know what they are protecting.' },
     { who: 'Jade Morales', text: 'So we do not fight them. You walk up as a city inspector. I feed you the jargon through your earpiece. Click a guard to start.' }
   ], () => { toast('Walk up to a guard (or click one) - Caleb talks his way in.'); });
+  });
 }
 // Hide the gold "!" markers over the guards once they stand down.
 function hideGuardMarkers() { for (const m of guardMarkers) m.visible = false; }
@@ -1102,22 +1905,34 @@ function buildMission3() {
 function startMission3() {
   mission1.visible = false; mission2.visible = false; mission3.visible = true;
   state.mission = 3; state.climbStep = 0; resetView();
+  setTimeOfDay('night'); // Mission 3 (bridge) is night.
+  currentPlaceKey = 'bridge';
+  try { localStorage.setItem('lastSignalAct2Mission', '3'); } catch (e) { /* private mode */ }
   reparentCast('jade', mission3, 0.4, 8, Math.PI);
   reparentCast('caleb', mission3, 1.2, 9, Math.PI);
-  // Night lighting: the sun goes down, the moon takes over.
-  sun.intensity = 0.08; moon.intensity = 0.9; ambient.intensity = 0.12; hemi.intensity = 0.15;
-  scene.background = new THREE.Color(0x05070a); scene.fog.density = 0.012;
+  // Night lighting is set by setTimeOfDay('night') above: the sun goes
+  // down, the moon takes over, the city windows glow.
   setAmbient('bridge'); // night wind on the bridge, city hum far below
   setTension(0.55);
   setObjectives(OBJ3, 0); updateHUD();
   document.getElementById('timerLabel').textContent = 'Detonator - 48 hr demand';
   document.getElementById('timerVal').textContent = 'live-streaming';
   document.getElementById('timerBar').style.width = '100%';
+  // The reason for Mission 3: who called, what is wrong, what is at stake.
+  // You get here on foot - the trek through the busy street is the last
+  // stretch to the bridge.
+  showBriefing({
+    title: 'Mission 3 - The Bridge',
+    calledBy: 'Jade Morales - she called you the moment the substation was safe.',
+    problem: 'Derrick Shaw is on the Verrazzano Bridge with four shaped charges on the main cables, live-streaming a 48-hour demand for a full public audit of city infrastructure.',
+    stakes: 'Not enough to drop the bridge - enough to close it for months and cut the city in half. And if his demand is ignored, he detonates. You have to reach him across the deck, on foot.'
+  }, () => {
   showDialogue([
     { who: 'Jade Morales', text: 'Eleven-thirty PM. Verrazzano-Narrows Bridge, upper deck. Derrick Shaw is up there with four shaped charges on the main cables - not enough to drop the bridge, enough to close it for months.' },
     { who: 'Caleb Bishop', text: 'And he is live-streaming. Full public audit of all city infrastructure in forty-eight hours, or he detonates.' },
     { who: 'Jade Morales', text: 'My dad welded this bridge. We climb the maintenance catwalk. Click the catwalk planks to climb - and mind the gap.' }
   ], () => { startDeckChase(); });
+  });
 }
 
 // ---------- Act II action: the deck chase and the physical catwalk climb ----------
@@ -1273,6 +2088,9 @@ function endAct2() {
       waterChoice: state.waterChoice || 'none', bombDisarmed: state.bombDisarmed, bridgePath: state.bridgePath
     }));
   } catch (e) { /* private mode */ }
+  missionsDone[3] = true;
+  // Mission pay: finishing Mission 3 earns $22,000 (once only).
+  try { grantPayout('act2m3'); } catch (e) { /* economy is optional */ }
   const el = document.getElementById('endCard');
   el.classList.remove('hidden');
   const pathText = { best: 'Caleb crossed the gap with you - the best-ending path is open.', solo: 'Caleb stayed behind - Jade faced Derrick alone.', strained: 'Caleb crossed, but the trust is strained.', undecided: '' }[state.bridgePath];
@@ -1283,6 +2101,26 @@ function endAct2() {
     `<p>Trust: ${state.trust} / 10 &nbsp;•&nbsp; System Integrity - Transit ${state.integrity.Transit}, Water ${state.integrity.Water}, Power ${state.integrity.Power}, Comms ${state.integrity.Comms}</p>` +
     `<p>Next: Act III - The Human Signal (courtroom, ambush, press conference). Press "Begin Act III" below to continue.</p>`;
   if (window.__lsActManager) window.__lsActManager.setEndCardButtons('act2');
+}
+
+// Pause / resume for a home visit: freeze the render loop and input
+// WITHOUT disposing the scene (stopAct() disposes it, so it is only for
+// act transitions). The valve sabotage timer and the bomb timer are
+// stopped so they do not run while the player is away; reopening the
+// valve modal or the SCADA terminal restarts them.
+export function pauseAct() {
+  actActive = false;
+  if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
+  try { valveOpen = false; } catch (e) { /* ignore */ }
+  try { if (typeof bombInterval !== 'undefined' && bombInterval) { clearInterval(bombInterval); bombInterval = null; } } catch (e) { /* ignore */ }
+  try { document.getElementById('dialogue').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { document.getElementById('valveModal').classList.add('hidden'); } catch (e) { /* ignore */ }
+  try { document.getElementById('scadaModal').classList.add('hidden'); } catch (e) { /* ignore */ }
+}
+export function resumeAct() {
+  if (actActive) return;
+  actActive = true;
+  animate();
 }
 
 // Stop this act cleanly so the next act can load on the same page: halt
@@ -1303,7 +2141,7 @@ export function stopAct() {
 
 // ---------- Click to inspect ----------
 // Debug hook for live testing: window.__ls2.state / .interact / .openValveModal.
-window.__ls2 = { state, interact, openValveModal, openScadaModal };
+window.__ls2 = { state, interact, openValveModal, openScadaModal, openCityMap };
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
 let lastTapAt = 0;
 function handleTap(clientX, clientY) {
@@ -1315,7 +2153,7 @@ function handleTap(clientX, clientY) {
   mouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(mouse, camera);
   const targets = [];
-  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit);
+  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
   if (state.mission === 3) targets.push(...chargeMeshes, window._catwalkHit, ...(window._catwalkPlanks || []));
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
@@ -1353,12 +2191,21 @@ canvas.addEventListener('pointerup', e => {
 });
 function interact(name) {
   if (!name) return;
-  if (name === 'valveHospital' || name === 'valveResidential' || name === 'valveIndustrial') { openValveModal(); return; }
+  if (name === 'valveHospital' || name === 'valveResidential' || name === 'valveIndustrial') {
+    // The valves are inside the valve room: the puzzle only opens once the
+    // player has walked in through the station door to reach them.
+    if (!inValveRoom) { toast('The valves are inside the valve room - enter through the station door.'); return; }
+    openValveModal(); return;
+  }
   if (name === 'digitalPanel') { toast('Digital control - sabotaged. It overcorrects every valve you set. The physical valves still work.'); return; }
-  if (name === 'stationDoor') { toast('Control station - analog valves and digital monitors inside. The valves are outside, on the plinth.'); return; }
+  if (name === 'stationDoor') { enterValveRoom(); return; }
+  if (name === 'valveRoomExit') { exitValveRoom(); return; }
   if (name === 'device1' && window._device1.visible) {
     state.inventory.push('RESET device (aqueduct)'); state.evidence.push('RESET device + fingerprint: Derrick Shaw');
-    updateHUD(); setObjectives(OBJ1, 4);
+    updateHUD(); setObjectives(OBJ1, 5);
+    missionsDone[1] = true;
+    // Mission pay: finishing Mission 1 earns $12,000 (once only).
+    try { grantPayout('act2m1'); } catch (e) { /* economy is optional */ }
     showDialogue([
       { who: 'Jade Morales', text: 'Same label. RESET. Same hand-soldered board, same MTA capacitors. And a partial fingerprint on the casing.' },
       { who: 'Caleb Bishop', text: 'Running it now... Derrick Shaw. Former Deputy Director of City Planning. The Architect has a name.' },
@@ -1390,6 +2237,9 @@ function interact(name) {
   if (name === 'controlDoor') { toast('Control room - the SCADA terminal is on the desk outside. The manifesto is pinned inside, on the wall.'); return; }
   if (name === 'manifesto' && manifestoMesh.visible) {
     state.evidence.push('Manifesto addressed to Jade');
+    missionsDone[2] = true;
+    // Mission pay: finishing Mission 2 earns $18,000 (once only).
+    try { grantPayout('act2m2'); } catch (e) { /* economy is optional */ }
     showDialogue([
       { who: 'Jade Morales', text: '"You saw the cracks. You spoke. No one listened. So I will make them listen. - D.S." It is addressed to me, by name.' },
       { who: 'Caleb Bishop', text: 'He is not hiding. He is waiting. The bridge is next - the Verrazzano, tonight.' },
@@ -1421,6 +2271,15 @@ function animate() {
     updateTravelDrive(dt, t);
     renderer.render(scene, camera);
     return;
+  }
+  // Valve room: walking up to a valve wheel opens the pressure controls,
+  // so the puzzle opens when the player reaches the valves.
+  if (state.mission === 1 && inValveRoom && !valveOpen && !state.waterStable
+    && document.getElementById('dialogue').classList.contains('hidden')
+    && document.getElementById('valveModal').classList.contains('hidden')) {
+    for (const vx of [-3, 0, 3]) {
+      if (dist2D(camera.position.x, camera.position.z, vx, -5.7) < 1.8) { openValveModal(); break; }
+    }
   }
   const sp = 0.05;
   if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
@@ -1490,11 +2349,12 @@ function animate() {
     keycardMesh.position.set(g1.x, 1.0, g1.z + 0.15);
     if (window._keycardHit) window._keycardHit.position.set(g1.x, 1.1, g1.z + 0.1);
   }
-  // Living city traffic (Mission 2 only): cars drive the road in both
-  // directions and the train runs the elevated track, looping so the
-  // street never empties. This is the movement the player sees even
-  // when standing still, and it makes WASD travel read against it.
-  if (state.mission === 2) {
+  // Living city traffic (Mission 2 only, not while trekking): cars drive
+  // the road in both directions and the train runs the elevated track,
+  // looping so the street never empties. This is the movement the player
+  // sees even when standing still, and it makes WASD travel read against
+  // it. Pedestrians walk the sidewalks, and the traffic jam honks.
+  if (state.mission === 2 && !trekActive) {
     for (const c of cityCars) {
       c.group.position.x += c.speed * dt;
       if (c.group.position.x > 46) c.group.position.x = -46;
@@ -1504,7 +2364,11 @@ function animate() {
       cityTrain.position.x += 9 * dt;
       if (cityTrain.position.x > 55) cityTrain.position.x = -55;
     }
+    for (const p of cityPedestrians) updatePedestrian(p, dt);
+    hornTimer += dt;
+    if (hornTimer > 9) { hornTimer = 0; honkHorn(); }
   }
+  updateTrek(dt, t); // on-foot trek, no-op when inactive
   updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
   // Sound: footsteps while moving, heartbeat and score tension. The bomb
   // countdown and the bridge gap are the tense moments here.
