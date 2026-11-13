@@ -226,5 +226,17 @@ try {
   prologueDone = localStorage.getItem('lastSignalPrologue') === 'done';
   hasActSave = !!(localStorage.getItem('lastSignalAct1') || localStorage.getItem('lastSignalAct2') || localStorage.getItem('lastSignalAct3'));
 } catch (e) { /* ignore */ }
+// ?fresh in the URL starts over from the beginning: it clears the
+// prologue flag and all act saves and money, then boots the prologue
+// (phone ringing in the room). Share the plain link for a normal load;
+// add ?fresh to start again from the phone call.
+try {
+  if (new URLSearchParams(location.search).has('fresh')) {
+    for (const k of ['lastSignalPrologue', 'lastSignalAct1', 'lastSignalAct2', 'lastSignalAct3', 'lastSignalMoney', 'lastSignalPaid', 'lastSignalOwned', 'lastSignalEquipped', 'lastSignalCurrentAct', 'lastSignalAct2Mission']) {
+      try { localStorage.removeItem(k); } catch (e) { /* ignore */ }
+    }
+    prologueDone = false; hasActSave = false;
+  }
+} catch (e) { /* ignore */ }
 if (!prologueDone && !hasActSave) startPrologue();
 else goToAct(startActFromURL());

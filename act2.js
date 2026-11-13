@@ -416,7 +416,13 @@ function buildMission1() {
   roof1.rotation.x = 0.35;
   const roof2 = box(mission1, 9.6, 0.18, 3.2, 0x3a3a3a, 0, 3.9, -2.1);
   roof2.rotation.x = -0.35;
-  box(mission1, 1.2, 2.2, 0.15, 0x2a2118, 0, 1.1, -0.68, 'stationDoor');
+  window._stationDoor = box(mission1, 1.2, 2.2, 0.15, 0x2a2118, 0, 1.1, -0.68, 'stationDoor');
+  // Generous invisible click target in front of the door: the door itself
+  // is a thin dark slab, so a click slightly off it would otherwise miss
+  // and the player could never enter the valve room.
+  const doorHit = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  doorHit.position.set(0, 1.4, -0.5); doorHit.name = 'stationDoor'; doorHit.userData.clickable = true; mission1.add(doorHit);
+  window._stationDoorHit = doorHit;
   for (const wx of [-3, 3]) {
     const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1), new THREE.MeshStandardMaterial({ color: 0x0e1a24, roughness: 0.1, metalness: 0.4 }));
     win.position.set(wx, 2, -0.72); mission1.add(win);
@@ -2153,7 +2159,7 @@ function handleTap(clientX, clientY) {
   mouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(mouse, camera);
   const targets = [];
-  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit);
+  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, window._stationDoor, window._stationDoorHit);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
   if (state.mission === 3) targets.push(...chargeMeshes, window._catwalkHit, ...(window._catwalkPlanks || []));
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
@@ -2280,6 +2286,15 @@ function animate() {
     for (const vx of [-3, 0, 3]) {
       if (dist2D(camera.position.x, camera.position.z, vx, -5.7) < 1.8) { openValveModal(); break; }
     }
+  }
+  // Station door: walking up to the entrance enters the valve room, so
+  // the player can get in by walking through the door even if the click
+  // misses. The door is also clickable (see the Mission 1 targets).
+  // The player starts 8.7 m back, so this cannot fire at spawn.
+  if (state.mission === 1 && !inValveRoom
+    && document.getElementById('dialogue').classList.contains('hidden')
+    && document.getElementById('valveModal').classList.contains('hidden')) {
+    if (dist2D(camera.position.x, camera.position.z, 0, -0.68) < 1.8) enterValveRoom();
   }
   const sp = 0.05;
   if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
