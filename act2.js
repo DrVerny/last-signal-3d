@@ -677,6 +677,194 @@ function buildCityEnvironment() {
     mission2.add(b);
   }
 }
+
+// ---------- Mission map + travel (the adventure between missions) ----------
+// The missions are NOT in one place: the reservoir is upstate, the
+// substation is in Long Island City, the bridge is the Verrazzano. The
+// player travels between them like Call of Duty / Mission Impossible -
+// a map shows where he is and where he is going, then he drives there
+// through the city before the next mission starts. This is the part
+// that makes the game feel adventurous instead of a single room.
+const TRAVEL_PLACES = {
+  reservoir: { name: 'Rondout Reservoir', short: 'Reservoir', x: 0.16, y: 0.20, desc: 'Upstate New York - the Delaware Line' },
+  substation: { name: 'Con Edison Substation', short: 'Substation', x: 0.62, y: 0.52, desc: 'Long Island City, Queens' },
+  bridge: { name: 'Verrazzano Bridge', short: 'Bridge', x: 0.84, y: 0.82, desc: 'Verrazzano-Narrows, tonight' }
+};
+const TRAVEL_ROUTES = {
+  'reservoir>substation': { miles: 85, label: 'Rondout Reservoir to Con Edison Substation' },
+  'substation>bridge': { miles: 9, label: 'Con Edison Substation to Verrazzano Bridge' }
+};
+let travelActive = false, travelT = 0, travelDur = 18, travelOnArrive = null, travelGroup = null, travelCars = [];
+let travelMapEl = null;
+
+function buildTravelScene() {
+  if (travelGroup) return travelGroup;
+  travelGroup = new THREE.Group();
+  travelGroup.visible = false;
+  scene.add(travelGroup);
+  // A long road running forward (-z). The camera drives along it.
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(9, 320), stdMat({ color: 0x1e2124, roughness: 0.95 }));
+  road.rotation.x = -Math.PI / 2; road.position.set(0, 0.02, -160); road.receiveShadow = true; travelGroup.add(road);
+  for (let z = -4; z >= -316; z -= 8) {
+    const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 3), new THREE.MeshBasicMaterial({ color: 0xd8b13a }));
+    dash.rotation.x = -Math.PI / 2; dash.position.set(0, 0.04, z); travelGroup.add(dash);
+  }
+  for (const x of [-4.2, 4.2]) {
+    const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 320), new THREE.MeshBasicMaterial({ color: 0xcfd4d8 }));
+    edge.rotation.x = -Math.PI / 2; edge.position.set(x, 0.04, -160); travelGroup.add(edge);
+  }
+  // Buildings on both sides, scrolling past as the camera drives.
+  const winTex = buildingWindowTexture(0.5);
+  for (let z = -10; z >= -310; z -= 14) {
+    for (const side of [-1, 1]) {
+      if (Math.random() < 0.25) continue; // gaps so the street breathes
+      const h = 8 + Math.random() * 16;
+      const sideMat = new THREE.MeshStandardMaterial({ map: winTex, emissiveMap: winTex, emissive: 0xffffff, emissiveIntensity: 0.5, roughness: 0.9 });
+      const dark = stdMat({ color: 0x14181d, roughness: 0.95 });
+      const b = new THREE.Mesh(new THREE.BoxGeometry(7 + Math.random() * 4, h, 8), [sideMat, sideMat, dark, dark, sideMat, sideMat]);
+      b.position.set(side * (11 + Math.random() * 5), h / 2, z + (Math.random() * 4 - 2));
+      travelGroup.add(b);
+    }
+    // Streetlights.
+    if (Math.random() < 0.7) {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 5, 8), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.4 }));
+      pole.position.set(5.2, 2.5, z); travelGroup.add(pole);
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe9a8 }));
+      lamp.position.set(5.2, 5, z); travelGroup.add(lamp);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.set(3, 3, 1); glow.position.set(5.2, 5, z); travelGroup.add(glow);
+    }
+  }
+  // Traffic: cars coming the other way and cars ahead in our lane.
+  const carCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0xc07a1a];
+  for (let i = 0; i < 8; i++) {
+    const oncoming = i % 2 === 0;
+    const car = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.55, 1.1), stdMat({ color: carCols[i % carCols.length], roughness: 0.4, metalness: 0.5 }));
+    body.position.y = 0.45; body.castShadow = true; car.add(body);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.0), stdMat({ color: 0x18242e, roughness: 0.2, metalness: 0.6 }));
+    cabin.position.set(-0.15, 0.95, 0); car.add(cabin);
+    const headMat = new THREE.MeshBasicMaterial({ color: 0xfff2c0 });
+    for (const hz of [-0.35, 0.35]) {
+      const h = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.2), headMat);
+      h.position.set(oncoming ? -1.12 : 1.12, 0.5, hz); car.add(h);
+    }
+    car.position.set(oncoming ? -2.2 : 2.2, 0, -20 - i * 36 - Math.random() * 10);
+    if (!oncoming) car.rotation.y = Math.PI;
+    travelGroup.add(car);
+    travelCars.push({ group: car, speed: oncoming ? 14 : 4 });
+  }
+  return travelGroup;
+}
+
+// Draw the mission map on a canvas: the three places, the route from
+// the current place to the next, and a pulsing marker on the destination.
+function drawTravelMap(canvas, fromKey, toKey) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#0d141b'; ctx.fillRect(0, 0, W, H);
+  // A few faint roads.
+  ctx.strokeStyle = '#2a3540'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(0, H * 0.55); ctx.bezierCurveTo(W * 0.3, H * 0.45, W * 0.55, H * 0.6, W, H * 0.5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W * 0.2, 0); ctx.bezierCurveTo(W * 0.25, H * 0.4, W * 0.5, H * 0.6, W * 0.75, H); ctx.stroke();
+  ctx.strokeStyle = '#1c2630'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, H * 0.3); ctx.lineTo(W, H * 0.35); ctx.stroke();
+  const from = TRAVEL_PLACES[fromKey], to = TRAVEL_PLACES[toKey];
+  // Route: dashed gold line from current to destination.
+  ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
+  ctx.beginPath(); ctx.moveTo(from.x * W, from.y * H); ctx.lineTo(to.x * W, to.y * H); ctx.stroke();
+  ctx.setLineDash([]);
+  // All three places.
+  for (const [key, p] of Object.entries(TRAVEL_PLACES)) {
+    const x = p.x * W, y = p.y * H;
+    const isFrom = key === fromKey, isTo = key === toKey;
+    ctx.fillStyle = isTo ? '#ffd166' : (isFrom ? '#7fb0ff' : '#5a6a75');
+    ctx.beginPath(); ctx.arc(x, y, isTo ? 11 : 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#0d141b'; ctx.beginPath(); ctx.arc(x, y, isTo ? 5 : 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#e8eef2'; ctx.font = 'bold 15px Arial'; ctx.textAlign = 'left';
+    ctx.fillText(p.short, x + 14, y + 5);
+    ctx.fillStyle = '#8a97a3'; ctx.font = '12px Arial';
+    ctx.fillText(p.desc, x + 14, y + 21);
+  }
+  // Pulsing ring on the destination.
+  const pr = 16 + Math.sin(Date.now() / 300) * 4;
+  ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(to.x * W, to.y * H, pr, 0, Math.PI * 2); ctx.stroke();
+}
+
+// Show the mission map, then drive to the next mission. onArrive runs
+// when the drive ends (it starts the next mission). The drive is
+// skippable: clicking Skip (or pressing any key) jumps straight there.
+function beginTravel(fromKey, toKey, onArrive) {
+  const route = TRAVEL_ROUTES[fromKey + '>' + toKey] || { miles: 12, label: TRAVEL_PLACES[fromKey].name + ' to ' + TRAVEL_PLACES[toKey].name };
+  const to = TRAVEL_PLACES[toKey];
+  // Build the overlay once, reuse it for every trip.
+  if (!travelMapEl) {
+    travelMapEl = document.createElement('div');
+    travelMapEl.id = 'travelMap';
+    travelMapEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,8,12,0.88);z-index:60;';
+    travelMapEl.innerHTML = '<div style="width:min(640px,92vw);background:#101820;border:1px solid #2a3540;border-radius:12px;padding:18px 20px;color:#e8eef2;font-family:Arial,sans-serif;">'
+      + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;">MISSION MAP</div>'
+      + '<div id="travelRoute" style="color:#ffd166;margin:6px 0 10px;font-size:15px;"></div>'
+      + '<canvas id="travelCanvas" width="600" height="340" style="width:100%;border-radius:8px;display:block;"></canvas>'
+      + '<div style="display:flex;gap:10px;margin-top:14px;">'
+      + '<button id="travelDriveBtn" type="button" style="flex:1;padding:12px;font-size:16px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:8px;cursor:pointer;"></button>'
+      + '<button id="travelSkipBtn" type="button" style="padding:12px 18px;font-size:15px;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;cursor:pointer;">Skip drive</button>'
+      + '</div></div>';
+    document.body.appendChild(travelMapEl);
+  }
+  document.getElementById('travelRoute').textContent = route.label + '  -  ' + route.miles + ' miles';
+  document.getElementById('travelDriveBtn').textContent = 'Drive to ' + to.short + '  ▸';
+  drawTravelMap(document.getElementById('travelCanvas'), fromKey, toKey);
+  travelMapEl.style.display = 'flex';
+  document.getElementById('travelDriveBtn').onclick = () => { travelMapEl.style.display = 'none'; startTravelDrive(toKey, onArrive); };
+  document.getElementById('travelSkipBtn').onclick = () => { travelMapEl.style.display = 'none'; onArrive(); };
+}
+
+// The drive itself: hide the missions, show the road, and drive the
+// camera forward through the city. A HUD line names the destination
+// and counts the miles down. Any key or click skips to arrival.
+function startTravelDrive(toKey, onArrive) {
+  const to = TRAVEL_PLACES[toKey];
+  buildTravelScene();
+  mission1.visible = false; mission2.visible = false; mission3.visible = false;
+  travelGroup.visible = true;
+  travelActive = true; travelT = 0; travelOnArrive = onArrive;
+  camera.position.set(0, 1.7, 4);
+  state.yaw = 0; state.pitch = 0;
+  showActionBanner('Driving to ' + to.name + '  -  hold on, the city is moving. (Click or press any key to skip)');
+  const skip = () => { if (travelActive) endTravelDrive(); };
+  travelGroup.userData.skip = skip;
+  canvas.addEventListener('pointerdown', skip, { once: true });
+  addEventListener('keydown', skip, { once: true });
+}
+function endTravelDrive() {
+  if (!travelActive) return;
+  travelActive = false;
+  if (travelGroup) travelGroup.visible = false;
+  hideActionBanner();
+  const cb = travelOnArrive; travelOnArrive = null;
+  if (cb) cb();
+}
+function updateTravelDrive(dt, t) {
+  if (!travelActive) return;
+  travelT += dt;
+  // Drive forward at ~12 m/s; the road is 320 long, the drive is ~18 s.
+  camera.position.z -= 12 * dt;
+  camera.position.x = 0;
+  camera.position.y = 1.7 + Math.sin(t * 6) * 0.02;
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = 0; camera.rotation.x = 0; camera.rotation.z = 0;
+  // Traffic moves: oncoming cars rush toward the camera, cars ahead
+  // crawl forward. Wrap them so the street never empties.
+  for (const c of travelCars) {
+    c.group.position.z += c.speed * dt;
+    if (c.group.position.z > 10) c.group.position.z = -310;
+    if (c.group.position.z < -320) c.group.position.z = 0;
+  }
+  if (travelT >= travelDur || camera.position.z <= -210) endTravelDrive();
+}
+
 function reparentCast(name, group, x, z, yaw) {
   const g = modelGroups[name] && modelGroups[name].group;
   if (!g) return;
@@ -1169,7 +1357,7 @@ function interact(name) {
       { who: 'Jade Morales', text: 'Same label. RESET. Same hand-soldered board, same MTA capacitors. And a partial fingerprint on the casing.' },
       { who: 'Caleb Bishop', text: 'Running it now... Derrick Shaw. Former Deputy Director of City Planning. The Architect has a name.' },
       { who: 'Jade Morales', text: 'He was my mentor. And he is waiting for someone to prove him wrong. Next: the substation. The grid is next.' }
-    ], () => startMission2());
+    ], () => beginTravel('reservoir', 'substation', startMission2));
     return;
   }
   if (name === 'jade') { toast('Jade Morales - former MTA signal engineer. She designed the 4 line, and she knows every relay in the city.'); return; }
@@ -1200,7 +1388,7 @@ function interact(name) {
       { who: 'Jade Morales', text: '"You saw the cracks. You spoke. No one listened. So I will make them listen. - D.S." It is addressed to me, by name.' },
       { who: 'Caleb Bishop', text: 'He is not hiding. He is waiting. The bridge is next - the Verrazzano, tonight.' },
       { who: 'Jade Morales', text: 'Then we go to the bridge.' }
-    ], () => startMission3());
+    ], () => beginTravel('substation', 'bridge', startMission3));
     return;
   }
   if (name === 'catwalk') { climbStep(); return; }
@@ -1220,6 +1408,14 @@ function animate() {
   const t = Date.now() / 1000;
   const dt = animate.lastT === undefined ? 0.016 : Math.min(0.1, t - animate.lastT);
   animate.lastT = t;
+  // During the drive between missions the travel sequence owns the
+  // camera: the road and the city scroll past, WASD is ignored, and the
+  // mission camera control below is skipped so it cannot fight the drive.
+  if (travelActive) {
+    updateTravelDrive(dt, t);
+    renderer.render(scene, camera);
+    return;
+  }
   const sp = 0.05;
   if (keys['w']) camera.position.z -= sp; if (keys['s']) camera.position.z += sp;
   if (keys['a']) camera.position.x -= sp; if (keys['d']) camera.position.x += sp;
