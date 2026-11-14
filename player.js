@@ -355,6 +355,60 @@ export function buildTouchControls() {
     if (e.target && e.target.closest && (e.target.closest('button') || e.target.closest('.modal') || e.target.closest('#storeOverlay'))) return;
     zoomBy(e.deltaY > 0 ? 1 : -1);
   }, { passive: true });
+  // Pinch to zoom on touch screens. The canvas sets touch-action none, so
+  // the browser does not pinch-zoom the page itself, and until now two
+  // fingers on the canvas only spun the look-drag, because the drag
+  // handlers do not track which pointer moved. Track the canvas pointers
+  // in the capture phase and hold the move/down events back from the drag
+  // handlers while a pinch is active, so the camera holds still and only
+  // the zoom moves. Fingers apart zooms in (camera closer), fingers
+  // together zooms out, matching the +/- buttons and the mouse wheel.
+  // Zoom only applies in third-person, like the wheel; the drag freeze
+  // applies in either view so a pinch never spins the camera.
+  const pinchPointers = new Map();
+  let pinchDist = 0;
+  let pinchAcc = 0;
+  function pinchOnCanvas(e) {
+    return e.target && e.target.tagName === 'CANVAS';
+  }
+  function pinchGap() {
+    const pts = Array.from(pinchPointers.values());
+    if (pts.length < 2) return 0;
+    const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  addEventListener('pointerdown', (e) => {
+    if (!pinchOnCanvas(e)) return;
+    pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinchPointers.size === 2) {
+      pinchDist = pinchGap();
+      pinchAcc = 0;
+      // Keep the second finger from resetting the look-drag origin.
+      e.stopPropagation();
+    }
+  }, true);
+  addEventListener('pointermove', (e) => {
+    if (!pinchPointers.has(e.pointerId)) return;
+    const p = pinchPointers.get(e.pointerId);
+    p.x = e.clientX; p.y = e.clientY;
+    if (pinchPointers.size < 2) return;
+    // Two fingers down: freeze the look-drag and zoom instead.
+    e.stopPropagation();
+    const d = pinchGap();
+    if (pinchDist > 0 && d > 0) {
+      pinchAcc += (pinchDist - d) * 0.01;
+      while (pinchAcc >= 1) { if (thirdPerson) zoomBy(1); pinchAcc -= 1; }
+      while (pinchAcc <= -1) { if (thirdPerson) zoomBy(-1); pinchAcc += 1; }
+    }
+    pinchDist = d;
+  }, true);
+  const pinchEnd = (e) => {
+    if (!pinchPointers.has(e.pointerId)) return;
+    pinchPointers.delete(e.pointerId);
+    if (pinchPointers.size < 2) { pinchDist = 0; pinchAcc = 0; }
+  };
+  addEventListener('pointerup', pinchEnd, true);
+  addEventListener('pointercancel', pinchEnd, true);
   // C toggles first/third person everywhere.
   addEventListener('keydown', (e) => {
     if (e.key && e.key.toLowerCase() === 'c' && !e.repeat) {
