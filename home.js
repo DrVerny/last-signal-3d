@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { canvas, renderer, disposeScene } from './core.js';
 import { getBalance, moneyFmt, grantPayout } from './economy.js';
-import { makeCrowd, updatePedestrian, showBriefing } from './action.js';
+import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar } from './player.js';
 import { readingTimeMs } from './speak.js';
@@ -41,6 +41,61 @@ let tunnelRunning = false, tunnelRunT = 0, tunnelDone = false;
 let symposiumAudience = [];
 let symposiumAudienceBuilt = false;
 let podiumDone = false;
+// Police station / Navy barracks: officers and sailors walking the room.
+let roomWalkers = [];
+// Sensor vault: blinking sensor lights, gauge needles and readouts.
+let vaultBlinkers = [];
+let vaultNeedles = [];
+let vaultReadouts = [];
+let vaultReadAt = -100;
+// Uniformed forces: a police officer or a sailor, built from a normal
+// pedestrian (rigged if the crowd models are loaded, primitive if not)
+// with a cap, a badge or neckerchief, and a recoloured uniform. The cap
+// and badge sit on the front of the body: rigged models face -z, the
+// primitive figure faces +z. The uniform is tracked on the person, so
+// if the crowd upgrade swaps the body for a rigged one later, the
+// uniform can be re-applied (see updateOfficer).
+const OFFICER_SKINS = [0x2a1a12, 0x6b4a2f, 0xc89b7a, 0xe8b88a];
+function dressUniform(p, kind) {
+  if (!p || !p.group) return;
+  const front = p.rigged ? -1 : 1;
+  const old = [];
+  p.group.traverse(o => { if (o.userData && o.userData.uniformPart) old.push(o); });
+  for (const o of old) { if (o.parent) o.parent.remove(o); }
+  const g = p.group;
+  if (kind === 'police') {
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.85 });
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.19, 0.09, 12), capMat);
+    crown.position.set(0, 1.7, 0); crown.userData.uniformPart = true; g.add(crown);
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.02, 0.14), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 }));
+    brim.position.set(0, 1.66, front * 0.17); brim.userData.uniformPart = true; g.add(brim);
+    const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.012, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
+    badge.rotation.x = Math.PI / 2; badge.position.set(-0.1, 1.28, front * 0.16); badge.userData.uniformPart = true; g.add(badge);
+    g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.9 }); });
+  } else if (kind === 'navy') {
+    const capMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.85 });
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.17, 0.12, 12), capMat);
+    cup.position.set(0, 1.7, 0); cup.userData.uniformPart = true; g.add(cup);
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.03), new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.9 }));
+    neck.position.set(0, 1.42, front * 0.15); neck.userData.uniformPart = true; g.add(neck);
+    g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.9 }); });
+  }
+  p.uniform = kind; p.uniformGroup = p.group;
+}
+function makeOfficer(kind, opts) {
+  const o = Object.assign({}, opts);
+  if (kind === 'police') { o.coatColor = 0x1a2a4a; o.legColor = 0x141c28; }
+  else { o.coatColor = 0xf2f2f2; o.legColor = 0xe8e8e8; }
+  if (o.skinColor === undefined) o.skinColor = OFFICER_SKINS[Math.floor(Math.random() * OFFICER_SKINS.length)];
+  const p = makePedestrian(o);
+  if (p) dressUniform(p, kind);
+  return p;
+}
+function updateOfficer(p, dt) {
+  if (!p) return;
+  updatePedestrian(p, dt);
+  if (p.uniform && p.group !== p.uniformGroup) dressUniform(p, p.uniform);
+}
 // The bed the player sleeps in, for the sleep view: { x, z, w }.
 let currentBedPos = null;
 // Sleeping: while true the avatar lies on the bed and the camera shows
@@ -314,6 +369,23 @@ function roundedBox(w, h, d, r, material) {
   const b = Math.min(0.025, r * 0.35, d / 2 - 0.005);
   const dep = Math.max(0.01, d - 2 * b);
   const geo = new THREE.ExtrudeGeometry(roundedRectShape(Math.max(0.02, w - 2 * b), Math.max(0.02, h - 2 * b), Math.max(0.005, r - b)), { depth: dep, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 3, curveSegments: 8 });
+  geo.translate(0, 0, -dep / 2);
+  const m = new THREE.Mesh(geo, material);
+  m.castShadow = true;
+  return m;
+}
+// A stuffed cushion: a rounded-rectangle profile extruded with a DEEP
+// bevel, so the top and the front edge are fully round and the cushion
+// bulges like a real stuffed sofa cushion instead of reading as a flat
+// slab with sharp corners. The old roundedBox caps its bevel at 0.025,
+// which is invisible at play distance; this one rounds the edges with
+// a radius near half the cushion thickness. The final size is w x h x d,
+// and the top stays flat across the middle, so the phone and the sit
+// spot do not move. Returns a mesh with castShadow on.
+function plumpCushion(w, h, d, r, material) {
+  const b = Math.min(0.08, r * 0.55, h * 0.3, d * 0.3);
+  const dep = Math.max(0.01, d - 2 * b);
+  const geo = new THREE.ExtrudeGeometry(roundedRectShape(Math.max(0.02, w - 2 * b), Math.max(0.02, h - 2 * b), Math.max(0.005, r - b)), { depth: dep, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 5, curveSegments: 12 });
   geo.translate(0, 0, -dep / 2);
   const m = new THREE.Mesh(geo, material);
   m.castShadow = true;
@@ -744,15 +816,24 @@ function addSofa(scene, x, z, w, color, name, ry) {
     arm.rotation.x = Math.PI / 2; arm.position.set(s * (w / 2 - 0.16), 0.72, 0); arm.castShadow = true; g.add(arm);
   }
   const n = Math.max(2, Math.round(w / 1.1));
+  const cw = w / n - 0.05; // cushions nearly touch: a thin seam, and a
+  // continuous top under the phone, which lies across the seam.
   for (let i = 0; i < n; i++) {
     const cx = -w / 2 + (i + 0.5) * (w / n);
-    const c = roundedBox(w / n - 0.14, 0.18, 0.95, 0.08, mat(0xd8cfc0, { roughness: 0.95 }));
-    c.position.set(cx, 0.68, 0.02); g.add(c);
-    const bc = roundedBox(w / n - 0.14, 0.52, 0.2, 0.08, cloth);
+    // Seat cushion: thick and stuffed, radius near half its thickness,
+    // so the top edge is a full round and the front edge bulges. The
+    // top stays at 0.77, so the sit spot and the phone do not move.
+    const c = plumpCushion(cw, 0.32, 0.95, 0.15, mat(0xd8cfc0, { roughness: 0.95 }));
+    c.position.set(cx, 0.61, 0.02); g.add(c);
+    // Back cushion: thicker and taller than before, leaning back,
+    // bulging forward instead of sitting as a flat slab.
+    const bc = plumpCushion(cw, 0.56, 0.28, 0.13, cloth);
     bc.position.set(cx, 0.98, -0.36); bc.rotation.x = -0.16; g.add(bc);
-    // A throw pillow on each seat, in a warm gold accent.
-    const pil = roundedBox(0.42, 0.38, 0.16, 0.07, mat(0xffd166, { roughness: 0.95 }));
-    pil.position.set(cx, 0.9, -0.22);
+    // A throw pillow on each seat, in a warm gold accent, plump too.
+    // Moved slightly forward so the thicker back cushion does not
+    // bury it.
+    const pil = plumpCushion(0.46, 0.42, 0.20, 0.10, mat(0xffd166, { roughness: 0.95 }));
+    pil.position.set(cx, 0.92, -0.16);
     pil.rotation.x = -0.2; pil.rotation.z = (i % 2 === 0 ? 0.08 : -0.08);
     g.add(pil);
   }
@@ -2062,6 +2143,396 @@ function baseLights(scene, day) {
   sun.position.set(12, 20, 8); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024); scene.add(sun);
   return { hemi, sun };
 }
+// ---------- Police station, Navy barracks, Sensor Vault ----------
+// The forces, and the underground water sensors: three new visitable
+// places on the city map. The station and the barracks are real rooms
+// with uniformed officers and sailors; the vault is an underground room
+// under the treatment plant whose gauges read the same three water
+// lines as the Act II valve room.
+// The US flag: 13 stripes and a blue canton with stars, drawn on canvas
+// so it needs no texture file. The plane hangs from a pole by its left
+// edge (position the mesh so x 0 is the pole).
+function makeUSFlag() {
+  const c = document.createElement('canvas'); c.width = 150; c.height = 90;
+  const ctx = c.getContext('2d');
+  for (let i = 0; i < 13; i++) { ctx.fillStyle = i % 2 === 0 ? '#b22234' : '#f2f2f2'; ctx.fillRect(0, i * 90 / 13, 150, 90 / 13 + 1); }
+  ctx.fillStyle = '#3c3b6e'; ctx.fillRect(0, 0, 60, 90 * 7 / 13);
+  ctx.fillStyle = '#f2f2f2';
+  for (let r = 0; r < 5; r++) for (let col = 0; col < 6; col++) { ctx.beginPath(); ctx.arc(5 + col * 10, 5 + r * 10, 1.8, 0, Math.PI * 2); ctx.fill(); }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.9), new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, roughness: 0.9 }));
+  flag.position.set(0.75, 0, 0);
+  return flag;
+}
+// The NYPD flag: a blue field with a white badge and NYPD in white.
+function makeNYPDFlag() {
+  const c = document.createElement('canvas'); c.width = 150; c.height = 90;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#1a2a4a'; ctx.fillRect(0, 0, 150, 90);
+  ctx.fillStyle = '#f2f2f2'; ctx.beginPath(); ctx.arc(75, 32, 20, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1a2a4a'; ctx.beginPath(); ctx.arc(75, 32, 13, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#f2f2f2'; ctx.font = 'bold 26px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('NYPD', 75, 76);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.9), new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, roughness: 0.9 }));
+  flag.position.set(0.75, 0, 0);
+  return flag;
+}
+// A wanted poster for the station bulletin board: WANTED, a silhouette,
+// NYPD at the bottom.
+function makeWantedPoster() {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 160;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#f2ede2'; ctx.fillRect(0, 0, 128, 160);
+  ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 24px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('WANTED', 64, 30);
+  ctx.fillStyle = '#5a5a5a'; ctx.beginPath(); ctx.arc(64, 70, 22, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(64, 132, 30, Math.PI, 0); ctx.fill();
+  ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 16px Arial';
+  ctx.fillText('NYPD', 64, 152);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.5), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9 }));
+}
+// A police station lobby: a front desk, benches, a barred cell, flags,
+// a bulletin board with wanted posters, and officers on duty.
+function buildPoliceStation(scene) {
+  const wallMat = mat(0x9ab8a8, { roughness: 0.95 });
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(18, 0.1, 14), mat(0x3a3a3a, { roughness: 0.9 }));
+  floor.position.set(0, 0.05, 0); floor.receiveShadow = true; scene.add(floor);
+  const mk = (w, h, d, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat); m.position.set(x, y, z); m.receiveShadow = true; scene.add(m); return m; };
+  mk(18, 3.4, 0.2, 0, 1.7, -7); mk(18, 3.4, 0.2, 0, 1.7, 7);
+  mk(0.2, 3.4, 14, -9, 1.7, 0); mk(0.2, 3.4, 14, 9, 1.7, 0);
+  const ceil = new THREE.Mesh(new THREE.BoxGeometry(18, 0.1, 14), mat(0xd8d8d8, { roughness: 0.95 }));
+  ceil.position.set(0, 3.45, 0); scene.add(ceil);
+  // Front desk: a long wooden counter with a bell, a phone and papers.
+  const desk = roundedBox(4.5, 1.1, 0.9, 0.06, mat(0x6b4226, { roughness: 0.6 }));
+  desk.position.set(0, 0.55, -5); desk.castShadow = true; scene.add(desk);
+  const bell = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
+  bell.position.set(-1.2, 1.15, -5); scene.add(bell);
+  const deskPhone = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.12, 0.2), mat(0x1a1a1a, { roughness: 0.4 }));
+  deskPhone.position.set(1.2, 1.16, -5); scene.add(deskPhone);
+  const papers = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.35), mat(0xf2f2f2, { roughness: 0.9 }));
+  papers.position.set(0.3, 1.12, -5); scene.add(papers);
+  // Benches along both side walls.
+  for (const bx of [-8.2, 8.2]) {
+    const bench = roundedBox(0.6, 0.45, 3, 0.05, mat(0x6b4226, { roughness: 0.7 }));
+    bench.position.set(bx, 0.45, 0); bench.castShadow = true; scene.add(bench);
+  }
+  // A barred cell in the north-east corner: a frame, vertical steel
+  // bars, a bench inside, a small barred window.
+  const cellFrame = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 0.1), mat(0x3a3a3a, { metalness: 0.6, roughness: 0.4 }));
+  cellFrame.position.set(6.5, 1.3, -5.9); scene.add(cellFrame);
+  for (let i = 0; i < 7; i++) {
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 2.4, 8), new THREE.MeshStandardMaterial({ color: 0x8a8a86, metalness: 0.8, roughness: 0.3 }));
+    bar.position.set(5.1 + i * 0.45, 1.3, -5.7); scene.add(bar);
+  }
+  const cellBench = roundedBox(2.6, 0.4, 0.6, 0.05, mat(0x5a5a58, { roughness: 0.9 }));
+  cellBench.position.set(6.5, 0.4, -6.4); scene.add(cellBench);
+  const cellSign = textSprite('HOLDING CELL', '#2a2118', '#ffd166', 'Cell 1');
+  cellSign.scale.set(2.4, 0.6, 1); cellSign.position.set(6.5, 2.9, -6.6); scene.add(cellSign);
+  // Flags on poles in the north-west corner: the US flag and the NYPD flag.
+  for (const [fx, mkFlag] of [[-8, makeUSFlag], [-6.6, makeNYPDFlag]]) {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 2.6, 8), new THREE.MeshStandardMaterial({ color: 0x8a8a86, metalness: 0.7, roughness: 0.4 }));
+    pole.position.set(fx, 1.3, -6.2); scene.add(pole);
+    const flag = mkFlag(); flag.position.set(fx, 2.2, -6.2); scene.add(flag);
+  }
+  // Bulletin board with wanted posters on the west wall.
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.4, 2.4), mat(0x8a6a3a, { roughness: 0.9 }));
+  board.position.set(-8.85, 1.7, -2); scene.add(board);
+  for (let i = 0; i < 3; i++) {
+    const poster = makeWantedPoster();
+    poster.position.set(-8.78, 1.7, -2.8 + i * 0.8); poster.rotation.y = Math.PI / 2; scene.add(poster);
+  }
+  // Coffee machine and water cooler on a side table.
+  const sideTable = roundedBox(1.2, 0.8, 0.6, 0.05, mat(0x5a5a58, { roughness: 0.8 }));
+  sideTable.position.set(-8.2, 0.4, 4.5); scene.add(sideTable);
+  const coffee = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.5, 0.35), mat(0x1a1a1a, { roughness: 0.4 }));
+  coffee.position.set(-8.2, 1.05, 4.3); scene.add(coffee);
+  const cooler = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.1, 12), mat(0x2e6fb0, { roughness: 0.5 }));
+  cooler.position.set(-8.2, 0.55, 5.2); scene.add(cooler);
+  const coolerTop = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), new THREE.MeshStandardMaterial({ color: 0x9fd8ff, roughness: 0.2, transparent: true, opacity: 0.7 }));
+  coolerTop.position.set(-8.2, 1.2, 5.2); scene.add(coolerTop);
+  // Wall clock on the north wall.
+  const clock = new THREE.Mesh(new THREE.CircleGeometry(0.3, 24), mat(0xf4f6f8, { roughness: 0.4 }));
+  clock.position.set(-3.5, 2.6, -6.85); scene.add(clock);
+  const clockHand = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.2, 0.01), mat(0x1a1a1a, { roughness: 0.5 }));
+  clockHand.position.set(-3.5, 2.68, -6.84); clockHand.rotation.z = -0.8; scene.add(clockHand);
+  lamp(scene, -4, 3.0, 0, 0xffe0b0, 0.9, 14);
+  lamp(scene, 4, 3.0, 0, 0xffe0b0, 0.9, 14);
+  const sign = textSprite('POLICE STATION', '#1a2a4a', '#7fb0ff', 'NYPD - Midtown Manhattan');
+  sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.0, -6.8); scene.add(sign);
+  // Officers on duty: one behind the desk, one by the cells, two
+  // walking the lobby floor.
+  const deskOfficer = makeOfficer('police', { x: 0, z: -5.9, speed: 0 });
+  if (deskOfficer) { deskOfficer.group.position.set(0, 0, -5.9); deskOfficer.group.rotation.y = deskOfficer.rigged ? 0 : Math.PI; scene.add(deskOfficer.group); }
+  const cellOfficer = makeOfficer('police', { x: 4.6, z: -5.2, speed: 0 });
+  if (cellOfficer) { cellOfficer.group.position.set(4.6, 0, -5.2); cellOfficer.group.rotation.y = cellOfficer.rigged ? -Math.PI / 2 : Math.PI / 2; scene.add(cellOfficer.group); }
+  for (let i = 0; i < 2; i++) {
+    const w = makeOfficer('police', { bounds: { minX: -8, maxX: 8, minZ: -6, maxZ: 6 }, speed: 0.7 + Math.random() * 0.3 });
+    if (w) { scene.add(w.group); roomWalkers.push(w); }
+  }
+  addExitDoor(scene, { x: 0, z: 6.9, ry: Math.PI, label: 'EXIT - STATION DOOR' });
+}
+// A Navy barracks hall: rows of bunks, wall lockers, a duty desk, a flag,
+// and sailors on duty.
+function buildNavyBarracks(scene) {
+  const wallMat = mat(0x6a6a5a, { roughness: 0.95 });
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(20, 0.1, 12), mat(0x4a4a48, { roughness: 0.9 }));
+  floor.position.set(0, 0.05, 0); floor.receiveShadow = true; scene.add(floor);
+  const mk = (w, h, d, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat); m.position.set(x, y, z); m.receiveShadow = true; scene.add(m); return m; };
+  mk(20, 3.4, 0.2, 0, 1.7, -6); mk(20, 3.4, 0.2, 0, 1.7, 6);
+  mk(0.2, 3.4, 12, -10, 1.7, 0); mk(0.2, 3.4, 12, 10, 1.7, 0);
+  const ceil = new THREE.Mesh(new THREE.BoxGeometry(20, 0.1, 12), mat(0xd8d8d8, { roughness: 0.95 }));
+  ceil.position.set(0, 3.45, 0); scene.add(ceil);
+  // Rows of bunks along both side walls: frame, mattress, pillow,
+  // folded blanket, footlocker.
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 3; i++) {
+      const z = -3 + i * 3;
+      const bx = side * 8.6;
+      for (const [dx, dz] of [[-0.9, -0.4], [0.9, -0.4], [-0.9, 0.4], [0.9, 0.4]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.5, 0.08), new THREE.MeshStandardMaterial({ color: 0x3a3a30, metalness: 0.6, roughness: 0.4 }));
+        leg.position.set(bx + dx, 0.25, z + dz); scene.add(leg);
+      }
+      const mattress = roundedBox(2, 0.25, 0.9, 0.06, mat(0x7a7a6a, { roughness: 0.95 }));
+      mattress.position.set(bx, 0.62, z); mattress.castShadow = true; scene.add(mattress);
+      const pillow = roundedBox(0.5, 0.15, 0.4, 0.05, mat(0xf2f2f2, { roughness: 0.95 }));
+      pillow.position.set(bx - side * 0.6, 0.8, z); scene.add(pillow);
+      const blanket = roundedBox(1, 0.12, 0.9, 0.04, mat(0x1a2a4a, { roughness: 0.95 }));
+      blanket.position.set(bx + side * 0.4, 0.78, z); scene.add(blanket);
+      const footlocker = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.4, 0.5), mat(0x5a4a2a, { roughness: 0.8 }));
+      footlocker.position.set(bx, 0.2, z + side * 0.9); scene.add(footlocker);
+    }
+  }
+  // Wall lockers along the north wall, between the bunk rows.
+  for (let i = 0; i < 6; i++) {
+    const locker = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2, 0.5), mat(0x5a5a3a, { roughness: 0.8, metalness: 0.2 }));
+    locker.position.set(-4.5 + i * 1.8, 1, -5.6); locker.castShadow = true; scene.add(locker);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.8, 0.04), mat(0x6a6a4a, { roughness: 0.8 }));
+    door.position.set(-4.5 + i * 1.8, 1, -5.32); scene.add(door);
+  }
+  // Duty desk with a lamp and papers, near the door.
+  const desk = roundedBox(1.6, 0.9, 0.8, 0.05, mat(0x6b4226, { roughness: 0.6 }));
+  desk.position.set(3.5, 0.45, 4.5); desk.castShadow = true; scene.add(desk);
+  const deskLamp = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.12, 0.35, 10), new THREE.MeshStandardMaterial({ color: 0x2a5a2a, roughness: 0.5 }));
+  deskLamp.position.set(3.1, 1.05, 4.5); scene.add(deskLamp);
+  const deskPapers = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.35), mat(0xf2f2f2, { roughness: 0.9 }));
+  deskPapers.position.set(3.8, 0.92, 4.5); scene.add(deskPapers);
+  // US flag on a pole in the north-west corner, bulletin board on the
+  // north wall, ceiling fan in the middle of the hall.
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 2.6, 8), new THREE.MeshStandardMaterial({ color: 0x8a8a86, metalness: 0.7, roughness: 0.4 }));
+  pole.position.set(-9, 1.3, -5); scene.add(pole);
+  const flag = makeUSFlag(); flag.position.set(-9, 2.2, -5); scene.add(flag);
+  const board = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.4, 0.1), mat(0x8a6a3a, { roughness: 0.9 }));
+  board.position.set(7, 1.7, -5.85); scene.add(board);
+  for (let i = 0; i < 3; i++) {
+    const note = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.5), mat(0xf2f2f2, { roughness: 0.9 }));
+    note.position.set(6.2 + i * 0.8, 1.7, -5.78); scene.add(note);
+  }
+  addCeilingFan(scene, 0, 0);
+  lamp(scene, -5, 3.0, 0, 0xffe0b0, 0.9, 14);
+  lamp(scene, 5, 3.0, 0, 0xffe0b0, 0.9, 14);
+  const sign = textSprite('NAVY BARRACKS', '#2a2118', '#ffd166', 'US Navy - Brooklyn Navy Yard');
+  sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.0, -5.8); scene.add(sign);
+  // Sailors on duty: one by the flag, one by the duty desk, two walking
+  // the hall floor.
+  const flagSailor = makeOfficer('navy', { x: -8.2, z: -4.4, speed: 0 });
+  if (flagSailor) { flagSailor.group.position.set(-8.2, 0, -4.4); flagSailor.group.rotation.y = flagSailor.rigged ? Math.PI : 0; scene.add(flagSailor.group); }
+  const deskSailor = makeOfficer('navy', { x: 2.6, z: 4.4, speed: 0 });
+  if (deskSailor) { deskSailor.group.position.set(2.6, 0, 4.4); deskSailor.group.rotation.y = deskSailor.rigged ? -Math.PI / 2 : Math.PI / 2; scene.add(deskSailor.group); }
+  for (let i = 0; i < 2; i++) {
+    const w = makeOfficer('navy', { bounds: { minX: -9, maxX: 9, minZ: -5, maxZ: 5 }, speed: 0.7 + Math.random() * 0.3 });
+    if (w) { scene.add(w.group); roomWalkers.push(w); }
+  }
+  addExitDoor(scene, { x: 0, z: 5.9, ry: Math.PI, label: 'EXIT - BARRACKS DOOR' });
+}
+// ---------- Sensor Vault ----------
+// The needle angle for a pressure gauge: 0% points down-left, 50% up,
+// 100% down-right, matching the dial ticks.
+function vaultNeedleAngle(pct) {
+  return (1 - pct / 50) * (3 * Math.PI / 4);
+}
+// The vault reads the same three water lines as the Act II valve room.
+// The valve room saves its latest pressures to localStorage; the vault
+// falls back to 60/60/60 (the valve puzzle start) when nothing is saved.
+function readVaultPressures() {
+  const def = { hospital: 60, residential: 60, industrial: 60 };
+  try {
+    const raw = localStorage.getItem('lastSignalPressures');
+    if (!raw) return def;
+    const saved = JSON.parse(raw);
+    return {
+      hospital: Math.max(0, Math.min(100, saved.hospital !== undefined ? saved.hospital : 60)),
+      residential: Math.max(0, Math.min(100, saved.residential !== undefined ? saved.residential : 60)),
+      industrial: Math.max(0, Math.min(100, saved.industrial !== undefined ? saved.industrial : 60))
+    };
+  } catch (e) { return def; }
+}
+// A pressure gauge dial: cream face, ticks and numbers 0-100 PSI, a red
+// zone at 80-100, PSI and the line name at the bottom.
+function vaultDialTexture(label) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#f4f0e0'; ctx.beginPath(); ctx.arc(128, 128, 126, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 10;
+  // Red zone 80-100 PSI: from -9 deg to +45 deg on the dial face.
+  ctx.beginPath(); ctx.arc(128, 128, 112, -9 * Math.PI / 180, 45 * Math.PI / 180); ctx.stroke();
+  ctx.fillStyle = '#1a1a1a'; ctx.strokeStyle = '#1a1a1a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let v = 0; v <= 100; v += 5) {
+    const a = (-135 + v / 100 * 270) * Math.PI / 180;
+    const r1 = 108, r2 = v % 25 === 0 ? 88 : 98;
+    ctx.lineWidth = v % 25 === 0 ? 4 : 2;
+    ctx.beginPath();
+    ctx.moveTo(128 + Math.sin(a) * r1, 128 - Math.cos(a) * r1);
+    ctx.lineTo(128 + Math.sin(a) * r2, 128 - Math.cos(a) * r2);
+    ctx.stroke();
+  }
+  ctx.font = 'bold 26px Arial';
+  for (const v of [0, 25, 50, 75, 100]) {
+    const a = (-135 + v / 100 * 270) * Math.PI / 180;
+    ctx.fillText(String(v), 128 + Math.sin(a) * 68, 128 - Math.cos(a) * 68);
+  }
+  ctx.font = 'bold 22px Arial'; ctx.fillText('PSI', 128, 168);
+  ctx.font = 'bold 18px Arial'; ctx.fillText(label, 128, 196);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// Redraw one vault readout: the percent text and the status light
+// (green at 70 or more, amber below).
+function setVaultReading(r, pct) {
+  try {
+    const ctx = r.ctx;
+    ctx.fillStyle = '#0a1a0a'; ctx.fillRect(0, 0, 256, 64);
+    ctx.fillStyle = pct >= 70 ? '#7ac74f' : '#ffb13a';
+    ctx.font = 'bold 34px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(r.label + ' ' + Math.round(pct) + '%', 128, 34);
+    r.tex.needsUpdate = true;
+    r.light.material.color.set(pct >= 70 ? 0x2aff7a : 0xffb13a);
+    r.light.material.emissive.set(pct >= 70 ? 0x2aff7a : 0xffb13a);
+  } catch (e) { /* ignore */ }
+}
+// The sensor vault: an underground room under the water treatment plant.
+// A stair comes down from a hatch in the ceiling; three sensor panels on
+// the north wall read the Hospital, Residential and Industrial lines;
+// three big pipes come in through the east wall; sensor lights blink;
+// a console shows the pressure graph.
+function buildSensorVault(scene) {
+  const wallMat = mat(0x3a3a38, { roughness: 0.95 });
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(12, 0.1, 8), mat(0x2e2e2c, { roughness: 0.9 }));
+  floor.position.set(0, 0.05, 0); floor.receiveShadow = true; scene.add(floor);
+  const mk = (w, h, d, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat); m.position.set(x, y, z); m.receiveShadow = true; scene.add(m); return m; };
+  mk(12, 2.8, 0.2, 0, 1.4, -4); mk(12, 2.8, 0.2, 0, 1.4, 4);
+  mk(0.2, 2.8, 8, -6, 1.4, 0); mk(0.2, 2.8, 8, 6, 1.4, 0);
+  const ceil = new THREE.Mesh(new THREE.BoxGeometry(12, 0.1, 8), mat(0x2a2a28, { roughness: 0.95 }));
+  ceil.position.set(0, 2.85, 0); scene.add(ceil);
+  // A floor drain and a puddle near it.
+  const drain = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.04, 0.8), mat(0x1a1a1a, { metalness: 0.6, roughness: 0.4 }));
+  drain.position.set(-4, 0.12, 2.5); scene.add(drain);
+  const puddle = new THREE.Mesh(new THREE.CircleGeometry(0.7, 20), new THREE.MeshStandardMaterial({ color: 0x1a2a3a, metalness: 0.8, roughness: 0.1 }));
+  puddle.rotation.x = -Math.PI / 2; puddle.position.set(-3, 0.12, 1.6); scene.add(puddle);
+  // The stair down from the hatch: six steps rising to a square hatch
+  // in the ceiling at the south wall, the hatch door swung open.
+  for (let i = 0; i < 6; i++) {
+    const step = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.18, 0.4), mat(0x4a4a48, { roughness: 0.9 }));
+    step.position.set(0, 0.18 + i * 0.42, 1.6 + i * 0.38); scene.add(step);
+  }
+  const hatchFrame = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.1, 1.4), mat(0x6a6a66, { metalness: 0.6, roughness: 0.4 }));
+  hatchFrame.position.set(0, 2.82, 3.5); scene.add(hatchFrame);
+  const hatchDoor = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.06, 1.2), mat(0x8a6a3a, { roughness: 0.8 }));
+  hatchDoor.position.set(0, 3.3, 3.9); hatchDoor.rotation.x = -1.9; scene.add(hatchDoor);
+  // Pipes along the ceiling, one per line, with a coloured band each.
+  const pipeCols = { hospital: 0x2e6fb0, residential: 0x2e7a4a, industrial: 0xc07a1a };
+  const pipeZ = { hospital: -3, residential: -2.5, industrial: -2 };
+  for (const k of Object.keys(pipeCols)) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 11, 10), new THREE.MeshStandardMaterial({ color: 0x9aa2a8, metalness: 0.8, roughness: 0.35 }));
+    pipe.rotation.z = Math.PI / 2; pipe.position.set(0, 2.6, pipeZ[k]); scene.add(pipe);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.3, 10), mat(pipeCols[k], { roughness: 0.6 }));
+    band.rotation.z = Math.PI / 2; band.position.set(-2, 2.6, pipeZ[k]); scene.add(band);
+  }
+  // Three sensor panels on the north wall, one per line: a panel, a
+  // round gauge with a needle, a digital readout, a status light, a
+  // label, and a blinking sensor light on top.
+  const lines = [
+    { key: 'hospital', label: 'HOSPITAL', x: -3.5, color: 0x2e6fb0 },
+    { key: 'residential', label: 'RESIDENTIAL', x: 0, color: 0x2e7a4a },
+    { key: 'industrial', label: 'INDUSTRIAL', x: 3.5, color: 0xc07a1a }
+  ];
+  const pr = readVaultPressures();
+  for (const line of lines) {
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.2, 0.15), mat(0x2a2e33, { metalness: 0.5, roughness: 0.5 }));
+    panel.position.set(line.x, 1.5, -3.85); panel.castShadow = true; scene.add(panel);
+    const dial = new THREE.Mesh(new THREE.CircleGeometry(0.32, 28), new THREE.MeshStandardMaterial({ map: vaultDialTexture(line.label), roughness: 0.4 }));
+    dial.position.set(line.x, 1.95, -3.76); scene.add(dial);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.025, 8, 28), new THREE.MeshStandardMaterial({ color: 0xc8a24a, metalness: 0.9, roughness: 0.3 }));
+    ring.position.set(line.x, 1.95, -3.76); scene.add(ring);
+    const pivot = new THREE.Group(); pivot.position.set(line.x, 1.95, -3.74);
+    const needle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.26, 0.015), new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.4 }));
+    needle.position.set(0, 0.1, 0); pivot.add(needle);
+    pivot.rotation.z = vaultNeedleAngle(pr[line.key]); scene.add(pivot);
+    vaultNeedles.push({ key: line.key, pivot, target: vaultNeedleAngle(pr[line.key]) });
+    const readCanvas = document.createElement('canvas'); readCanvas.width = 256; readCanvas.height = 64;
+    const readTex = new THREE.CanvasTexture(readCanvas); readTex.colorSpace = THREE.SRGBColorSpace;
+    const readout = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.24), new THREE.MeshBasicMaterial({ map: readTex }));
+    readout.position.set(line.x, 1.35, -3.76); scene.add(readout);
+    const lightMat = new THREE.MeshStandardMaterial({ color: 0x2aff7a, emissive: 0x2aff7a, emissiveIntensity: 1.2, roughness: 0.4 });
+    const status = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), lightMat);
+    status.position.set(line.x + 0.7, 2.4, -3.76); scene.add(status);
+    vaultReadouts.push({ key: line.key, label: line.label, canvas: readCanvas, ctx: readCanvas.getContext('2d'), tex: readTex, light: status });
+    setVaultReading(vaultReadouts[vaultReadouts.length - 1], pr[line.key]);
+    const label = textSprite(line.label, '#2a2118', '#ffd166', 'Water pressure sensor');
+    label.scale.set(2.2, 0.55, 1); label.position.set(line.x, 2.85, -3.7); scene.add(label);
+    const blinkMat = new THREE.MeshStandardMaterial({ color: 0x2aff7a, emissive: 0x2aff7a, emissiveIntensity: 1.2, roughness: 0.4 });
+    const blink = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), blinkMat);
+    blink.position.set(line.x - 0.7, 2.4, -3.76); scene.add(blink);
+    vaultBlinkers.push(blink);
+    hitBox(scene, 2.0, 2.4, 0.6, line.x, 1.5, -3.8, 'vaultPanel');
+  }
+  // Three big pipes coming in through the east wall, one per line, each
+  // with a valve wheel and a label, running down into the floor.
+  const eastZ = { hospital: -2, residential: 0, industrial: 2 };
+  for (const line of lines) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 2.2, 12), new THREE.MeshStandardMaterial({ color: 0x9aa2a8, metalness: 0.8, roughness: 0.35 }));
+    pipe.position.set(5.7, 1.5, eastZ[line.key]); scene.add(pipe);
+    const wheel = new THREE.Group(); wheel.position.set(5.55, 1.4, eastZ[line.key]); wheel.rotation.y = Math.PI / 2; scene.add(wheel);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.035, 8, 20), new THREE.MeshStandardMaterial({ color: 0xc0392b, metalness: 0.6, roughness: 0.4 }));
+    wheel.add(rim);
+    for (let s = 0; s < 3; s++) {
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.04), new THREE.MeshStandardMaterial({ color: 0xc0392b, metalness: 0.6, roughness: 0.4 }));
+      spoke.rotation.z = s * Math.PI / 3; wheel.add(spoke);
+    }
+    const plabel = textSprite(line.label, '#2a2118', '#ffd166', 'Sensor line');
+    plabel.scale.set(1.8, 0.45, 1); plabel.position.set(5.5, 2.5, eastZ[line.key]); scene.add(plabel);
+  }
+  // Control console in the south-east corner: a desk with a screen
+  // showing the pressure graph, a keyboard, and cables to the panels.
+  const consoleBody = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.9, 0.7), mat(0x2e4a6b, { roughness: 0.5, metalness: 0.3 }));
+  consoleBody.position.set(4.5, 0.45, 3.2); consoleBody.castShadow = true; scene.add(consoleBody);
+  const graphCanvas = document.createElement('canvas'); graphCanvas.width = 256; graphCanvas.height = 128;
+  const gctx = graphCanvas.getContext('2d');
+  gctx.fillStyle = '#0a1a0a'; gctx.fillRect(0, 0, 256, 128);
+  gctx.strokeStyle = '#2a4a2a'; gctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { gctx.beginPath(); gctx.moveTo(0, i * 32); gctx.lineTo(256, i * 32); gctx.stroke(); }
+  const graphCols = { hospital: '#4a9fd8', residential: '#7ac74f', industrial: '#ffb13a' };
+  for (const line of lines) {
+    const y = 118 - pr[line.key] / 100 * 100;
+    gctx.strokeStyle = graphCols[line.key]; gctx.lineWidth = 3;
+    gctx.beginPath(); gctx.moveTo(8, y + 6); gctx.lineTo(248, y - 6); gctx.stroke();
+  }
+  gctx.fillStyle = '#c8d4dc'; gctx.font = 'bold 16px Arial'; gctx.textAlign = 'left';
+  gctx.fillText('PRESSURE - HOSPITAL / RESIDENTIAL / INDUSTRIAL', 8, 16);
+  const graphTex = new THREE.CanvasTexture(graphCanvas); graphTex.colorSpace = THREE.SRGBColorSpace;
+  const graph = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.55), new THREE.MeshBasicMaterial({ map: graphTex }));
+  graph.position.set(4.5, 1.15, 3.2); graph.rotation.x = -0.2; scene.add(graph);
+  const keyboard = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.2), mat(0x1a1a1a, { roughness: 0.4 }));
+  keyboard.position.set(4.5, 0.92, 3.2); scene.add(keyboard);
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 7.5, 6), mat(0x1a1a1a, { roughness: 0.9 }));
+  cable.rotation.z = Math.PI / 2; cable.position.set(1, 2.7, -3.7); scene.add(cable);
+  lamp(scene, 0, 2.5, 0, 0xffe0b0, 0.9, 12);
+  lamp(scene, -4, 2.5, 2, 0xffe0b0, 0.6, 9);
+  const sign = textSprite('SENSOR VAULT', '#2a2118', '#ffd166', 'Water pressure sensors - underground');
+  sign.scale.set(4.5, 1.1, 1); sign.position.set(0, 2.6, -3.8); scene.add(sign);
+  addExitDoor(scene, { x: 3.5, z: 3.9, ry: Math.PI, label: 'EXIT - UP THE STAIRS' });
+}
 export function enterPlace(kind, onLeave, options) {
   if (homeActive) leavePlace();
   const opts = options || {};
@@ -2077,12 +2548,13 @@ export function enterPlace(kind, onLeave, options) {
   tunnelFan = null; tunnelGaugeNeedle = null; tunnelGaugeCanvas = null; tunnelGaugeTex = null;
   tunnelRunning = false; tunnelRunT = 0; tunnelDone = false;
   symposiumAudience = []; symposiumAudienceBuilt = false; podiumDone = false;
+  roomWalkers = []; vaultBlinkers = []; vaultNeedles = []; vaultReadouts = []; vaultReadAt = -100;
   callActive = false; phoneDown = false; boothBriefAt = -100;
   currentBedPos = null;
   sleeping = false; sleepT = 0; sleepRestDone = false;
   try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
   terminalPedestrians = [];
-  const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel' || kind === 'windtunnel' || kind === 'symposium';
+  const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel' || kind === 'windtunnel' || kind === 'symposium' || kind === 'policestation' || kind === 'navybarracks' || kind === 'sensorvault';
   if (isRoom) {
     homeScene.background = new THREE.Color(0x0a0d10);
     homeScene.fog = new THREE.FogExp2(0x0a0d10, 0.02);
@@ -2098,6 +2570,9 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'carpark') { buildCarpark(homeScene); homeBounds = { x: [-18, 18], z: [-14, 18] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
   else if (kind === 'windtunnel') { buildWindtunnel(homeScene); homeBounds = { x: [-8.4, 8.4], z: [-5.4, 5.4] }; homeStart = { x: 0, y: 1.7, z: 4.5, yaw: 0 }; }
   else if (kind === 'symposium') { buildSymposium(homeScene); homeBounds = { x: [-7.4, 7.4], z: [-6.4, 6.4] }; homeStart = { x: 0, y: 1.7, z: 5.5, yaw: 0 }; }
+  else if (kind === 'policestation') { buildPoliceStation(homeScene); homeBounds = { x: [-8.4, 8.4], z: [-6.4, 6.4] }; homeStart = { x: 0, y: 1.7, z: 5.5, yaw: 0 }; }
+  else if (kind === 'navybarracks') { buildNavyBarracks(homeScene); homeBounds = { x: [-9.4, 9.4], z: [-5.4, 5.4] }; homeStart = { x: 0, y: 1.7, z: 4.5, yaw: 0 }; }
+  else if (kind === 'sensorvault') { buildSensorVault(homeScene); homeBounds = { x: [-5.4, 5.4], z: [-3.4, 3.4] }; homeStart = { x: 0, y: 1.7, z: 1.0, yaw: 0 }; }
   else return;
   // Hide any room key the player already owns (a replay), so it cannot
   // be picked up twice.
@@ -2118,7 +2593,10 @@ export function enterPlace(kind, onLeave, options) {
     airport: 'Airport - JFK Terminal 4. Look around, then head back to the map.',
     carpark: 'Car Park - rows of parked cars. Look around, then head back to the map.',
     windtunnel: 'Wind Tunnel Lab - the long wooden tunnel. Run it at the control panel by the test section. The phone booth on the wall gives the next mission.',
-    symposium: 'Symposium Hall - a full house. Take the NYC podium on the stage.'
+    symposium: 'Symposium Hall - a full house. Take the NYC podium on the stage.',
+    policestation: 'Police Station - NYPD Midtown. The officers are on duty. Look around, then head back to the map.',
+    navybarracks: 'Navy Barracks - Brooklyn Navy Yard. The sailors are on duty. Look around, then head back to the map.',
+    sensorvault: 'Sensor Vault - underground, under the treatment plant. The pressure sensors read the three water lines. Tap a panel for the readings.'
   };
   showHomeToast(welcomes[kind] || kind);
   if (homeRaf) cancelAnimationFrame(homeRaf);
@@ -2145,6 +2623,7 @@ export function leavePlace() {
   tunnelFan = null; tunnelGaugeNeedle = null; tunnelGaugeCanvas = null; tunnelGaugeTex = null;
   tunnelRunning = false; tunnelRunT = 0; tunnelDone = false;
   symposiumAudience = []; symposiumAudienceBuilt = false; podiumDone = false;
+  roomWalkers = []; vaultBlinkers = []; vaultNeedles = []; vaultReadouts = []; vaultReadAt = -100;
   sleeping = false; sleepT = 0; sleepRestDone = false;
   prologueInBed = false; prologueSeated = false; callActive = false; phoneDown = false; boothBriefAt = -100;
   try { const a = getAvatar(); setAvatarPose('stand'); detachAvatar(); } catch (e) { /* ignore */ }
@@ -2368,6 +2847,24 @@ function homeAnimate() {
       if (dx * dx + dz * dz < 1.5 * 1.5) takePodium();
     }
   }
+  // Police station / Navy barracks: officers and sailors walk the room.
+  for (const p of roomWalkers) updateOfficer(p, dt);
+  // Sensor vault: the sensor lights blink, and the gauge needles follow
+  // the live pressures from the valve room (re-read once a second).
+  if (homeKind === 'sensorvault') {
+    const phase = t * 2;
+    for (let i = 0; i < vaultBlinkers.length; i++) {
+      const b = vaultBlinkers[i];
+      try { b.material.emissiveIntensity = (Math.sin(phase + i * 1.7) > 0) ? 1.6 : 0.15; } catch (e) { /* ignore */ }
+    }
+    for (const n of vaultNeedles) n.pivot.rotation.z += (n.target - n.pivot.rotation.z) * 0.08;
+    if (t - vaultReadAt > 1) {
+      vaultReadAt = t;
+      const pr = readVaultPressures();
+      for (const n of vaultNeedles) n.target = vaultNeedleAngle(pr[n.key]);
+      for (const r of vaultReadouts) setVaultReading(r, pr[r.key]);
+    }
+  }
   // Third-person: show the player avatar and put the camera behind it.
   {
     const mv2 = moveDelta(homeKeys, homeYaw, 1);
@@ -2440,6 +2937,9 @@ function homeHandleTap(clientX, clientY) {
     boardTrain();
   } else if (action === 'tunnelPanel') {
     startTunnelRun();
+  } else if (action === 'vaultPanel') {
+    const pr = readVaultPressures();
+    showHomeToast('Sensors live - Hospital ' + Math.round(pr.hospital) + '%, Residential ' + Math.round(pr.residential) + '%, Industrial ' + Math.round(pr.industrial) + '%.');
   } else if (action === 'podium') {
     takePodium();
   } else if (action === 'bed') {

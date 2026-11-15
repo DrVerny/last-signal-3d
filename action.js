@@ -5,7 +5,7 @@
 // if the DOM is unavailable, the helpers are silent no-ops.
 
 import * as THREE from 'three';
-import { makeRiggedPerson, updateRiggedPerson, queueUpgrade, processUpgradeQueue } from './crowd.js';
+import { makeRiggedPerson, updateRiggedPerson, queueUpgrade, processUpgradeQueue, pickLook, pickBodyType } from './crowd.js';
 
 let bannerEl = null, flashEl = null;
 
@@ -163,12 +163,15 @@ export function hideBriefing() {
 // turn the crowd into clones of the player characters.
 // ---------------------------------------------------------------------------
 // Coat colours from the video: black coats, dark navy, brown jackets,
-// red coat, beige puffer, green jacket, grey, dark purple.
-const PED_COATS = [0x1a1a1a, 0x1a1a1a, 0x222f45, 0x5a3a22, 0x8a2a22, 0xc8b89a, 0x3a5a3a, 0x555555, 0x3a2a4a, 0x6a4a2e];
-const PED_LEGS = [0x2a4a6a, 0x1a1a1a, 0x3a2a1a, 0x555555, 0x2a4a6a, 0x1a1a1a];
-const PED_HAIR = [0x1a1a1a, 0x3a2a1a, 0x5a5a5a, 0x8a8a8a];
+// red coat, beige puffer, green jacket, grey, dark purple. These now live
+// in crowd.js (SHIRT_COLOURS / PANTS_COLOURS) so the primitive and the
+// rigged crowd share one clothing palette.
+const PED_HAIR = [0x1a1a1a, 0x3a2a1a, 0x5a5a5a, 0x8a8a8a, 0xc8a848, 0x6a2a1a];
 const PED_BAGS = [0xf2f2f2, 0x2a6ab0, 0xc02a2a, 0x2a8a7a, 0xd8b13a];
-const PED_SKINS = [0xc9a17a, 0x8a5a3a, 0xe8c8a8, 0x6a3a22];
+// Skin tones match the rigged crowd: Black, medium brown, fair White /
+// Saxon, in roughly equal measure, so a primitive person who has not
+// been upgraded yet already reads as the same mixed crowd.
+const PED_SKINS = [0x2e1a0e, 0x8a5a3a, 0xe8c8a8];
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
@@ -189,6 +192,12 @@ export function makePedestrian(opts) {
     const pockets = o.pockets || false;
     const shoulderBag = o.shoulderBag || false;
     const bags = o.bags || 0;
+    // Ethnicity + body type, the same as the rigged crowd: the primitive
+    // is only a stand-in until the models load, but it already carries
+    // the person's look and body, so the upgrade to a rigged clone keeps
+    // the same skin tone, hair, clothes, height and build.
+    const look = o.look || pickLook();
+    const bodyType = o.body || pickBodyType();
     // Pace by age, with a random factor so no two people share a speed:
     // old people stroll (0.55-0.75 m/s), adults walk (0.9-1.2), the young
     // walk briskly (1.3-1.65). A phone slows the walker down.
@@ -197,12 +206,13 @@ export function makePedestrian(opts) {
       speed = age === 'old' ? 0.55 + Math.random() * 0.2 : age === 'young' ? 1.3 + Math.random() * 0.35 : 0.9 + Math.random() * 0.3;
     }
     if (phone) speed *= 0.75;
-    const scale = o.scale !== undefined ? o.scale : (age === 'old' ? 0.94 + Math.random() * 0.04 : 0.96 + Math.random() * 0.12);
-    const width = o.width !== undefined ? o.width : 0.9 + Math.random() * 0.25;
-    const coatColor = o.coatColor !== undefined ? o.coatColor : pick(PED_COATS);
-    const legColor = o.legColor !== undefined ? o.legColor : pick(PED_LEGS);
-    const hairColor = age === 'old' ? pick([0xd8d8d8, 0x8a8a8a]) : pick(PED_HAIR);
-    const skinColor = o.skinColor !== undefined ? o.skinColor : pick(PED_SKINS);
+    const ageH = age === 'old' ? 0.96 : 1.0;
+    const scale = o.scale !== undefined ? o.scale : bodyType.height * ageH * (0.98 + Math.random() * 0.04);
+    const width = o.width !== undefined ? o.width : bodyType.width;
+    const coatColor = o.coatColor !== undefined ? o.coatColor : look.shirt;
+    const legColor = o.legColor !== undefined ? o.legColor : look.pants;
+    const hairColor = age === 'old' ? pick([0xd8d8d8, 0x8a8a8a]) : look.hair;
+    const skinColor = o.skinColor !== undefined ? o.skinColor : look.skin;
 
     const g = new THREE.Group();
     const bodyMat = new THREE.MeshStandardMaterial({ color: coatColor, roughness: 0.9 });
@@ -268,7 +278,8 @@ export function makePedestrian(opts) {
     const person = {
       group: g, legL, legR, armL, armR, headGroup, bagMeshes,
       phone, pockets, bags: bagCount, age,
-      heading, bounds, lane,
+      heading, bounds, lane, look, body: bodyType,
+      skinColor, hairColor, coatColor, legColor,
       x: o.x !== undefined ? o.x : (lane ? (Math.random() * (lane.max - lane.min) + lane.min) : (Math.random() * (bounds.maxX - bounds.minX) + bounds.minX)),
       z: o.z !== undefined ? o.z : (lane ? lane.fixed : (Math.random() * (bounds.maxZ - bounds.minZ) + bounds.minZ)),
       speed, phase: Math.random() * 6.28,

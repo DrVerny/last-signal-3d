@@ -22,6 +22,7 @@
 
 import * as THREE from './three.module.js';
 import { characterKey } from './gestures.js';
+import { registerFaceHumans, setSpeakingFace, clearFace, measureMouthWorld } from './expression.js';
 
 // How far the jaw drops at full open, and how far the chin juts forward,
 // in metres. A real open mouth drops the chin about 2 cm.
@@ -195,7 +196,11 @@ function addJawMorphToMesh(mesh, mouthWorld, forwardWorld) {
     if (maxW < 0.05) return -1; // nothing in the jaw region on this mesh
     const attr = new THREE.BufferAttribute(deltas, 3);
     attr.name = 'jawOpen';
-    geo.morphAttributes.position = [attr];
+    // Push, never replace: a smile morph built first on this geometry
+    // (by the face controls) must survive the jaw morph, and the jaw
+    // must survive a smile built after it.
+    if (!geo.morphAttributes.position) geo.morphAttributes.position = [];
+    geo.morphAttributes.position.push(attr);
     geo.morphTargetsRelative = true;
     if (!geo.userData) geo.userData = {};
     geo.userData.jawMorphDone = true;
@@ -210,60 +215,20 @@ function addJawMorphToMesh(mesh, mouthWorld, forwardWorld) {
 }
 
 // Estimate the mouth position and face forward for a model with no teeth
-// mesh (the rigged Quaternius models). Finds the head mesh by name, or
-// falls back to the highest mesh in the upper third of the body,
-// preferring the largest one at that height. The mouth sits at the front
-// of the head, about a quarter of the head height up from the chin.
-// Returns { mouthWorld, forward } or null when no head can be found.
+// mesh (the rigged Quaternius models). The mouth is measured from the
+// face geometry itself (see measureMouthWorld in expression.js). The old
+// estimate is gone: it picked the largest mesh near the top of the body,
+// which is the hair, and it assumed the models face -z, so the mouth
+// landed on the back of the neck for Jade and nowhere at all for the
+// single-mesh models, whose centre sits below the upper third. The
+// models face +z, and the Head bone sits at the neck, so neither the
+// head mesh nor the Head bone marks the mouth. Returns { mouthWorld,
+// forward } or null when no face can be found.
 function estimateMouthFromHead(group) {
   try {
-    let head = null;
-    group.traverse((o) => {
-      if (head) return;
-      if (o.isMesh && o.name && o.name.toLowerCase().indexOf('head') !== -1) head = o;
-    });
-    if (!head) {
-      const groupBox = new THREE.Box3().setFromObject(group);
-      const upperY = groupBox.min.y + (groupBox.max.y - groupBox.min.y) * (2 / 3);
-      let bestY = -Infinity;
-      const cands = [];
-      group.traverse((o) => {
-        if (!o.isMesh) return;
-        const b = new THREE.Box3().setFromObject(o);
-        const cy = (b.min.y + b.max.y) / 2;
-        if (cy < upperY) return;
-        cands.push({ mesh: o, cy, vol: (b.max.x - b.min.x) * (b.max.y - b.min.y) * (b.max.z - b.min.z) });
-        if (cy > bestY) bestY = cy;
-      });
-      if (!cands.length) return null;
-      let best = null;
-      for (const c of cands) {
-        if (c.cy < bestY - 0.05) continue; // only meshes near the highest point
-        if (!best || c.vol > best.vol) best = c;
-      }
-      if (!best) return null;
-      head = best.mesh;
-    }
-    const headBox = new THREE.Box3().setFromObject(head);
-    const headCentre = headBox.getCenter(new THREE.Vector3());
-    const headSize = headBox.getSize(new THREE.Vector3());
-    if (headSize.y <= 0) return null;
-    // Face forward: the models face -z in local space, so the group's
-    // world -z is the direction out of the face.
-    let forward = new THREE.Vector3(0, 0, -1);
-    try {
-      const q = new THREE.Quaternion();
-      group.getWorldQuaternion(q);
-      forward.applyQuaternion(q);
-      forward.y = 0;
-      if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
-      forward.normalize();
-    } catch (e) { forward.set(0, 0, -1); }
-    // Half the head's depth along the forward axis.
-    const halfDepth = (Math.abs(forward.x) * headSize.x + Math.abs(forward.z) * headSize.z) / 2;
-    const mouthWorld = headCentre.clone().addScaledVector(forward, halfDepth);
-    mouthWorld.y = headBox.min.y + headSize.y * 0.25;
-    return { mouthWorld, forward };
+    const m = measureMouthWorld(group);
+    if (!m) return null;
+    return { mouthWorld: m.mouthWorld, forward: m.forward };
   } catch (e) { return null; }
 }
 
@@ -304,7 +269,15 @@ function buildJawMorph(group) {
     group.traverse((o) => {
       if (!o.isMesh) return;
       if (o.name && o.name.indexOf('Bench') === 0) return; // Walter's hidden bench
-      const box = new THREE.Box3().setFromObject(o);
+      // Box from the geometry, not Box3.setFromObject: the vendored
+      // Box3 understates skinned meshes (it uses the skinned bounding
+      // box), so the mouth can fall outside a face mesh that does
+      // contain it. The bind-pose geometry box is the right test here.
+      const geo = o.geometry;
+      if (!geo || !geo.attributes || !geo.attributes.position) return;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      if (!geo.boundingBox) return;
+      const box = geo.boundingBox.clone().applyMatrix4(o.matrixWorld);
       if (box.min.x - 0.06 > mouthWorld.x || box.max.x + 0.06 < mouthWorld.x) return;
       if (box.min.y - 0.06 > mouthWorld.y || box.max.y + 0.06 < mouthWorld.y) return;
       if (box.min.z - 0.06 > mouthWorld.z || box.max.z + 0.06 < mouthWorld.z) return;
@@ -356,6 +329,8 @@ export function registerLipSyncHumans(humans) {
         current: 0, speaking: false, track: null, trackStart: 0,
       });
     }
+    // Faces use the same humans: brows, lids and smile follow the line.
+    try { registerFaceHumans(humans); } catch (e) { /* faces are best effort */ }
     startLoop();
     startObserver();
     onDialogueChange(); // a line may already be showing when models load
@@ -373,6 +348,8 @@ export function startSpeaking(who, text) {
     c.trackStart = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
     c.speaking = true;
     currentWho = who; currentText = text;
+    // The face shows the feeling of this line, alongside the jaw.
+    try { setSpeakingFace(who, text); } catch (e) { /* faces are best effort */ }
   } catch (e) { /* ignore */ }
 }
 
@@ -380,6 +357,7 @@ export function stopSpeakingAll() {
   try {
     for (const c of controllers.values()) { c.speaking = false; c.track = null; }
     currentWho = ''; currentText = '';
+    try { clearFace(); } catch (e) { /* faces are best effort */ }
   } catch (e) { /* ignore */ }
 }
 

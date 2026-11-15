@@ -660,6 +660,9 @@ function renderValve() {
     document.getElementById('press' + map[k]).style.width = pressures[k] + '%';
     document.getElementById('press' + map[k] + 'Val').textContent = pressures[k] + '%';
   }
+  // The underground sensor vault reads the same three lines: keep the
+  // latest pressures where the vault can read them.
+  try { localStorage.setItem('lastSignalPressures', JSON.stringify(pressures)); } catch (e) { /* ignore */ }
   const allOk = Object.values(pressures).every(p => p >= 70);
   document.getElementById('valveStatus').textContent = allOk
     ? 'All lines at 70% or more - holding steady... ' + stableHold + ' / 3s' + (state.trust >= 7 ? ' (Caleb holds the Industrial valve by radio.)' : '')
@@ -1145,6 +1148,13 @@ function buildCityEnvironment() {
     const tree = makeStreetTree();
     tree.position.set(tx, 0, -15.6); mission2.add(tree);
   }
+  // Street lights along the road: real cobra-head lamps on the
+  // sidewalks, alternating sides, so the road is lit at dusk like a real
+  // street. Mission 2 is dusk, so the lamps are on here.
+  for (const [lx, lz, lry] of [[-36, -6.0, Math.PI], [-18, -15.2, 0], [0, -6.0, Math.PI], [18, -15.2, 0], [36, -6.0, Math.PI]]) {
+    const lamp = makeStreetLight(lry, 0.08);
+    lamp.group.position.set(lx, 0, lz); mission2.add(lamp.group);
+  }
   // The traffic hold-up: a line of cars stopped bumper to bumper in the
   // east lane, going nowhere, horns sounding. They are static (not in
   // cityCars) - the jam is the point.
@@ -1278,7 +1288,10 @@ const TRAVEL_PLACES = {
   court: { name: 'NYC Court', short: 'Court', x: 0.60, y: 0.72, desc: 'NYC Court - Foley Square, by Zama HQ', type: 'visit', kind: 'court', landmark: true },
   safehouse: { name: 'Safe House Apartment', short: 'Safe House', x: 0.72, y: 0.76, desc: 'Your safe house - Brooklyn', type: 'home', kind: 'safehouse' },
   airport: { name: 'Airport', short: 'Airport', x: 0.90, y: 0.84, desc: 'JFK - flights out', type: 'visit', kind: 'airport' },
-  bridge: { name: 'Verrazzano Bridge', short: 'Bridge', x: 0.45, y: 0.88, desc: 'Verrazzano-Narrows, tonight', type: 'mission', mission: 3 }
+  bridge: { name: 'Verrazzano Bridge', short: 'Bridge', x: 0.45, y: 0.88, desc: 'Verrazzano-Narrows, tonight', type: 'mission', mission: 3 },
+  policestation: { name: 'NYPD Police Station', short: 'Police', x: 0.55, y: 0.38, desc: 'NYPD precinct - Midtown Manhattan', type: 'visit', kind: 'policestation' },
+  navybarracks: { name: 'Navy Barracks', short: 'Navy Barracks', x: 0.60, y: 0.60, desc: 'US Naval barracks - Brooklyn Navy Yard', type: 'visit', kind: 'navybarracks' },
+  sensorvault: { name: 'Sensor Vault', short: 'Sensor Vault', x: 0.82, y: 0.70, desc: 'Underground water pressure sensors - under the treatment plant', type: 'visit', kind: 'sensorvault' }
 };
 // Miles between every pair of places (symmetric: look up either order).
 // The far places are far: the reservoir is upstate, 85 miles from the
@@ -1324,7 +1337,22 @@ const DISTANCES = {
   'court>dealership': 11, 'court>clothing': 5, 'court>substation': 7, 'court>safehouse': 9, 'court>bridge': 13,
   'court>airport': 23, 'court>hotels': 7, 'court>terminal': 4, 'court>carpark': 5,
   'windtunnel>symposium': 12, 'windtunnel>zama': 8, 'windtunnel>court': 9,
-  'symposium>zama': 10, 'symposium>court': 11, 'zama>court': 1
+  'symposium>zama': 10, 'symposium>court': 11, 'zama>court': 1,
+  // The three new places (police station, Navy barracks, sensor vault):
+  // the police station is Midtown, the barracks is the Brooklyn Navy
+  // Yard, the vault is under the treatment plant by the industry.
+  'policestation>reservoir': 72, 'policestation>hospital': 30, 'policestation>industry': 32, 'policestation>mansion': 28,
+  'policestation>dealership': 9, 'policestation>clothing': 6, 'policestation>substation': 7, 'policestation>safehouse': 11, 'policestation>bridge': 15,
+  'policestation>airport': 26, 'policestation>hotels': 9, 'policestation>terminal': 5, 'policestation>carpark': 8,
+  'policestation>windtunnel': 7, 'policestation>symposium': 10, 'policestation>zama': 3, 'policestation>court': 4,
+  'navybarracks>reservoir': 80, 'navybarracks>hospital': 34, 'navybarracks>industry': 16, 'navybarracks>mansion': 20,
+  'navybarracks>dealership': 8, 'navybarracks>clothing': 12, 'navybarracks>substation': 6, 'navybarracks>safehouse': 9, 'navybarracks>bridge': 14,
+  'navybarracks>airport': 18, 'navybarracks>hotels': 14, 'navybarracks>terminal': 11, 'navybarracks>carpark': 10,
+  'navybarracks>windtunnel': 13, 'navybarracks>symposium': 7, 'navybarracks>zama': 9, 'navybarracks>court': 10, 'navybarracks>policestation': 8,
+  'sensorvault>reservoir': 85, 'sensorvault>hospital': 36, 'sensorvault>industry': 2, 'sensorvault>mansion': 14,
+  'sensorvault>dealership': 15, 'sensorvault>clothing': 22, 'sensorvault>substation': 24, 'sensorvault>safehouse': 12, 'sensorvault>bridge': 30,
+  'sensorvault>airport': 34, 'sensorvault>hotels': 26, 'sensorvault>terminal': 28, 'sensorvault>carpark': 24,
+  'sensorvault>windtunnel': 20, 'sensorvault>symposium': 12, 'sensorvault>zama': 20, 'sensorvault>court': 21, 'sensorvault>policestation': 22, 'sensorvault>navybarracks': 10
 };
 function getMiles(a, b) {
   if (a === b) return 0;
@@ -1362,6 +1390,117 @@ let mapFromKey = 'reservoir', mapSelectedKey = null, pendingMission = null;
 let currentPlaceKey = 'reservoir';
 let missionsDone = { 1: false, 2: false, 3: false };
 let travelWindowMats = [];
+// Street lights: real cobra-head lamps (pole, curved arm, lamp head,
+// glowing underside, pool of light on the road). Their glow follows the
+// time of day: off in daylight, on at dusk, brightest at night. Every
+// lamp built by makeStreetLight registers its glowing parts here so
+// setTimeOfDay can switch them all at once.
+let travelLamps = [];
+function applyLampState(lamp, mode) {
+  const on = mode === 'day' ? 0 : mode === 'dusk' ? 0.6 : 1;
+  try { lamp.headMat.emissiveIntensity = on * 1.6; } catch (e) { /* ignore */ }
+  try { lamp.glowMat.opacity = on * 0.55; } catch (e) { /* ignore */ }
+  try { lamp.poolMat.opacity = on * 0.22; } catch (e) { /* ignore */ }
+}
+// A real street lamp: a tapered pole on a base, a curved arm that sweeps
+// out over the road, a cobra-head housing with a glowing underside, a
+// soft glow sprite, and a pool of light on the road below the head. The
+// lamp is built facing local +z (arm and head toward +z); rotate the
+// group so the arm reaches over the road. poolY is the road surface
+// height, so the pool sits just above the road and never z-fights it.
+function makeStreetLight(rotY, poolY) {
+  const g = new THREE.Group();
+  const metal = stdMat({ color: 0x3a4046, metalness: 0.7, roughness: 0.4 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.4, 10), metal);
+  base.position.set(0, 0.2, 0); base.castShadow = true; g.add(base);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 5.2, 10), metal);
+  pole.position.set(0, 2.8, 0); pole.castShadow = true; g.add(pole);
+  // Curved arm: a quarter torus from the pole top (0, 5.4, 0) sweeping
+  // out to the head at (0, 4.3, 1.1).
+  const arm = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.055, 8, 14, Math.PI / 2), metal);
+  arm.rotation.y = -Math.PI / 2; arm.position.set(0, 4.3, 0); arm.castShadow = true; g.add(arm);
+  // Cobra head: a dark housing, slightly tilted down toward the road,
+  // with a warm glowing panel underneath.
+  const head = new THREE.Group(); head.position.set(0, 4.25, 1.15); head.rotation.x = 0.12; g.add(head);
+  const housing = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.14, 0.8), stdMat({ color: 0x2a2e33, metalness: 0.6, roughness: 0.4 }));
+  housing.castShadow = true; head.add(housing);
+  const headMat = new THREE.MeshStandardMaterial({ color: 0x8a7a5a, emissive: 0xffd9a0, emissiveIntensity: 0, roughness: 0.4 });
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.03, 0.62), headMat);
+  panel.position.set(0, -0.08, 0); head.add(panel);
+  const glowMat = new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+  const glow = new THREE.Sprite(glowMat); glow.scale.set(2.6, 2.6, 1); glow.position.set(0, 4.1, 1.15); g.add(glow);
+  const poolMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(2.4, 24), poolMat);
+  pool.rotation.x = -Math.PI / 2; pool.position.set(0, poolY === undefined ? 0.06 : poolY, 1.15); g.add(pool);
+  g.rotation.y = rotY || 0;
+  const lamp = { group: g, headMat, glowMat, poolMat };
+  travelLamps.push(lamp);
+  applyLampState(lamp, currentTimeMode);
+  return lamp;
+}
+// The US flag: 13 stripes and a blue canton with stars, drawn on canvas
+// so it needs no texture file. The plane hangs from a pole by its left
+// edge (position the mesh so x 0 is the pole).
+function makeUSFlag() {
+  const c = document.createElement('canvas'); c.width = 150; c.height = 90;
+  const ctx = c.getContext('2d');
+  for (let i = 0; i < 13; i++) { ctx.fillStyle = i % 2 === 0 ? '#b22234' : '#f2f2f2'; ctx.fillRect(0, i * 90 / 13, 150, 90 / 13 + 1); }
+  ctx.fillStyle = '#3c3b6e'; ctx.fillRect(0, 0, 60, 90 * 7 / 13);
+  ctx.fillStyle = '#f2f2f2';
+  for (let r = 0; r < 5; r++) for (let col = 0; col < 6; col++) { ctx.beginPath(); ctx.arc(5 + col * 10, 5 + r * 10, 1.8, 0, Math.PI * 2); ctx.fill(); }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.9), new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, roughness: 0.9 }));
+  flag.position.set(0.75, 0, 0);
+  return flag;
+}
+// Uniformed forces: a police officer or a sailor, built from a normal
+// pedestrian (rigged if the crowd models are loaded, primitive if not)
+// with a cap, a badge or neckerchief, and a recoloured uniform. The cap
+// and badge sit on the front of the body: rigged models face -z, the
+// primitive figure faces +z. The uniform is tracked on the person, so
+// if the crowd upgrade swaps the body for a rigged one later, the
+// uniform can be re-applied (see updateOfficer).
+const OFFICER_SKINS = [0x2a1a12, 0x6b4a2f, 0xc89b7a, 0xe8b88a];
+function dressUniform(p, kind) {
+  if (!p || !p.group) return;
+  const front = p.rigged ? -1 : 1;
+  const old = [];
+  p.group.traverse(o => { if (o.userData && o.userData.uniformPart) old.push(o); });
+  for (const o of old) { if (o.parent) o.parent.remove(o); }
+  const g = p.group;
+  if (kind === 'police') {
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.85 });
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.19, 0.09, 12), capMat);
+    crown.position.set(0, 1.7, 0); crown.userData.uniformPart = true; g.add(crown);
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.02, 0.14), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 }));
+    brim.position.set(0, 1.66, front * 0.17); brim.userData.uniformPart = true; g.add(brim);
+    const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.012, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
+    badge.rotation.x = Math.PI / 2; badge.position.set(-0.1, 1.28, front * 0.16); badge.userData.uniformPart = true; g.add(badge);
+    g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.9 }); });
+  } else if (kind === 'navy') {
+    const capMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.85 });
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.17, 0.12, 12), capMat);
+    cup.position.set(0, 1.7, 0); cup.userData.uniformPart = true; g.add(cup);
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.03), new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.9 }));
+    neck.position.set(0, 1.42, front * 0.15); neck.userData.uniformPart = true; g.add(neck);
+    g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.9 }); });
+  }
+  p.uniform = kind; p.uniformGroup = p.group;
+}
+function makeOfficer(kind, opts) {
+  const o = Object.assign({}, opts);
+  if (kind === 'police') { o.coatColor = 0x1a2a4a; o.legColor = 0x141c28; }
+  else { o.coatColor = 0xf2f2f2; o.legColor = 0xe8e8e8; }
+  if (o.skinColor === undefined) o.skinColor = OFFICER_SKINS[Math.floor(Math.random() * OFFICER_SKINS.length)];
+  const p = makePedestrian(o);
+  if (p) dressUniform(p, kind);
+  return p;
+}
+function updateOfficer(p, dt) {
+  if (!p) return;
+  updatePedestrian(p, dt);
+  if (p.uniform && p.group !== p.uniformGroup) dressUniform(p, p.uniform);
+}
 let currentTimeMode = 'day';
 window.__lsTravelActive = false;
 
@@ -1375,6 +1514,7 @@ function setTimeOfDay(mode) {
   currentTimeMode = mode;
   const winGlow = mode === 'day' ? 0.03 : mode === 'dusk' ? 0.55 : 0.85;
   for (const m of travelWindowMats) { try { m.emissiveIntensity = winGlow; } catch (e) { /* ignore */ } }
+  for (const l of travelLamps) applyLampState(l, mode);
   if (mode === 'day') {
     scene.background.set(0x87b5d9); // bright blue sky
     scene.fog.color.set(0x87b5d9); scene.fog.density = 0.008;
@@ -1471,7 +1611,7 @@ function buildTravelScene() {
   const drivePalette = skyFacadePalette(0.4, true);
   // Landmark z positions, by side: no tower is placed on top of the gas
   // stations, the hospital tower, the police station or Zama HQ.
-  const landmarkZ = { '-1': [-90, -560], '1': [-150, -200, -450] };
+  const landmarkZ = { '-1': [-90, -320, -560], '1': [-150, -200, -450] };
   for (let z = -10; z >= -710; z -= 14) {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.25) continue; // gaps so the street breathes
@@ -1490,14 +1630,13 @@ function buildTravelScene() {
         travelGroup.add(awn);
       }
     }
-    // Streetlights.
-    if (Math.random() < 0.7) {
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 5, 8), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.4 }));
-      pole.position.set(5.2, 2.5, z); travelGroup.add(pole);
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe9a8 }));
-      lamp.position.set(5.2, 5, z); travelGroup.add(lamp);
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
-      glow.scale.set(3, 3, 1); glow.position.set(5.2, 5, z); travelGroup.add(glow);
+    // Street lights: a real cobra-head lamp every 42 m, alternating
+    // sides, so the road is lit like a real street and not lined solid
+    // with poles. The lamps follow the time of day (off in daylight).
+    if (Math.round(-z / 14) % 3 === 0) {
+      const side = (Math.floor(Math.round(-z / 14) / 3) % 2 === 0) ? 1 : -1;
+      const lamp = makeStreetLight(side > 0 ? -Math.PI / 2 : Math.PI / 2, 0.06);
+      lamp.group.position.set(side * 5.2, 0, z); travelGroup.add(lamp.group);
     }
   }
   // Landmark on the drive: a tall white hospital tower with a rounded
@@ -1528,17 +1667,124 @@ function buildTravelScene() {
     pump.position.set(px, 0.6, pz + 1.5); travelGroup.add(pump);
   }
   const gasSign = makeTextSprite('GAS', '#ffd166'); gasSign.scale.set(4, 1, 1); gasSign.position.set(-15, 5.6, -93); travelGroup.add(gasSign);
-  // Police station (east side, z = -200): a white modern block with a
-  // POLICE sign and two police cars parked in front.
+  // Police station (east side, z = -200): a proper NYPD precinct, not a
+  // plain block - a pale stone building on a dark base, an entrance
+  // portico with columns and steps, glass double doors, a blue stripe, a
+  // US flag on a pole, a POLICE sign, a small plaza, two police cars, and
+  // officers on duty at the door.
+  const policeBase = new THREE.Mesh(new THREE.BoxGeometry(11, 1, 7), stdMat({ color: 0x5a5a58, roughness: 0.9 }));
+  policeBase.position.set(15, 0.5, -200); policeBase.castShadow = true; travelGroup.add(policeBase);
   const policeMat = whiteFacadeMat(6, 3, 0.4);
-  const policeB = new THREE.Mesh(new THREE.BoxGeometry(9, 6, 6), policeMat);
-  policeB.position.set(15, 3, -200); travelGroup.add(policeB);
-  const policeSign = makeTextSprite('POLICE', '#7fb0ff'); policeSign.scale.set(5, 1.1, 1); policeSign.position.set(15, 7, -197); travelGroup.add(policeSign);
+  travelWindowMats.push(policeMat);
+  const policeB = new THREE.Mesh(new THREE.BoxGeometry(10, 6.5, 6), policeMat);
+  policeB.position.set(15, 4.25, -200); policeB.castShadow = true; travelGroup.add(policeB);
+  const policeStripe = new THREE.Mesh(new THREE.BoxGeometry(10.2, 0.5, 6.2), stdMat({ color: 0x1a3a6a, roughness: 0.7 }));
+  policeStripe.position.set(15, 6.9, -200); travelGroup.add(policeStripe);
+  const policeParapet = new THREE.Mesh(new THREE.BoxGeometry(10.4, 0.4, 6.4), stdMat({ color: 0x8a8a86, roughness: 0.9 }));
+  policeParapet.position.set(15, 7.7, -200); travelGroup.add(policeParapet);
+  // Entrance portico: two columns, a canopy, steps, glass double doors.
+  for (const cx of [13.6, 16.4]) {
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 3, 12), stdMat({ color: 0xe8e2d4, roughness: 0.8 }));
+    col.position.set(cx, 2.5, -196.6); col.castShadow = true; travelGroup.add(col);
+  }
+  const policeCanopy = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.25, 2), stdMat({ color: 0x1a3a6a, roughness: 0.7 }));
+  policeCanopy.position.set(15, 4.1, -196.6); travelGroup.add(policeCanopy);
+  for (let s = 0; s < 3; s++) {
+    const step = new THREE.Mesh(new THREE.BoxGeometry(4.4 - s * 0.4, 0.18, 1.6 - s * 0.3), stdMat({ color: 0x9a9a96, roughness: 0.9 }));
+    step.position.set(15, 0.09 + s * 0.18, -195.6 + s * 0.25); travelGroup.add(step);
+  }
+  for (const dx of [-0.45, 0.45]) {
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.85, 2.2, 0.1), new THREE.MeshStandardMaterial({ color: 0x2a4a6a, roughness: 0.2, metalness: 0.4 }));
+    door.position.set(15 + dx, 2.1, -196.9); travelGroup.add(door);
+  }
+  const policeSign = makeTextSprite('POLICE', '#7fb0ff'); policeSign.scale.set(5, 1.1, 1); policeSign.position.set(15, 8.6, -196.8); travelGroup.add(policeSign);
+  // US flag on a pole in front of the station.
+  const policeFlagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 8, 8), stdMat({ color: 0x8a8a86, metalness: 0.7, roughness: 0.4 }));
+  policeFlagPole.position.set(11, 4, -196); travelGroup.add(policeFlagPole);
+  const policeFlag = makeUSFlag(); policeFlag.position.set(11, 7.3, -196); travelGroup.add(policeFlag);
+  // Plaza: a bench and a planter in front of the station.
+  const policeBench = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.45, 0.6), stdMat({ color: 0x6b4226, roughness: 0.85 }));
+  policeBench.position.set(11, 0.45, -202); travelGroup.add(policeBench);
+  const policePlanter = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.4, 0.6, 10), stdMat({ color: 0x5a5a58, roughness: 0.9 }));
+  policePlanter.position.set(19, 0.3, -196); travelGroup.add(policePlanter);
+  const policeShrub = new THREE.Mesh(new THREE.SphereGeometry(0.45, 10, 8), stdMat({ color: 0x2e7a4a, roughness: 0.95 }));
+  policeShrub.position.set(19, 0.85, -196); travelGroup.add(policeShrub);
+  // Two police cars parked in front, with blue light bars.
   for (const pz of [-196, -203]) {
     const pc = makeStreetCar(0xf2f2f2);
     pc.position.set(9, 0, pz); pc.rotation.y = Math.PI / 2; travelGroup.add(pc);
     const bar = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 0.2), new THREE.MeshBasicMaterial({ color: 0x2a6ab0 }));
     bar.position.set(9, 1.3, pz); travelGroup.add(bar);
+  }
+  // Officers on duty: two standing guard at the entrance, one by a
+  // police car. They face the road (west).
+  for (const [ox, oz] of [[13.4, -196.2], [16.6, -196.2], [9.8, -199.5]]) {
+    const off = makeOfficer('police', { x: ox, z: oz, speed: 0 });
+    if (off) { off.group.position.set(ox, 0, oz); off.group.rotation.y = off.rigged ? Math.PI / 2 : -Math.PI / 2; travelGroup.add(off.group); }
+  }
+  // Navy Barracks (west side, z = -320): a US Naval barracks in the
+  // Brooklyn Navy Yard style - a long olive barracks block, a fenced
+  // yard with a gate, a guard tower, a US flag, a military truck,
+  // crates, and sailors on duty at the gate.
+  const barracksMat = stdMat({ color: 0x5a5a3a, roughness: 0.9 });
+  const barracks = new THREE.Mesh(new THREE.BoxGeometry(14, 5, 6), barracksMat);
+  barracks.position.set(-16, 2.5, -320); barracks.castShadow = true; travelGroup.add(barracks);
+  const barracksRoof = new THREE.Mesh(new THREE.BoxGeometry(14.4, 0.3, 6.4), stdMat({ color: 0x3a3a30, roughness: 0.9 }));
+  barracksRoof.position.set(-16, 5.15, -320); travelGroup.add(barracksRoof);
+  // A row of windows on the front (road side) of the barracks.
+  for (let i = 0; i < 6; i++) {
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.1), new THREE.MeshStandardMaterial({ color: 0x2a3a4a, roughness: 0.3, metalness: 0.3, emissive: 0xffd166, emissiveIntensity: 0.15 }));
+    win.position.set(-21.5 + i * 2.2, 2.8, -316.9); travelGroup.add(win);
+  }
+  const barracksSign = makeTextSprite('NAVY BARRACKS', '#ffd166'); barracksSign.scale.set(6, 1.2, 1); barracksSign.position.set(-16, 6.4, -316.8); travelGroup.add(barracksSign);
+  // Guard tower at the corner of the yard.
+  for (const [lx, lz] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3.4, 8), stdMat({ color: 0x3a3a30, roughness: 0.9 }));
+    leg.position.set(-10.5 + lx, 1.7, -314 + lz); travelGroup.add(leg);
+  }
+  const towerCab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2, 2.2), stdMat({ color: 0x5a5a3a, roughness: 0.9 }));
+  towerCab.position.set(-10.5, 4.4, -314); travelGroup.add(towerCab);
+  const towerRoof = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.2, 2.6), stdMat({ color: 0x3a3a30, roughness: 0.9 }));
+  towerRoof.position.set(-10.5, 5.5, -314); travelGroup.add(towerRoof);
+  // Fenced yard in front of the barracks (road side), with a gate gap on
+  // the north side at x -14 to -12.
+  const fenceMat = stdMat({ color: 0x6a6a66, metalness: 0.6, roughness: 0.5 });
+  const yardX0 = -22, yardX1 = -10, yardZ0 = -326, yardZ1 = -314;
+  for (let x = yardX0; x <= yardX1; x += 2) {
+    for (const z of [yardZ0, yardZ1]) {
+      if (z === yardZ1 && x >= -14 && x <= -12) continue; // the gate gap
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.6, 6), fenceMat);
+      post.position.set(x, 0.8, z); travelGroup.add(post);
+    }
+  }
+  for (const y of [0.6, 1.3]) {
+    const railS = new THREE.Mesh(new THREE.BoxGeometry(yardX1 - yardX0, 0.06, 0.06), fenceMat);
+    railS.position.set((yardX0 + yardX1) / 2, y, yardZ0); travelGroup.add(railS);
+    const railN1 = new THREE.Mesh(new THREE.BoxGeometry(-14 - yardX0, 0.06, 0.06), fenceMat);
+    railN1.position.set((yardX0 + -14) / 2, y, yardZ1); travelGroup.add(railN1);
+    const railN2 = new THREE.Mesh(new THREE.BoxGeometry(yardX1 - -12, 0.06, 0.06), fenceMat);
+    railN2.position.set((-12 + yardX1) / 2, y, yardZ1); travelGroup.add(railN2);
+    for (const x of [yardX0, yardX1]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, yardZ1 - yardZ0), fenceMat);
+      rail.position.set(x, y, (yardZ0 + yardZ1) / 2); travelGroup.add(rail);
+    }
+  }
+  // US flag on a pole in the yard, a military truck, crates and a barrel.
+  const navyFlagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 8, 8), stdMat({ color: 0x8a8a86, metalness: 0.7, roughness: 0.4 }));
+  navyFlagPole.position.set(-20, 4, -316); travelGroup.add(navyFlagPole);
+  const navyFlag = makeUSFlag(); navyFlag.position.set(-20, 7.3, -316); travelGroup.add(navyFlag);
+  const truck = buildCar(0x4a4a2a, { type: 'van' });
+  truck.position.set(-16, 0, -320); truck.rotation.y = Math.PI / 2; travelGroup.add(truck);
+  for (const [cx, cz] of [[-12, -324], [-12.8, -324]]) {
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9), stdMat({ color: 0x8a6a3a, roughness: 0.95 }));
+    crate.position.set(cx, 0.45, cz); travelGroup.add(crate);
+  }
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.9, 12), stdMat({ color: 0x3a5a3a, metalness: 0.4, roughness: 0.6 }));
+  barrel.position.set(-11, 0.45, -322); travelGroup.add(barrel);
+  // Sailors on duty: two standing guard at the gate, facing the road (east).
+  for (const [sx, sz] of [[-14, -314.5], [-12, -314.5]]) {
+    const sal = makeOfficer('navy', { x: sx, z: sz, speed: 0 });
+    if (sal) { sal.group.position.set(sx, 0, sz); sal.group.rotation.y = sal.rigged ? -Math.PI / 2 : Math.PI / 2; travelGroup.add(sal.group); }
   }
   // Traffic: cars coming the other way and cars ahead in our lane.
   // Realistic cars (see player.js buildCar), not boxes. Spread along
@@ -2224,6 +2470,13 @@ function buildTrekStreet() {
       const tree = makeStreetTree();
       tree.position.set((Math.random() < 0.5 ? -1 : 1) * 6.5, 0, z + 5); trekGroup.add(tree);
     }
+  }
+  // Street lights along the trek: real cobra-head lamps on the
+  // sidewalks, alternating sides, so the walked street is lit at night
+  // like a real street. The trek is night, so the lamps are on here.
+  for (const [lx, lz, lry] of [[5.2, 24, -Math.PI / 2], [-5.2, 8, Math.PI / 2], [5.2, -8, -Math.PI / 2], [-5.2, -24, Math.PI / 2], [5.2, -40, -Math.PI / 2]]) {
+    const lamp = makeStreetLight(lry, 0.08);
+    lamp.group.position.set(lx, 0, lz); trekGroup.add(lamp.group);
   }
   // The traffic hold-up, here too: a line of cars stopped bumper to
   // bumper in the east lane, horns sounding, blocking the road.

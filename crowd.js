@@ -34,8 +34,19 @@ function loadOne(def) {
   return Promise.race([
     loader.loadAsync(def.file),
     new Promise((_, reject) => setTimeout(() => reject(new Error('crowd model timed out: ' + def.file)), 30000))
-  ]).then(gltf => ({
-    scene: gltf.scene, animations: gltf.animations || [], height: def.height, sex: def.sex, file: def.file,
+  ]).then(gltf => {
+    // Capture the Atlas texture image: per-person recolouring repaints
+    // the measured palette cells of this image (see ATLAS_CELLS below).
+    // The image is read again lazily when a look is applied, so a slow
+    // texture load cannot leave the crowd unrecoloured.
+    let atlasImage = null;
+    try {
+      gltf.scene.traverse(o => {
+        if (!atlasImage && o.isMesh && o.material && o.material.name === 'Atlas' && o.material.map && o.material.map.image) atlasImage = o.material.map.image;
+      });
+    } catch (e) { /* ignore */ }
+    return {
+      scene: gltf.scene, animations: gltf.animations || [], height: def.height, sex: def.sex, file: def.file, atlasImage,
     // Seated-pose angles for this model's rig (defaults fit the
     // Matt/Lis/Sam rigs; Jade's rig overrides them above). hipsY is the
     // height the hips sit at: each rig's legs are a different length,
@@ -48,8 +59,9 @@ function loadOne(def) {
       shoulder: def.sitShoulder !== undefined ? def.sitShoulder : -25,
       elbow: def.sitElbow !== undefined ? def.sitElbow : -55,
       hipsY: def.sitHipsY !== undefined ? def.sitHipsY : 0.42
-    }
-  }))
+      }
+    };
+  })
     .catch(() => null);
 }
 // Start loading at import time, so the models are ready by the time the
@@ -101,6 +113,187 @@ function findBone(group, names) {
   group.traverse(o => { if (!found && o.isBone && names.indexOf(o.name) !== -1) found = o; });
   return found;
 }
+// ---------- Crowd variety: ethnicity and body type ----------
+// New York is mixed: Black, White and Saxon (fair-skinned European)
+// people side by side, in every crowd. Three clearly different skin
+// tones, mixed in roughly equal measure, so the difference reads at play
+// distance. Hair, shirt and trousers vary too, and every person gets a
+// clearly different height and build: tall, short and medium; fat, thin
+// and medium. The variety is per person, not per place, so no crowd is
+// segregated by look.
+export const SKIN_TONES = [0x2e1a0e, 0x8a5a3a, 0xe8c8a8]; // Black, medium brown, fair White/Saxon
+export const HAIR_COLOURS = [0x141414, 0x3a2418, 0x6a4a2a, 0xc8a848, 0x8a8a8a, 0x6a2a1a];
+export const SHIRT_COLOURS = [0x1a1a1a, 0x222f45, 0x5a3a22, 0x8a2a22, 0x2a4a6a, 0x3a5a3a, 0xc8b89a, 0x555555, 0x3a2a4a, 0x2a6a4a];
+export const PANTS_COLOURS = [0x2a4a6a, 0x1a1a1a, 0x3a2a1a, 0x555555, 0x333333, 0x4a3a2a];
+// Body types: height is a multiplier on the normalised 1.7 m person
+// (tall about 1.9 m, short about 1.5 m); width is a multiplier on the
+// body width (fat about 28% wider, thin about 14% slimmer). The spread
+// is deliberate, not subtle: a fat person and a thin person standing
+// next to each other read as different body types at a glance.
+export const BODY_TYPES = [
+  { name: 'tall-thin', height: 1.12, width: 0.88 },
+  { name: 'tall', height: 1.12, width: 1.00 },
+  { name: 'tall-fat', height: 1.10, width: 1.28 },
+  { name: 'medium-thin', height: 1.00, width: 0.86 },
+  { name: 'medium', height: 1.00, width: 1.00 },
+  { name: 'medium-fat', height: 0.99, width: 1.26 },
+  { name: 'short-thin', height: 0.88, width: 0.86 },
+  { name: 'short', height: 0.88, width: 1.00 },
+  { name: 'short-fat', height: 0.87, width: 1.28 }
+];
+export function pickBodyType() { return BODY_TYPES[Math.floor(Math.random() * BODY_TYPES.length)]; }
+export function pickLook() {
+  return {
+    skin: SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)],
+    hair: HAIR_COLOURS[Math.floor(Math.random() * HAIR_COLOURS.length)],
+    shirt: SHIRT_COLOURS[Math.floor(Math.random() * SHIRT_COLOURS.length)],
+    pants: PANTS_COLOURS[Math.floor(Math.random() * PANTS_COLOURS.length)]
+  };
+}
+// Atlas palette cells, measured from the GLB files: the three Atlas
+// models (Matt, Lis, Sam) share one 512x512 palette texture, and every
+// vertex UV points at the centre of a 16px colour cell, so a whole body
+// part is one solid cell. The HAND vertices are all skin, so the cell
+// the hands use is the skin cell; the biggest non-skin head cell is the
+// hair; the biggest torso cell is the shirt; the biggest leg cell is the
+// trousers. Cells are [col, row] on the 16px grid, row 0 at the top:
+//   Matt: skin (1,0), hair (2,0), shirt (5,0), pants (3,0)
+//   Lis:  skin (1,2) + (9,2), hair (5,2), shirt (4,2), pants (3,2)
+//   Sam:  skin (15,0), hair (22,0), shirt (18,0), pants (14,0)
+// Palette cells are shared across parts by design (a sleeve can share
+// its swatch with the trousers), so repainting a cell recolours every
+// part that uses it; the outfit stays coherent. Jade's model has
+// separate materials per part (Skin, Face, Hair, Shirt, Pants), so her
+// clones are recoloured by material name instead.
+const ATLAS_CELLS = {
+  'models/rigged/caleb-alt-civilian.glb': { skin: [[1, 0]], hair: [[2, 0]], shirt: [[5, 0]], pants: [[3, 0]] },
+  'models/rigged/nurse-rigged.glb': { skin: [[1, 2], [9, 2]], hair: [[5, 2]], shirt: [[4, 2]], pants: [[3, 2]] },
+  'models/rigged/walter-rigged.glb': { skin: [[15, 0]], hair: [[22, 0]], shirt: [[18, 0]], pants: [[14, 0]] }
+};
+const JADE_PART_MATERIALS = { skin: ['Skin', 'Face'], hair: ['Hair'], shirt: ['Shirt'], pants: ['Pants'] };
+// The repainted atlas is drawn at 256px (the source is 512, nearest
+// neighbour, so the solid palette cells stay exact) to keep texture
+// memory down on phones. Looks are cached per (model, skin, hair,
+// shirt, pants), so people who roll the same look share one texture.
+const TINT_SIZE = 256;
+const atlasMatCache = new Map();
+const jadeMatCache = new Map();
+function hexCss(hex) { return '#' + (hex >>> 0).toString(16).padStart(6, '0'); }
+// Repaint the measured palette cells of an atlas image with a look.
+// Returns a CanvasTexture, or null when there is no image or no canvas
+// (headless): the caller then keeps the original material, so a failed
+// recolour never stops the crowd.
+export function repaintAtlas(image, modelFile, look) {
+  try {
+    if (!image || !(image.naturalWidth || image.width) || !(image.naturalHeight || image.height)) return null;
+    if (typeof document === 'undefined' || !document.createElement) return null;
+    const cells = ATLAS_CELLS[modelFile];
+    if (!cells || !look) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = TINT_SIZE; canvas.height = TINT_SIZE;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    try { ctx.imageSmoothingEnabled = false; } catch (e) { /* ignore */ }
+    ctx.drawImage(image, 0, 0, TINT_SIZE, TINT_SIZE);
+    const cellPx = 16 * (TINT_SIZE / 512); // 16px cells on the 512 atlas
+    const paint = (list, colour) => {
+      if (!list) return;
+      ctx.fillStyle = hexCss(colour);
+      for (const [cx, cy] of list) ctx.fillRect(cx * cellPx, cy * cellPx, cellPx, cellPx);
+    };
+    paint(cells.skin, look.skin);
+    paint(cells.hair, look.hair);
+    paint(cells.shirt, look.shirt);
+    paint(cells.pants, look.pants);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  } catch (e) { return null; }
+}
+function atlasImageOf(model) {
+  if (!model) return null;
+  if (model.atlasImage && (model.atlasImage.naturalWidth || model.atlasImage.width)) return model.atlasImage;
+  // The texture may have finished loading after the model entry was made:
+  // read the image off the model's own Atlas material.
+  let img = null;
+  try {
+    model.scene.traverse(o => {
+      if (!img && o.isMesh && o.material && o.material.name === 'Atlas' && o.material.map && o.material.map.image) img = o.material.map.image;
+    });
+  } catch (e) { /* ignore */ }
+  if (img && (img.naturalWidth || img.width)) { model.atlasImage = img; return img; }
+  return null;
+}
+function getAtlasMaterial(model, look) {
+  try {
+    const img = atlasImageOf(model);
+    if (!img) return null;
+    const key = model.file + '|' + look.skin + '|' + look.hair + '|' + look.shirt + '|' + look.pants;
+    if (atlasMatCache.has(key)) return atlasMatCache.get(key);
+    const tex = repaintAtlas(img, model.file, look);
+    if (!tex) return null;
+    let base = null;
+    model.scene.traverse(o => { if (!base && o.isMesh && o.material && o.material.name === 'Atlas') base = o.material; });
+    if (!base) return null;
+    const mat = base.clone();
+    mat.map = tex;
+    mat.needsUpdate = true;
+    atlasMatCache.set(key, mat);
+    return mat;
+  } catch (e) { return null; }
+}
+function getJadeMaterials(model, look) {
+  try {
+    const key = model.file + '|' + look.skin + '|' + look.hair + '|' + look.shirt + '|' + look.pants;
+    if (jadeMatCache.has(key)) return jadeMatCache.get(key);
+    const base = {};
+    model.scene.traverse(o => {
+      if (o.isMesh && o.material && o.material.name && !base[o.material.name]) base[o.material.name] = o.material;
+    });
+    const out = {};
+    const set = (names, colour) => {
+      for (const n of names) {
+        if (!base[n]) continue;
+        const m = base[n].clone();
+        m.color.setHex(colour);
+        out[n] = m;
+      }
+    };
+    set(JADE_PART_MATERIALS.skin, look.skin);
+    set(JADE_PART_MATERIALS.hair, look.hair);
+    set(JADE_PART_MATERIALS.shirt, look.shirt);
+    set(JADE_PART_MATERIALS.pants, look.pants);
+    if (!Object.keys(out).length) return null;
+    jadeMatCache.set(key, out);
+    return out;
+  } catch (e) { return null; }
+}
+// Give one cloned person their look: Atlas models get a cached material
+// with a repainted palette texture; Jade's model gets cached materials
+// recoloured by part name. The source model's own materials are never
+// mutated (the clone gets replacement materials), so the main characters
+// and other clones are untouched. A failure leaves the original look.
+export function applyLook(group, model, look) {
+  try {
+    if (!group || !model || !look) return;
+    if (model.file && model.file.indexOf('jade-rigged') !== -1) {
+      const mats = getJadeMaterials(model, look);
+      if (!mats) return;
+      group.traverse(o => {
+        if (o.isMesh && o.material && o.material.name && mats[o.material.name]) o.material = mats[o.material.name];
+      });
+    } else {
+      const mat = getAtlasMaterial(model, look);
+      if (!mat) return;
+      group.traverse(o => {
+        if (o.isMesh && o.material && o.material.name === 'Atlas') o.material = mat;
+      });
+    }
+  } catch (e) { /* a failed recolour must never stop the crowd */ }
+}
+// Loaded crowd model entries, for tests and for callers that need to
+// inspect the models (may be null before the models finish loading).
+export function getCrowdModels() { return crowdModels; }
 // Build one realistic crowd person from a rigged model. Returns a
 // pedestrian-like object matching the shape action.js makePedestrian
 // returns (group, x, z, speed, phase, heading, bounds, lane, leader),
@@ -113,10 +306,20 @@ export function makeRiggedPerson(opts) {
   try {
     const group = cloneSkinned(model.scene);
     group.userData.keepAlive = true;
-    // Normalise height to the model's real height, then vary it a little
-    // so no two people are exactly the same height or build.
-    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * (0.94 + Math.random() * 0.12);
-    group.scale.set(s, s * (0.97 + Math.random() * 0.06), s);
+    // Ethnicity + body type: every crowd person gets their own skin tone,
+    // hair and clothes, and a clearly different height and build (fat,
+    // thin, tall, short, medium). Callers may pass an explicit look/body
+    // to keep a person the same through an upgrade.
+    const look = o.look || pickLook();
+    const body = o.body || pickBodyType();
+    applyLook(group, model, look);
+    // Normalise height to the model's real height, then apply the body
+    // type: height on Y, width on X/Z, with a tiny jitter so two people
+    // of the same type are not exactly alike. The Walk clip is
+    // bone-relative, so the walk cycle is unaffected by the scale.
+    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * body.height;
+    const sj = 0.98 + Math.random() * 0.04;
+    group.scale.set(s * body.width, s * sj, s * body.width);
     group.traverse(m => { m.castShadow = true; });
     // Walk clip on its own mixer, with a random phase so the crowd never
     // marches in lockstep. The Walk clip walks in place; the root bone's
@@ -166,7 +369,7 @@ export function makeRiggedPerson(opts) {
     return {
       group, mixer, rootBone, rootRest, headBone, rigged: true,
       phone: !!o.phone, pockets: !!o.pockets, bags: o.bags || 0, age,
-      heading, bounds, lane,
+      heading, bounds, lane, look, body,
       x: o.x !== undefined ? o.x : (lane ? (Math.random() * (lane.max - lane.min) + lane.min) : (Math.random() * (bounds.maxX - bounds.minX) + bounds.minX)),
       z: o.z !== undefined ? o.z : (lane ? lane.fixed : (Math.random() * (bounds.maxZ - bounds.minZ) + bounds.minZ)),
       speed, phase: Math.random() * 6.28,
@@ -261,11 +464,18 @@ export function makeSeatedPerson(opts) {
   try {
     const group = cloneSkinned(model.scene);
     group.userData.keepAlive = true;
-    // Normalise height to the model's real height, then vary it a little
-    // so no two people are exactly the same height or build. The spread
-    // is kept tight for sitters, so every foot stays near the floor.
-    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * (0.97 + Math.random() * 0.06);
-    group.scale.set(s, s * (0.97 + Math.random() * 0.06), s);
+    // Ethnicity + body type, as for walkers: each sitter gets their own
+    // skin tone, hair and clothes, and a clearly different height and
+    // build. The seated pose is measured after scaling (see
+    // applySeatedPose), so the hips still land at seat height and the
+    // feet stay near the floor at every size; a short sitter's feet may
+    // dangle a little, as a short person's do.
+    const look = o.look || pickLook();
+    const body = o.body || pickBodyType();
+    applyLook(group, model, look);
+    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * body.height;
+    const sj = 0.98 + Math.random() * 0.04;
+    group.scale.set(s * body.width, s * sj, s * body.width);
     group.traverse(m => { m.castShadow = true; });
     group.position.set(o.x || 0, 0, o.z || 0);
     group.rotation.y = o.heading || 0;
@@ -273,7 +483,8 @@ export function makeSeatedPerson(opts) {
     if (!posed) return null;
     return {
       group, seated: true, rigged: true, mixer: null,
-      phase: Math.random() * 6.28, bones: posed.bones, baseQuats: posed.baseQuats
+      phase: Math.random() * 6.28, bones: posed.bones, baseQuats: posed.baseQuats,
+      look, body
     };
   } catch (e) { return null; }
 }
@@ -307,7 +518,8 @@ export function upgradePedestrian(p) {
   const rigged = makeRiggedPerson({
     x: p.x, z: p.z, heading: p.heading, speed: p.speed,
     bounds: p.bounds, lane: p.lane, leader: p.leader, latOffset: p.latOffset,
-    phone: p.phone, pockets: p.pockets, bags: p.bags, age: p.age
+    phone: p.phone, pockets: p.pockets, bags: p.bags, age: p.age,
+    look: p.look, body: p.body
   });
   if (!rigged) return false;
   try {
@@ -323,7 +535,10 @@ export function upgradePedestrian(p) {
     } catch (e) { /* ignore */ }
     rigged.group.position.copy(old.position);
     rigged.group.rotation.copy(old.rotation);
-    rigged.group.scale.copy(old.scale);
+    // Do NOT copy the old scale: the primitive's scale is uniform, but
+    // the rigged clone was built from this person's body type (fat/thin
+    // width on X/Z, tall/short height on Y). Copying the old scale
+    // would flatten every upgraded person back to medium width.
     rigged.phase = p.phase;
     parent.add(rigged.group);
     p.group = rigged.group;
