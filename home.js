@@ -552,7 +552,10 @@ function doSleep() {
     a.visible = true;
     // Lie along the bed, on his back, head at the north end.
     a.position.set(currentBedPos.x, 0.62, currentBedPos.z - 0.4);
-    a.rotation.set(0, 0, 0);
+    // Keep the lie rotation: setAvatarPose('lie') turns the group
+    // -90 deg on X so the head points north. Resetting the rotation
+    // to (0,0,0) here would stand the avatar upright ON the bed.
+    a.rotation.set(-Math.PI / 2, 0, 0);
     a.scale.set(1, 1, 1);
     homeScene.add(a);
   } catch (e) { /* avatar is optional */ }
@@ -2698,7 +2701,10 @@ function homeAnimate() {
       a.visible = true;
       setAvatarPose('lie');
       a.position.set(currentBedPos.x, 0.62, currentBedPos.z - 0.4);
-      a.rotation.set(0, 0, 0);
+      // Keep the lie rotation: setAvatarPose('lie') turns the group
+      // -90 deg on X so the head points north. Resetting the rotation
+      // to (0,0,0) here would stand the avatar upright ON the bed.
+      a.rotation.set(-Math.PI / 2, 0, 0);
     } catch (e) { /* ignore */ }
     const bx = currentBedPos.x, bz = currentBedPos.z;
     homeCamera.position.set(bx + 2.2, 1.6, bz + 2.6);
