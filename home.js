@@ -193,7 +193,10 @@ function standUp() {
   prologueInBed = false; prologueSeated = false;
   try { const a = getAvatar(); setAvatarPose('stand'); detachAvatar(); } catch (e) { /* ignore */ }
   if (homeCamera) {
-    if (wasInBed) { homeCamera.position.set(-4.5, 1.7, -1.0); homeYaw = Math.PI; homePitch = 0; }
+    // From bed: stand on the floor BESIDE the bed, at its south-east
+    // corner (east of the bed edge, south of the foot, clear of the
+    // partition), facing the couch - never on top of the bed.
+    if (wasInBed) { homeCamera.position.set(-2.9, 1.7, -1.3); homeYaw = -1.87; homePitch = 0; }
     else { homeCamera.position.set(COUCH_SIT.x, 1.7, COUCH_SIT.z + 1.0); homeYaw = 0; homePitch = 0; }
   }
   showHomeToast(wasInBed ? 'You stand up. Walk to the couch - the phone is ringing.' : 'You stand up.');
@@ -302,6 +305,19 @@ function roundedRectShape(w, h, r) {
   s.lineTo(-w / 2, -h / 2 + r);
   s.absarc(-w / 2 + r, -h / 2 + r, r, Math.PI, Math.PI * 1.5, false);
   return s;
+}
+// A rounded box: a rounded-rectangle shape extruded with a bevel, so
+// furniture reads as real, soft-edged pieces instead of sharp boxes.
+// The final size is w x h x d (the bevel is folded into the shape).
+// Returns a mesh with castShadow on.
+function roundedBox(w, h, d, r, material) {
+  const b = Math.min(0.025, r * 0.35, d / 2 - 0.005);
+  const dep = Math.max(0.01, d - 2 * b);
+  const geo = new THREE.ExtrudeGeometry(roundedRectShape(Math.max(0.02, w - 2 * b), Math.max(0.02, h - 2 * b), Math.max(0.005, r - b)), { depth: dep, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 3, curveSegments: 8 });
+  geo.translate(0, 0, -dep / 2);
+  const m = new THREE.Mesh(geo, material);
+  m.castShadow = true;
+  return m;
 }
 function hbox(scene, w, h, d, color, x, y, z, name, opts) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, opts));
@@ -674,7 +690,7 @@ function syncRoomKeys() {
 function addWindow(scene, x, y, z, ry) {
   const win = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.4), new THREE.MeshStandardMaterial({ map: nightSkyTexture(), roughness: 0.2, metalness: 0.3 }));
   win.position.set(x, y, z); win.rotation.y = ry; scene.add(win);
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 0.06), mat(0x2a2118));
+  const frame = roundedBox(1.8, 0.08, 0.06, 0.02, mat(0x2a2118));
   frame.position.set(x, y + 0.75, z); frame.rotation.y = ry; scene.add(frame);
   const frame2 = frame.clone(); frame2.position.y = y - 0.75; scene.add(frame2);
 }
@@ -682,43 +698,62 @@ function addBed(scene, x, z, w, single) {
   // Remember where the bed is, so the sleep view can lay the avatar on it.
   currentBedPos = { x, z, w };
   const g = new THREE.Group(); scene.add(g);
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(w, 0.4, 3), mat(0x4a3220, { roughness: 0.7 }));
+  // A rounded wooden frame, a plump rounded mattress, a folded blanket
+  // with a roll at its top edge, pillows propped against a headboard.
+  const frame = roundedBox(w, 0.4, 3, 0.06, mat(0x4a3220, { roughness: 0.7 }));
   frame.position.set(x, 0.2, z); frame.castShadow = true; g.add(frame);
-  const matt = new THREE.Mesh(new THREE.BoxGeometry(w - 0.2, 0.25, 2.8), mat(0xf2f0e8, { roughness: 0.9 }));
+  const head = roundedBox(w, 1.1, 0.12, 0.05, mat(0x4a3220, { roughness: 0.7 }));
+  head.position.set(x, 0.95, z - 1.5); head.castShadow = true; g.add(head);
+  const matt = roundedBox(w - 0.2, 0.25, 2.8, 0.09, mat(0xf2f0e8, { roughness: 0.9 }));
   matt.position.set(x, 0.5, z); matt.castShadow = true; matt.name = 'bed'; matt.userData.homeAction = 'bed'; homeTargets.push(matt); g.add(matt);
-  const blanket = new THREE.Mesh(new THREE.BoxGeometry(w - 0.2, 0.08, 1.7), mat(0x2e4a6b, { roughness: 0.9 }));
+  const blanket = roundedBox(w - 0.2, 0.1, 1.7, 0.05, mat(0x2e4a6b, { roughness: 0.9 }));
   blanket.position.set(x, 0.62, z + 0.5); g.add(blanket);
+  const fold = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, Math.max(0.2, w - 0.4), 4, 10), mat(0x3a5a7d, { roughness: 0.9 }));
+  fold.rotation.z = Math.PI / 2; fold.position.set(x, 0.68, z - 0.35); fold.castShadow = true; g.add(fold);
   const n = single ? 1 : 2;
   for (let i = 0; i < n; i++) {
     const px = single ? x : x - 0.55 + i * 1.1;
-    const pil = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.15, 0.5), mat(0xffffff, { roughness: 0.95 }));
-    pil.position.set(px, 0.65, z - 1.1); pil.castShadow = true; g.add(pil);
+    const pil = roundedBox(0.8, 0.16, 0.5, 0.07, mat(0xffffff, { roughness: 0.95 }));
+    pil.position.set(px, 0.65, z - 1.1); pil.rotation.x = -0.12; pil.castShadow = true; g.add(pil);
   }
   hitBox(scene, w + 0.6, 1.6, 3.4, x, 0.8, z, 'bed');
   return g;
 }
 function addSofa(scene, x, z, w, color, name, ry) {
-  // A sofa with a base, a back, arms, seat cushions and throw pillows.
-  // Built in a group so ry can turn it: ry = 0 faces south, PI faces
-  // north (toward a TV on the north wall), PI/2 faces east, -PI/2 west.
+  // A real couch, not a box: short legs, a rounded base, plump rounded
+  // seat and back cushions, rolled capsule arms and a rolled back top,
+  // and rounded throw pillows. Built in a group so ry can turn it:
+  // ry = 0 faces south, PI faces north (toward a TV on the north
+  // wall), PI/2 faces east, -PI/2 west. The seat top stays at 0.77, so
+  // the sit spot and the phone on the cushion do not move.
   const g = new THREE.Group();
   g.position.set(x, 0, z); g.rotation.y = ry || 0;
-  const base = new THREE.Mesh(new THREE.BoxGeometry(w, 0.5, 1.2), mat(color, { roughness: 0.95 }));
-  base.position.set(0, 0.35, 0); base.castShadow = true; base.name = name || 'sofa'; base.userData.homeAction = name || 'sofa'; homeTargets.push(base); g.add(base);
-  const back = new THREE.Mesh(new THREE.BoxGeometry(w, 0.9, 0.3), mat(color, { roughness: 0.95 }));
-  back.position.set(0, 0.9, -0.55); back.castShadow = true; g.add(back);
+  const cloth = mat(color, { roughness: 0.95 });
+  for (const [dx, dz] of [[-w / 2 + 0.2, -0.42], [w / 2 - 0.2, -0.42], [-w / 2 + 0.2, 0.42], [w / 2 - 0.2, 0.42]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.035, 0.1, 10), mat(0x2a2118, { roughness: 0.6 }));
+    leg.position.set(dx, 0.05, dz); g.add(leg);
+  }
+  const base = roundedBox(w, 0.5, 1.15, 0.08, cloth);
+  base.position.set(0, 0.35, 0); base.name = name || 'sofa'; base.userData.homeAction = name || 'sofa'; homeTargets.push(base); g.add(base);
+  const back = roundedBox(w, 0.85, 0.3, 0.09, cloth);
+  back.position.set(0, 0.92, -0.52); back.rotation.x = -0.08; g.add(back);
+  const roll = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, Math.max(0.2, w - 0.5), 4, 12), cloth);
+  roll.rotation.z = Math.PI / 2; roll.position.set(0, 1.32, -0.55); roll.castShadow = true; g.add(roll);
   for (const s of [-1, 1]) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.7, 1.2), mat(color, { roughness: 0.95 }));
-    arm.position.set(s * (w / 2 - 0.15), 0.6, 0); arm.castShadow = true; g.add(arm);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.8, 4, 12), cloth);
+    arm.rotation.x = Math.PI / 2; arm.position.set(s * (w / 2 - 0.16), 0.72, 0); arm.castShadow = true; g.add(arm);
   }
   const n = Math.max(2, Math.round(w / 1.1));
   for (let i = 0; i < n; i++) {
-    const c = new THREE.Mesh(new THREE.BoxGeometry(w / n - 0.15, 0.18, 1.0), mat(0xd8cfc0, { roughness: 0.95 }));
-    c.position.set(-w / 2 + (i + 0.5) * (w / n), 0.68, 0); c.castShadow = true; g.add(c);
+    const cx = -w / 2 + (i + 0.5) * (w / n);
+    const c = roundedBox(w / n - 0.14, 0.18, 0.95, 0.08, mat(0xd8cfc0, { roughness: 0.95 }));
+    c.position.set(cx, 0.68, 0.02); g.add(c);
+    const bc = roundedBox(w / n - 0.14, 0.52, 0.2, 0.08, cloth);
+    bc.position.set(cx, 0.98, -0.36); bc.rotation.x = -0.16; g.add(bc);
     // A throw pillow on each seat, in a warm gold accent.
-    const pil = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.35, 0.15), mat(0xffd166, { roughness: 0.95 }));
-    pil.position.set(-w / 2 + (i + 0.5) * (w / n), 0.85, -0.4);
-    pil.rotation.x = -0.15; pil.rotation.z = (i % 2 === 0 ? 0.08 : -0.08);
+    const pil = roundedBox(0.42, 0.38, 0.16, 0.07, mat(0xffd166, { roughness: 0.95 }));
+    pil.position.set(cx, 0.9, -0.22);
+    pil.rotation.x = -0.2; pil.rotation.z = (i % 2 === 0 ? 0.08 : -0.08);
     g.add(pil);
   }
   // A generous invisible click target that turns with the sofa.
@@ -728,11 +763,19 @@ function addSofa(scene, x, z, w, color, name, ry) {
   return g;
 }
 function addTV(scene, x, y, z, w, name) {
+  // A real flat-screen: a thin rounded panel on a neck over a low
+  // rounded media console, not a black box.
   const g = new THREE.Group(); scene.add(g);
-  const stand = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.5, 0.5), mat(0x2a2118, { roughness: 0.7 }));
-  stand.position.set(x, 0.25, z + 0.2); stand.castShadow = true; g.add(stand);
-  const body = new THREE.Mesh(new THREE.BoxGeometry(w, w * 0.56, 0.08), mat(0x111111, { roughness: 0.4 }));
-  body.position.set(x, y, z); body.castShadow = true; body.name = name || 'tv'; body.userData.homeAction = name || 'tv'; homeTargets.push(body); g.add(body);
+  for (const dx of [-w / 2 - 0.1, w / 2 + 0.1]) {
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.08, 10), mat(0x2a2118, { roughness: 0.6 }));
+    foot.position.set(x + dx, 0.04, z + 0.2); g.add(foot);
+  }
+  const stand = roundedBox(w + 0.4, 0.4, 0.5, 0.05, mat(0x2a2118, { roughness: 0.7 }));
+  stand.position.set(x, 0.28, z + 0.2); g.add(stand);
+  const neck = roundedBox(0.18, 0.55, 0.06, 0.03, mat(0x1a1a1a, { roughness: 0.5, metalness: 0.3 }));
+  neck.position.set(x, 0.72, z + 0.15); g.add(neck);
+  const body = roundedBox(w, w * 0.56, 0.08, 0.04, mat(0x111111, { roughness: 0.4 }));
+  body.position.set(x, y, z); body.name = name || 'tv'; body.userData.homeAction = name || 'tv'; homeTargets.push(body); g.add(body);
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.15, w * 0.56 - 0.15), new THREE.MeshStandardMaterial({ map: tvTexture(), emissive: 0xffffff, emissiveMap: tvTexture(), emissiveIntensity: 0.7, roughness: 0.3 }));
   screen.position.set(x, y, z + 0.05); g.add(screen);
   hitBox(scene, w + 0.4, w * 0.56 + 0.4, 0.6, x, y, z, name || 'tv');
@@ -740,22 +783,29 @@ function addTV(scene, x, y, z, w, name) {
   return g;
 }
 function addFloorLamp(scene, x, z) {
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 0.03, 16), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+  base.position.set(x, 0.015, z); scene.add(base);
   hcyl(scene, 0.05, 0.07, 1.6, 0x2a2a2a, x, 0.8, z, null, { metalness: 0.6, roughness: 0.4 });
   const shade = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.4, 12, 1, true), mat(0xffd166, { roughness: 0.8, side: THREE.DoubleSide }));
   shade.position.set(x, 1.75, z); scene.add(shade);
   lamp(scene, x, 1.7, z, 0xffe0b0, 0.9, 9);
 }
 function addDiningTable(scene, x, z) {
-  const top = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.08, 1.4), mat(0x4a3220, { roughness: 0.6 }));
+  // A round-edged table with turned legs, and chairs with rounded
+  // seats and backs on slim legs.
+  const top = roundedBox(2.4, 0.08, 1.4, 0.04, mat(0x4a3220, { roughness: 0.6 }));
   top.position.set(x, 0.75, z); top.castShadow = true; scene.add(top);
   for (const [dx, dz] of [[-1.1, -0.6], [1.1, -0.6], [-1.1, 0.6], [1.1, 0.6]]) {
     hcyl(scene, 0.05, 0.05, 0.75, 0x2a2118, x + dx, 0.37, z + dz, null, { roughness: 0.6 });
   }
   for (const [dx, dz, ry] of [[-1.6, 0, Math.PI / 2], [1.6, 0, -Math.PI / 2], [0, -1.1, 0], [0, 1.1, Math.PI]]) {
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.5), mat(0x6b4226, { roughness: 0.7 }));
-    seat.position.set(x + dx, 0.45, z + dz); seat.castShadow = true; scene.add(seat);
-    const bk = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.08), mat(0x6b4226, { roughness: 0.7 }));
+    const seat = roundedBox(0.5, 0.08, 0.5, 0.04, mat(0x6b4226, { roughness: 0.7 }));
+    seat.position.set(x + dx, 0.45, z + dz); scene.add(seat);
+    const bk = roundedBox(0.5, 0.6, 0.08, 0.04, mat(0x6b4226, { roughness: 0.7 }));
     bk.position.set(x + dx * 1.15, 0.8, z + dz * 1.15); bk.rotation.y = ry; scene.add(bk);
+    for (const [lx, lz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) {
+      hcyl(scene, 0.025, 0.025, 0.45, 0x2a2118, x + dx + lx, 0.225, z + dz + lz, null, { roughness: 0.6 });
+    }
   }
 }
 function addKitchen(scene, x, z, len, ry) {
@@ -767,36 +817,42 @@ function addKitchen(scene, x, z, len, ry) {
   const g = new THREE.Group();
   g.position.set(x, 0, z); g.rotation.y = ry || 0;
   const half = len / 2;
-  const counter = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.9, len), mat(0x8a8a82, { roughness: 0.6 }));
-  counter.position.set(0, 0.45, 0); counter.castShadow = true; g.add(counter);
-  const top = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, len), mat(0x2a2a2a, { roughness: 0.4 }));
+  const counter = roundedBox(0.65, 0.9, len, 0.06, mat(0x8a8a82, { roughness: 0.6 }));
+  counter.position.set(0, 0.45, 0); g.add(counter);
+  const top = roundedBox(0.72, 0.05, len + 0.04, 0.02, mat(0x2a2a2a, { roughness: 0.4 }));
   top.position.set(0, 0.92, 0); g.add(top);
   // Stove: a hob with four burners on the counter, and an oven door.
   const stoveZ = -half + 0.8;
-  const hob = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.04, 0.9), mat(0x111111, { roughness: 0.3, metalness: 0.4 }));
+  const hob = roundedBox(0.6, 0.04, 0.9, 0.015, mat(0x111111, { roughness: 0.3, metalness: 0.4 }));
   hob.position.set(0, 0.96, stoveZ); g.add(hob);
   for (const [dz, dx] of [[-0.25, -0.15], [-0.25, 0.15], [0.25, -0.15], [0.25, 0.15]]) {
     const burner = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.02, 12), mat(0x333333, { roughness: 0.4, metalness: 0.5 }));
     burner.position.set(dx, 0.99, stoveZ + dz); g.add(burner);
   }
-  const oven = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.5, 0.7), mat(0x1a1a1a, { roughness: 0.3, metalness: 0.4 }));
+  const oven = roundedBox(0.04, 0.5, 0.7, 0.015, mat(0x1a1a1a, { roughness: 0.3, metalness: 0.4 }));
   oven.position.set(-0.34, 0.45, stoveZ); g.add(oven);
+  const ovenHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
+  ovenHandle.rotation.x = Math.PI / 2; ovenHandle.position.set(-0.37, 0.72, stoveZ); g.add(ovenHandle);
   // Sink: a basin set into the counter, with a tap.
   const sinkZ = half - 0.8;
-  const basin = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.08, 0.6), mat(0x9aa2a8, { roughness: 0.3, metalness: 0.6 }));
+  const basin = roundedBox(0.45, 0.08, 0.6, 0.03, mat(0x9aa2a8, { roughness: 0.3, metalness: 0.6 }));
   basin.position.set(0, 0.92, sinkZ); g.add(basin);
   const tapBase = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
   tapBase.position.set(0.15, 1.1, sinkZ - 0.25); g.add(tapBase);
   const tapArm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.28, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
   tapArm.rotation.x = Math.PI / 2; tapArm.position.set(0.02, 1.24, sinkZ - 0.12); g.add(tapArm);
-  // Upper cabinets on the wall above the counter.
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.8, len - 0.8), mat(0x6a5a44, { roughness: 0.7 }));
+  // Upper cabinets on the wall above the counter, with round knobs.
+  const cab = roundedBox(0.4, 0.8, len - 0.8, 0.06, mat(0x6a5a44, { roughness: 0.7 }));
   cab.position.set(0.15, 2.0, 0); g.add(cab);
-  // Fridge at the north end of the run, with handles.
-  const fridge = new THREE.Mesh(new THREE.BoxGeometry(0.75, 1.9, 0.85), mat(0xd8d8d8, { metalness: 0.5, roughness: 0.3 }));
-  fridge.position.set(0, 0.95, -half - 0.55); fridge.castShadow = true; g.add(fridge);
+  for (const kz of [-0.9, 0, 0.9]) {
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.8, roughness: 0.3 }));
+    knob.position.set(-0.06, 1.7, kz); g.add(knob);
+  }
+  // Fridge at the north end of the run, with rounded doors and handles.
+  const fridge = roundedBox(0.75, 1.9, 0.85, 0.08, mat(0xd8d8d8, { metalness: 0.5, roughness: 0.3 }));
+  fridge.position.set(0, 0.95, -half - 0.55); g.add(fridge);
   for (const hy of [0.7, 1.3]) {
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.3, 0.04), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+    const handle = new THREE.Mesh(new THREE.CapsuleGeometry(0.025, 0.26, 4, 8), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
     handle.position.set(-0.4, hy, -half - 0.55); g.add(handle);
   }
   // A kettle and a fruit bowl on the counter.
@@ -817,6 +873,8 @@ function addPlant(scene, x, z, scale) {
   const g = new THREE.Group();
   const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.16 * s, 0.3 * s, 12), mat(0xa85a2a, { roughness: 0.8 }));
   pot.position.set(x, 0.15 * s, z); pot.castShadow = true; g.add(pot);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.21 * s, 0.025 * s, 8, 20), mat(0x8a4520, { roughness: 0.8 }));
+  rim.rotation.x = Math.PI / 2; rim.position.set(x, 0.3 * s, z); g.add(rim);
   const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.04 * s, 0.05 * s, 0.5 * s, 8), mat(0x4a3220, { roughness: 1 }));
   trunk.position.set(x, 0.5 * s, z); g.add(trunk);
   const crownMat = mat(0x3a6a2a, { roughness: 1 });
@@ -827,28 +885,28 @@ function addPlant(scene, x, z, scale) {
   scene.add(g);
   return g;
 }
-// A low coffee table with a book and a mug on top.
+// A low coffee table with a rounded top, turned legs, a book and a mug.
 function addCoffeeTable(scene, x, z, w) {
   const g = new THREE.Group();
-  const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, 0.7), mat(0x4a3220, { roughness: 0.5 }));
-  top.position.set(x, 0.42, z); top.castShadow = true; g.add(top);
+  const top = roundedBox(w, 0.06, 0.7, 0.03, mat(0x4a3220, { roughness: 0.5 }));
+  top.position.set(x, 0.42, z); g.add(top);
   for (const [dx, dz] of [[-w / 2 + 0.08, -0.28], [w / 2 - 0.08, -0.28], [-w / 2 + 0.08, 0.28], [w / 2 - 0.08, 0.28]]) {
-    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 0.06), mat(0x2a2118, { roughness: 0.6 }));
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.025, 0.4, 8), mat(0x2a2118, { roughness: 0.6 }));
     leg.position.set(x + dx, 0.2, z + dz); g.add(leg);
   }
-  const book = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, 0.22), mat(0xc0392b, { roughness: 0.8 }));
+  const book = roundedBox(0.3, 0.04, 0.22, 0.015, mat(0xc0392b, { roughness: 0.8 }));
   book.position.set(x - w / 4, 0.47, z); book.rotation.y = 0.3; g.add(book);
   const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.09, 10), mat(0x2e6fb0, { roughness: 0.5 }));
   mug.position.set(x + w / 4, 0.5, z + 0.1); g.add(mug);
   scene.add(g);
   return g;
 }
-// A bedside nightstand with a drawer and a small lamp.
+// A bedside nightstand with a rounded body and drawer, and a small lamp.
 function addNightstand(scene, x, z) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.55, 0.45), mat(0x4a3220, { roughness: 0.6 }));
-  body.position.set(x, 0.28, z); body.castShadow = true; g.add(body);
-  const drawer = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.18, 0.03), mat(0x6b4226, { roughness: 0.6 }));
+  const body = roundedBox(0.55, 0.55, 0.45, 0.05, mat(0x4a3220, { roughness: 0.6 }));
+  body.position.set(x, 0.28, z); g.add(body);
+  const drawer = roundedBox(0.45, 0.18, 0.03, 0.015, mat(0x6b4226, { roughness: 0.6 }));
   drawer.position.set(x, 0.35, z + 0.24); g.add(drawer);
   const knob = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.8, roughness: 0.3 }));
   knob.position.set(x, 0.35, z + 0.27); g.add(knob);
@@ -867,10 +925,12 @@ function addNightstand(scene, x, z) {
 function addWardrobe(scene, x, z, ry) {
   const g = new THREE.Group();
   g.position.set(x, 0, z); g.rotation.y = ry || 0;
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.2, 0.55), mat(0x4a3220, { roughness: 0.6 }));
-  body.position.set(0, 1.1, 0); body.castShadow = true; g.add(body);
+  const body = roundedBox(1.4, 2.2, 0.55, 0.06, mat(0x4a3220, { roughness: 0.6 }));
+  body.position.set(0, 1.1, 0); g.add(body);
+  const crown = roundedBox(1.5, 0.08, 0.62, 0.03, mat(0x5a3a24, { roughness: 0.6 }));
+  crown.position.set(0, 2.24, 0); g.add(crown);
   for (const dx of [-0.35, 0.35]) {
-    const door = new THREE.Mesh(new THREE.BoxGeometry(0.62, 2.0, 0.04), mat(0x5a3a24, { roughness: 0.6 }));
+    const door = roundedBox(0.62, 2.0, 0.04, 0.02, mat(0x5a3a24, { roughness: 0.6 }));
     door.position.set(dx, 1.1, 0.29); g.add(door);
     const handle = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.8, roughness: 0.3 }));
     handle.position.set(dx + (dx < 0 ? 0.22 : -0.22), 1.1, 0.33); g.add(handle);
@@ -888,7 +948,7 @@ function addPartition(scene, x, z, len, ry) {
   g.position.set(x, 0, z); g.rotation.y = ry || 0;
   const wall = new THREE.Mesh(new THREE.BoxGeometry(len, 1.05, 0.12), mat(0xc9b8a0, { roughness: 0.95 }));
   wall.position.set(0, 0.55, 0); wall.castShadow = true; wall.receiveShadow = true; g.add(wall);
-  const rail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.06, 0.16), mat(0x6b4226, { roughness: 0.6 }));
+  const rail = roundedBox(len, 0.06, 0.16, 0.02, mat(0x6b4226, { roughness: 0.6 }));
   rail.position.set(0, 1.1, 0); g.add(rail);
   scene.add(g);
   return g;
@@ -905,7 +965,7 @@ function addCeilingFan(scene, x, z) {
   const blades = new THREE.Group();
   blades.position.set(0, -0.12, 0);
   for (let i = 0; i < 4; i++) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.03, 0.18), mat(0x6b4226, { roughness: 0.6 }));
+    const b = roundedBox(0.9, 0.03, 0.18, 0.012, mat(0x6b4226, { roughness: 0.6 }));
     const a = i * Math.PI / 2;
     b.position.set(Math.cos(a) * 0.5, 0, Math.sin(a) * 0.5);
     b.rotation.y = -a;
@@ -922,24 +982,24 @@ function addBookshelf(scene, x, z, ry) {
   const g = new THREE.Group();
   g.position.set(x, 0, z); g.rotation.y = ry || 0;
   const wood = mat(0x4a3220, { roughness: 0.7 });
-  const back = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.2, 1.8), wood);
-  back.position.set(-0.17, 1.1, 0); back.castShadow = true; g.add(back);
+  const back = roundedBox(0.06, 2.2, 1.8, 0.02, wood);
+  back.position.set(-0.17, 1.1, 0); g.add(back);
   for (const dz of [-0.87, 0.87]) {
-    const side = new THREE.Mesh(new THREE.BoxGeometry(0.4, 2.2, 0.06), wood);
+    const side = roundedBox(0.4, 2.2, 0.06, 0.02, wood);
     side.position.set(0, 1.1, dz); g.add(side);
   }
   for (const y of [0.03, 2.17]) {
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 1.8), wood);
+    const cap = roundedBox(0.4, 0.06, 1.8, 0.02, wood);
     cap.position.set(0, y, 0); g.add(cap);
   }
   const bookCols = [0xc0392b, 0x2e6fb0, 0x7ac74f, 0xffd166, 0x8a5a9a, 0xd8d8d8, 0x2e8b8b, 0xe07a5f];
   for (let s = 0; s < 3; s++) {
     const shelfY = 0.35 + s * 0.65;
-    const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.04, 1.7), mat(0x6b4226, { roughness: 0.7 }));
+    const shelf = roundedBox(0.36, 0.04, 1.7, 0.015, mat(0x6b4226, { roughness: 0.7 }));
     shelf.position.set(0, shelfY, 0); g.add(shelf);
     for (let b = 0; b < 6; b++) {
       const bc = bookCols[(s * 6 + b) % bookCols.length];
-      const book = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.42, 0.22), mat(bc, { roughness: 0.8 }));
+      const book = roundedBox(0.24, 0.42, 0.22, 0.02, mat(bc, { roughness: 0.8 }));
       book.position.set(0.02, shelfY + 0.23, -0.68 + b * 0.27);
       if ((s + b) % 5 === 0) book.rotation.x = 0.18;
       g.add(book);
@@ -953,11 +1013,11 @@ function addBookshelf(scene, x, z, ry) {
 function addBathtub(scene, x, z, ry) {
   const g = new THREE.Group();
   g.position.set(x, 0, z); g.rotation.y = ry || 0;
-  const tub = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.55, 1.8), mat(0xf4f6f8, { roughness: 0.3 }));
-  tub.position.set(0, 0.28, 0); tub.castShadow = true; g.add(tub);
-  const inner = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.1, 1.6), mat(0x9fc8d8, { roughness: 0.2 }));
+  const tub = roundedBox(0.85, 0.55, 1.8, 0.12, mat(0xf4f6f8, { roughness: 0.3 }));
+  tub.position.set(0, 0.28, 0); g.add(tub);
+  const inner = roundedBox(0.65, 0.1, 1.6, 0.05, mat(0x9fc8d8, { roughness: 0.2 }));
   inner.position.set(0, 0.5, 0); g.add(inner);
-  const rim = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.06, 1.9), mat(0xffffff, { roughness: 0.3 }));
+  const rim = roundedBox(0.95, 0.06, 1.9, 0.03, mat(0xffffff, { roughness: 0.3 }));
   rim.position.set(0, 0.57, 0); g.add(rim);
   const tapBase = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.25, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
   tapBase.position.set(0, 0.7, -0.8); g.add(tapBase);
@@ -970,10 +1030,14 @@ function addBathtub(scene, x, z, ry) {
 function addToilet(scene, x, z, ry) {
   const g = new THREE.Group();
   g.position.set(x, 0, z); g.rotation.y = ry || 0;
-  const tank = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.55, 0.16), mat(0xf4f6f8, { roughness: 0.3 }));
-  tank.position.set(0, 0.55, -0.28); tank.castShadow = true; g.add(tank);
+  const tank = roundedBox(0.45, 0.55, 0.16, 0.05, mat(0xf4f6f8, { roughness: 0.3 }));
+  tank.position.set(0, 0.55, -0.28); g.add(tank);
+  const lid = roundedBox(0.47, 0.05, 0.18, 0.02, mat(0xffffff, { roughness: 0.3 }));
+  lid.position.set(0, 0.84, -0.28); g.add(lid);
+  const flush = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.02, 12), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
+  flush.position.set(0, 0.87, -0.28); g.add(flush);
   const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.4, 14), mat(0xf4f6f8, { roughness: 0.3 }));
-  bowl.position.set(0, 0.2, 0.05); bowl.castShadow = true; g.add(bowl);
+  bowl.position.set(0, 0.2, 0.05); bowl.scale.set(1, 1, 1.25); bowl.castShadow = true; g.add(bowl);
   const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.06, 14), mat(0xffffff, { roughness: 0.3 }));
   seat.position.set(0, 0.42, 0.05); g.add(seat);
   scene.add(g);
@@ -988,8 +1052,12 @@ function addBathroomSink(scene, x, z, ry) {
   ped.position.set(0, 0.35, 0); ped.castShadow = true; g.add(ped);
   const basin = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.22, 0.15, 14), mat(0xffffff, { roughness: 0.3 }));
   basin.position.set(0, 0.75, 0); g.add(basin);
+  const basinRim = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.02, 8, 20), mat(0xf4f6f8, { roughness: 0.3 }));
+  basinRim.rotation.x = Math.PI / 2; basinRim.position.set(0, 0.82, 0); g.add(basinRim);
   const tap = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.18, 8), new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.8, roughness: 0.3 }));
   tap.position.set(0, 0.9, -0.2); g.add(tap);
+  const frame = roundedBox(0.56, 0.76, 0.02, 0.02, mat(0x4a3220, { roughness: 0.6 }));
+  frame.position.set(0, 1.5, -0.29); g.add(frame);
   const mirror = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.7), new THREE.MeshStandardMaterial({ color: 0xb8d8e8, roughness: 0.1, metalness: 0.6 }));
   mirror.position.set(0, 1.5, -0.28); g.add(mirror);
   scene.add(g);
@@ -1088,7 +1156,7 @@ function buildRealPhone(scene, x, y, z, ry) {
   back.rotation.y = Math.PI; back.position.z = -0.0085; flat.add(back);
   scene.add(phone);
   // A generous invisible target over the phone, so it is easy to tap on a phone screen.
-  hitBox(scene, 0.4, 0.3, 0.4, x, y + 0.05, z, 'phone');
+  hitBox(scene, 0.55, 0.4, 0.55, x, y + 0.05, z, 'phone');
   return phone;
 }
 // A wall-mounted phone booth in the wind tunnel lab (the Factory): a
@@ -2020,7 +2088,7 @@ export function enterPlace(kind, onLeave, options) {
     homeScene.fog = new THREE.FogExp2(0x0a0d10, 0.02);
   }
   baseLights(homeScene, !isRoom);
-  if (kind === 'mansion') { buildMansion(homeScene); homeBounds = { x: [-6.4, 6.4], z: [-4.4, 4.4] }; homeStart = homePrologue ? { x: -4.5, y: 1.7, z: -1.0, yaw: Math.PI } : { x: 0, y: 1.7, z: 4, yaw: 0 }; }
+  if (kind === 'mansion') { buildMansion(homeScene); homeBounds = { x: [-6.4, 6.4], z: [-4.4, 4.4] }; homeStart = homePrologue ? { x: -2.9, y: 1.7, z: -1.3, yaw: -1.87 } : { x: 0, y: 1.7, z: 4, yaw: 0 }; }
   else if (kind === 'safehouse') { buildSafehouse(homeScene); homeBounds = { x: [-3.4, 3.4], z: [-2.4, 2.4] }; homeStart = { x: 0, y: 1.7, z: 2, yaw: 0 }; }
   else if (kind === 'hospital') { buildHospital(homeScene); homeBounds = { x: [-16, 16], z: [-14, 18] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
   else if (kind === 'industry') { buildIndustry(homeScene); homeBounds = { x: [-16, 16], z: [-12, 16] }; homeStart = { x: 0, y: 1.7, z: 12, yaw: 0 }; }
@@ -2148,8 +2216,14 @@ function homeAnimate() {
       a.position.set(COUCH_SIT.x, 0, COUCH_SIT.z);
       a.rotation.set(0, Math.PI, 0);
     } catch (e) { /* ignore */ }
-    homeCamera.position.set(COUCH_SIT.x, 1.5, COUCH_SIT.z + 2.1);
-    homeCamera.lookAt(0.2, 0.8, COUCH_SIT.z);
+    // The camera sits on the TV side (north) of the couch, looking south
+    // at the player and the phone on the cushion. The old spot was south
+    // of the couch, behind the backrest, so the back hid the phone and
+    // its green button and the player could not see or tap it. From the
+    // front the cushion, the phone and the player are all in clear view,
+    // and the sight line to the phone passes well over the coffee table.
+    homeCamera.position.set(0.0, 1.6, -1.7);
+    homeCamera.lookAt(0.1, 0.78, COUCH_SIT.z);
     renderer.render(homeScene, homeCamera);
     updatePrologueButtons();
     return;
@@ -2313,12 +2387,23 @@ function homeHandleTap(clientX, clientY) {
   homeRay.setFromCamera(homeMouse, homeCamera);
   const hits = homeRay.intersectObjects(homeTargets.filter(o => o.visible !== false), false);
   if (!hits.length) return;
-  const action = hits[0].object.userData.homeAction || hits[0].object.name;
+  // The prologue phone lies on the couch cushion, inside the sofa's big
+  // invisible hit box, so a ray toward the phone hits the sofa first.
+  // While the call is pending, a phone hit anywhere on the ray wins over
+  // the sofa, so a tap on or near the phone answers the call.
+  let hit = hits[0];
+  if (homePrologue && homeKind === 'mansion' && !homeCallDone) {
+    for (const h of hits) {
+      const a = h.object.userData.homeAction || h.object.name;
+      if (a === 'phone') { hit = h; break; }
+    }
+  }
+  const action = hit.object.userData.homeAction || hit.object.name;
   if (action === 'exitDoor') {
     // Clicking a walkable exit door opens it. A locked door needs its
     // key first; the key is inside the room. In the prologue the phone
     // comes first: the player cannot leave before answering the call.
-    const door = hits[0].object.userData.doorRef;
+    const door = hit.object.userData.doorRef;
     if (homePrologue && homeKind === 'mansion' && !homeCallDone) {
       showHomeToast('The phone is ringing - answer it first.');
       return;
@@ -2333,8 +2418,8 @@ function homeHandleTap(clientX, clientY) {
   }
   if (action === 'roomKey') {
     // Clicking a room key picks it up and unlocks its door.
-    const keyId = hits[0].object.userData.keyId;
-    const keyLabel = hits[0].object.userData.keyLabel || 'key';
+    const keyId = hit.object.userData.keyId;
+    const keyLabel = hit.object.userData.keyLabel || 'key';
     if (!keyId) return;
     if (hasKey(keyId)) { showHomeToast('You already have the ' + keyLabel + '.'); return; }
     giveKey(keyId, keyLabel);
@@ -2386,7 +2471,12 @@ function phoneHitAt(clientX, clientY) {
     const rc = new THREE.Raycaster();
     rc.setFromCamera(new THREE.Vector2(nx, ny), homeCamera);
     const hits = rc.intersectObjects(homeTargets, false).filter((h) => h.object && h.object.visible !== false);
-    return !!(hits.length && (hits[0].object.userData.homeAction === 'phone' || hits[0].object.name === 'phone'));
+    // The phone lies inside the sofa's big invisible hit box, so the
+    // first hit on the ray is often the sofa. Any phone hit on the ray
+    // counts, while the call is pending, so a press starting on the
+    // phone is a tap or swipe to answer it, not a look-around drag.
+    if (!homePrologue || homeKind !== 'mansion' || homeCallDone) return false;
+    return hits.some((h) => h.object.userData.homeAction === 'phone' || h.object.name === 'phone');
   } catch (e) { return false; }
 }
 // Input: registered once, guarded by homeActive so the acts never fight it.

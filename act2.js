@@ -895,6 +895,119 @@ function whiteFacadeTexture(cols, rows, litRatio) {
 function whiteFacadeMat(cols, rows, litRatio) {
   return new THREE.MeshStandardMaterial({ map: whiteFacadeTexture(cols, rows, litRatio), roughness: 0.85, metalness: 0.02 });
 }
+// ---------- NYC skyscrapers ----------
+// The buildings along the road are skyscrapers now, different varieties
+// of the structures that make up New York: slab glass towers, setback
+// towers that narrow as they rise, spired and Art Deco crown towers,
+// tapered towers, and brick walk-ups with a rooftop water tower. Facades
+// are canvas textures with a grid of windows, some lit warm gold, some
+// lit cool white, so the towers read at day and at dusk/night.
+function skyscraperFacadeTexture(base, cols, rows, litRatio) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = base; ctx.fillRect(0, 0, 256, 256);
+  const gw = 256 / cols, gh = 256 / rows;
+  for (let r = 0; r < rows; r++) for (let col = 0; col < cols; col++) {
+    if (Math.random() < (litRatio || 0.35)) ctx.fillStyle = Math.random() < 0.6 ? '#ffd166' : '#cfe4ff';
+    else ctx.fillStyle = 'rgba(8,14,22,0.85)';
+    ctx.fillRect(col * gw + gw * 0.22, r * gh + gh * 0.25, gw * 0.56, gh * 0.5);
+  }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// A shared palette of facade materials, so towers reuse textures instead
+// of making one per building. glow is the starting emissive intensity;
+// the drive palette is registered in travelWindowMats so setTimeOfDay
+// turns the window glow up at dusk/night and down in daylight.
+function skyFacadePalette(glow, register) {
+  const defs = [
+    { base: '#2e4a66', cols: 6, rows: 16 }, // blue glass
+    { base: '#232c33', cols: 8, rows: 20 }, // dark glass
+    { base: '#7a4636', cols: 5, rows: 10 }, // brick
+    { base: '#cfc4ae', cols: 6, rows: 12 }, // pale stone
+    { base: '#b8a888', cols: 5, rows: 14 }, // Art Deco limestone
+    { base: '#e8ecef', cols: 6, rows: 12 }  // white modern
+  ];
+  const mats = defs.map(d => {
+    const tex = skyscraperFacadeTexture(d.base, d.cols, d.rows, 0.35);
+    const m = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: glow, roughness: 0.85 });
+    if (register) travelWindowMats.push(m);
+    return m;
+  });
+  return mats;
+}
+// Classic NYC rooftop water tower: a wooden barrel on legs with a cone roof.
+function makeWaterTower() {
+  const g = new THREE.Group();
+  const wood = stdMat({ color: 0x6a4a30, roughness: 0.95 });
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.6, 1.1, 10), wood);
+  barrel.position.y = 1.1; barrel.castShadow = true; g.add(barrel);
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.65, 0.5, 10), stdMat({ color: 0x4a3220, roughness: 0.95 }));
+  cone.position.y = 1.9; g.add(cone);
+  for (const [lx, lz] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.7, 6), stdMat({ color: 0x3a3a3a, roughness: 0.8 }));
+    leg.position.set(lx, 0.35, lz); g.add(leg);
+  }
+  return g;
+}
+// One varied NYC tower, standing on the ground (y = 0 at the base).
+// style: 'slab' | 'setback' | 'spired' | 'tapered' | 'brick' | 'deco'.
+// facadeMat is one material from skyFacadePalette.
+function makeSkyscraper(style, w, h, d, facadeMat) {
+  const g = new THREE.Group();
+  const roofMat = stdMat({ color: 0x3a3f44, roughness: 0.9 });
+  const goldMat = stdMat({ color: 0xc8b060, metalness: 0.5, roughness: 0.4 });
+  const box = (bw, bh, bd, y, mat) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), [mat, mat, roofMat, roofMat, mat, mat]);
+    m.position.y = y; m.castShadow = true; g.add(m); return m;
+  };
+  if (style === 'setback') {
+    box(w, h * 0.55, d, h * 0.275, facadeMat);
+    box(w * 0.7, h * 0.3, d * 0.7, h * 0.55 + h * 0.15, facadeMat);
+    box(w * 0.45, h * 0.15, d * 0.45, h * 0.85 + h * 0.075, facadeMat);
+  } else if (style === 'tapered') {
+    const r = (w / 2) * Math.SQRT2;
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.55, r, h, 4, 1), facadeMat);
+    t.rotation.y = Math.PI / 4; t.position.y = h / 2; t.castShadow = true; g.add(t);
+    box(w * 0.3, h * 0.08, d * 0.3, h + h * 0.04, roofMat);
+  } else if (style === 'spired') {
+    box(w, h, d, h / 2, facadeMat);
+    box(w * 0.6, h * 0.08, d * 0.6, h + h * 0.04, roofMat);
+    const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.35, h * 0.22, 8), stdMat({ color: 0x8a7a3a, metalness: 0.7, roughness: 0.35 }));
+    spire.position.y = h + h * 0.08 + h * 0.11; g.add(spire);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffd166 }));
+    tip.position.y = h + h * 0.08 + h * 0.22; g.add(tip);
+  } else if (style === 'deco') {
+    box(w, h, d, h / 2, facadeMat);
+    box(w * 0.7, h * 0.06, d * 0.7, h + h * 0.03, goldMat);
+    box(w * 0.45, h * 0.06, d * 0.45, h + h * 0.09, goldMat);
+    const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.2, h * 0.12, 8), stdMat({ color: 0x8a7a3a, metalness: 0.7, roughness: 0.35 }));
+    spire.position.y = h + h * 0.12 + h * 0.06; g.add(spire);
+  } else if (style === 'brick') {
+    box(w, h, d, h / 2, facadeMat);
+    if (Math.random() < 0.6) { const wt = makeWaterTower(); wt.position.set(0, h, 0); g.add(wt); }
+    else box(w * 0.4, 1.0, d * 0.4, h + 0.5, roofMat); // rooftop penthouse
+  } else { // slab
+    box(w, h, d, h / 2, facadeMat);
+    box(w * 0.5, 1.2, d * 0.5, h + 0.6, roofMat);
+  }
+  return g;
+}
+// Pick a tower style and a height band for it, so the skyline mixes very
+// tall, tall, medium and shorter towers instead of one height. minH
+// excludes styles too short for the spot (the skyline wants tall only).
+function pickSkyscraper(palette, minH) {
+  const bands = { slab: [24, 50], setback: [20, 45], spired: [28, 55], tapered: [22, 42], brick: [8, 16], deco: [26, 48] };
+  const floor = minH || 0;
+  const styles = Object.keys(bands).filter(s => bands[s][1] >= floor);
+  const style = styles[Math.floor(Math.random() * styles.length)];
+  const band = bands[style];
+  const lo = Math.max(band[0], floor);
+  const h = lo + Math.random() * (band[1] - lo);
+  const w = 7 + Math.random() * 5, d = 7 + Math.random() * 3;
+  const mat = palette[Math.floor(Math.random() * palette.length)];
+  return { group: makeSkyscraper(style, w, h, d, mat), h, w, d, style };
+}
 // ---------- Tiled road (from the street photo the user sent) ----------
 // The city streets are a GREEN TILED road: hexagonal tiles, green bike
 // lanes with bicycle symbols, "MAIN ST" painted on the road, parked cars
@@ -1072,14 +1185,20 @@ function buildCityEnvironment() {
   // white modern boxes with rows of windows, like the photo, flat roofs.
   const shopNames = ['CAFE', 'DELI', 'BAKERY', 'PHARMACY', 'FLOWERS', 'BOOKS', 'PIZZA'];
   const awnCols = [0xc0392b, 0x2e6fb0, 0x2e7a4a, 0xc07a1a, 0x7a2e5a, 0x3a3a3a, 0xd8b13a];
+  // Houses beyond the road (z = -16), a small shop row: varied heights
+  // and fronts, white, brick and pale stone, some with a rooftop water
+  // tower, so the row reads as a real New York street, not one box.
+  const shopPalette = skyFacadePalette(0.55, false);
   for (let i = 0; i < 7; i++) {
     const hx = -30 + i * 10 + (Math.random() * 3 - 1.5);
     const h = new THREE.Group();
-    const houseMat = whiteFacadeMat(4, 2, 0.5);
-    const base = new THREE.Mesh(new THREE.BoxGeometry(5, 2.6, 4.5), houseMat);
-    base.position.y = 1.3; base.castShadow = true; h.add(base);
+    const sh = 2.6 + Math.random() * 1.9; // 2.6 to 4.5 high
+    const shopMat = shopPalette[Math.floor(Math.random() * shopPalette.length)];
+    const base = new THREE.Mesh(new THREE.BoxGeometry(5, sh, 4.5), shopMat);
+    base.position.y = sh / 2; base.castShadow = true; h.add(base);
     const roof = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.15, 4.7), stdMat({ color: 0xe8ecef, roughness: 0.9 }));
-    roof.position.y = 2.65; roof.castShadow = true; h.add(roof);
+    roof.position.y = sh + 0.05; roof.castShadow = true; h.add(roof);
+    if (Math.random() < 0.3) { const wt = makeWaterTower(); wt.scale.setScalar(0.7); wt.position.set(1.2, sh + 0.1, 0); h.add(wt); }
     const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshStandardMaterial({ color: 0x201808, emissive: 0xffc978, emissiveIntensity: 0.9 }));
     win.position.set(-1, 1.4, 2.28); h.add(win);
     const win2 = win.clone(); win2.position.set(1.2, 1.4, 2.28); h.add(win2);
@@ -1116,19 +1235,15 @@ function buildCityEnvironment() {
   }
   cityTrain.position.set(-30, 0, 0);
   mission2.add(cityTrain);
-  // Manhattan skyline in the far background (z = -26 to -40): tall white
-  // modern towers with rows of windows, like the hospital in the photo,
-  // hazed by the fog so the city reads at a distance. Windows glow at dusk.
-  const skyTexA = whiteFacadeTexture(6, 12, 0.5);
-  const skyTexB = whiteFacadeTexture(6, 12, 0.35);
+  // Manhattan skyline in the far background (z = -26 to -40): varied NYC
+  // skyscrapers, slab glass, setback, spired, tapered, brick and Art Deco
+  // crowns, hazed by the fog so the city reads at a distance. Windows
+  // glow at dusk. Only tall towers here (18 and up).
+  const skyPalette = skyFacadePalette(0.55, false);
   for (let i = 0; i < 10; i++) {
-    const w = 6 + Math.random() * 5, h = 14 + Math.random() * 18, d = 6 + Math.random() * 4;
-    const tex = i % 2 === 0 ? skyTexA : skyTexB;
-    const side = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 0.85 });
-    const pale = stdMat({ color: 0xe8ecef, roughness: 0.9 });
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side, side, pale, pale, side, side]);
-    b.position.set(-42 + i * 9.5 + (Math.random() * 3 - 1.5), h / 2, -28 - Math.random() * 12);
-    mission2.add(b);
+    const pick = pickSkyscraper(skyPalette, 18);
+    pick.group.position.set(-42 + i * 9.5 + (Math.random() * 3 - 1.5), 0, -28 - Math.random() * 12);
+    mission2.add(pick.group);
   }
 }
 
@@ -1346,26 +1461,31 @@ function buildTravelScene() {
   const driveCrowd = makeCrowd({ count: 10, lane: { axis: 'z', fixed: 5.6, min: -710, max: 0 } });
   const driveCrowd2 = makeCrowd({ count: 10, lane: { axis: 'z', fixed: -5.6, min: -710, max: 0 } });
   for (const p of [...driveCrowd, ...driveCrowd2]) { travelGroup.add(p.group); travelPedestrians.push(p); }
-  // Buildings on both sides, scrolling past as the camera drives.
-  // Clean white modern style with rows of windows, like the hospital in
-  // the photo. The window glow is turned up at dusk/night and down in
-  // daylight by setTimeOfDay (the materials are kept in travelWindowMats).
-  const winTex = whiteFacadeTexture(6, 12, 0.4);
+  // Buildings on both sides, scrolling past as the camera drives: varied
+  // NYC skyscrapers, slab glass, setback, spired, tapered, brick with a
+  // rooftop water tower, Art Deco crown, in blue glass, dark glass,
+  // brick, pale stone and white, with lit windows. The window glow is
+  // turned up at dusk/night and down in daylight by setTimeOfDay (the
+  // palette materials are kept in travelWindowMats). Towers are placed
+  // so their street-side face stays clear of the trees and sidewalks.
+  const drivePalette = skyFacadePalette(0.4, true);
+  // Landmark z positions, by side: no tower is placed on top of the gas
+  // stations, the hospital tower, the police station or Zama HQ.
+  const landmarkZ = { '-1': [-90, -560], '1': [-150, -200, -450] };
   for (let z = -10; z >= -710; z -= 14) {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.25) continue; // gaps so the street breathes
-      const h = 8 + Math.random() * 16;
-      const sideMat = new THREE.MeshStandardMaterial({ map: winTex, emissiveMap: winTex, emissive: 0xffffff, emissiveIntensity: 0.4, roughness: 0.85 });
-      travelWindowMats.push(sideMat);
-      const pale = stdMat({ color: 0xe8ecef, roughness: 0.9 });
-      const b = new THREE.Mesh(new THREE.BoxGeometry(7 + Math.random() * 4, h, 8), [sideMat, sideMat, pale, pale, sideMat, sideMat]);
-      b.position.set(side * (11 + Math.random() * 5), h / 2, z + (Math.random() * 4 - 2));
-      travelGroup.add(b);
+      if (landmarkZ[String(side)].some(lz => Math.abs(z - lz) < 12)) continue;
+      const pick = pickSkyscraper(drivePalette, 0);
+      const bx = side * (7.5 + pick.w / 2 + Math.random() * 4);
+      const bz = z + (Math.random() * 4 - 2);
+      pick.group.position.set(bx, 0, bz);
+      travelGroup.add(pick.group);
       // A shop awning on the ground floor of the lower buildings, facing
       // the road, so the street reads as shops, not blank towers.
-      if (h < 14 && Math.random() < 0.6) {
+      if (pick.h < 14 && Math.random() < 0.6) {
         const awn = makeShopAwning([0xc0392b, 0x2e6fb0, 0x2e7a4a, 0xc07a1a][Math.floor(Math.random() * 4)], null);
-        awn.position.set(side * (11 + Math.random() * 5) - side * 4, 0, z + (Math.random() * 4 - 2));
+        awn.position.set(bx - side * 4, 0, bz);
         awn.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
         travelGroup.add(awn);
       }
@@ -2059,20 +2179,35 @@ function buildTrekStreet() {
     const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 3), new THREE.MeshBasicMaterial({ color: 0xd8b13a }));
     dash.rotation.x = -Math.PI / 2; dash.position.set(0, 0.04, z); trekGroup.add(dash);
   }
-  // Shops with awnings on both sides, white modern fronts.
+  // Shops and towers on both sides: low shopfronts with awnings in
+  // front, taller varied skyscrapers behind them, so the walked street
+  // reads as New York, not one white box repeated. Nothing is placed on
+  // the road or the sidewalks (the player walks x -4.2 to 4.2, the
+  // BRIDGE marker is at the far end, z -47).
   const shopNames = ['CAFE', 'DELI', 'BAKERY', 'PHARMACY', 'FLOWERS', 'BOOKS', 'PIZZA', 'MARKET'];
   const awnCols = [0xc0392b, 0x2e6fb0, 0x2e7a4a, 0xc07a1a, 0x7a2e5a, 0x3a3a3a, 0xd8b13a, 0x2e6a7a];
+  const trekPalette = skyFacadePalette(0.85, false);
   let si = 0;
   for (let z = 22; z >= -44; z -= 11) {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.2) continue;
-      const shop = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 6), whiteFacadeMat(3, 2, 0.4));
-      shop.position.set(side * 11, 2.5, z); shop.castShadow = true; trekGroup.add(shop);
-      const awn = makeShopAwning(awnCols[si % awnCols.length], shopNames[si % shopNames.length]);
-      awn.position.set(side * 8.2, 0, z);
-      awn.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
-      trekGroup.add(awn);
-      si++;
+      if (Math.random() < 0.6) {
+        // Low shopfront with an awning, varied height and front.
+        const sh = 4 + Math.random() * 2;
+        const shopMat = trekPalette[Math.floor(Math.random() * trekPalette.length)];
+        const shop = new THREE.Mesh(new THREE.BoxGeometry(5, sh, 6), shopMat);
+        shop.position.set(side * 11, sh / 2, z); shop.castShadow = true; trekGroup.add(shop);
+        const awn = makeShopAwning(awnCols[si % awnCols.length], shopNames[si % shopNames.length]);
+        awn.position.set(side * 8.2, 0, z);
+        awn.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        trekGroup.add(awn);
+        si++;
+      } else {
+        // A taller tower behind the shopfront line.
+        const pick = pickSkyscraper(trekPalette, 10);
+        pick.group.position.set(side * (10 + pick.w / 2 + Math.random() * 3), 0, z + (Math.random() * 4 - 2));
+        trekGroup.add(pick.group);
+      }
     }
   }
   // Parked cars along both curbs, and trees on the sidewalks.
