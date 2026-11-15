@@ -256,6 +256,12 @@ async function loadPlayerRig() {
     // Shrink the head bone before the height is normalised, so the
     // normalisation measures the corrected head.
     rig.traverse(o => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
+    // Every clip carries a scale track for the Head bone, so the mixer
+    // would write the Head scale back to 1 every frame and undo the
+    // shrink. Strip the Head scale track from every clip so the 0.3 stays.
+    for (const clip of (gltf.animations || [])) {
+      clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale');
+    }
     // Normalise height to the player's height, then re-ground the feet.
     // The scale lives on the INNER rig group, never on the outer avatar
     // group: the drive code sets the outer group's scale to 0.72 to seat

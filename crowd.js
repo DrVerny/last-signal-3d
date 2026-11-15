@@ -37,13 +37,25 @@ function loadOne(def) {
   ]).then(gltf => {
     // Jade (Casual Female) has an oversized head: its Hair is wider than
     // its shoulders, so it reads as a wide flat disc about twice normal
-    // width. Shrink the head bone before the model is used, so the
-    // height and the clones (via cloneSkinned) use the corrected head.
-    // Only models with separate Face/Hair materials need this; the
-    // Atlas models (Matt, Lis, Sam) are fine and are left alone.
+    // width. The Atlas models (Matt, Lis, Sam) read as chibi, with heads
+    // too big for their bodies, so they get a moderate shrink. Shrink the
+    // head bone before the model is used, so the height and the clones
+    // (via cloneSkinned) use the corrected head. Every clip on the Casual
+    // models carries a Head scale track that would write the scale back
+    // to 1 every frame, so strip that track from every clip so the shrink
+    // stays. (The Atlas clips carry no Head scale track, so the strip is
+    // a no-op for them, but it is kept so a future re-export of those
+    // models cannot undo the shrink either.)
     let hasFaceHair = false;
     gltf.scene.traverse(o => { if (o.isMesh && o.material && (o.material.name === 'Face' || o.material.name === 'Hair')) hasFaceHair = true; });
-    if (hasFaceHair) gltf.scene.traverse(o => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
+    if (hasFaceHair) {
+      gltf.scene.traverse(o => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
+    } else {
+      gltf.scene.traverse(o => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.6); });
+    }
+    for (const clip of (gltf.animations || [])) {
+      clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale');
+    }
     // Capture the Atlas texture image: per-person recolouring repaints
     // the measured palette cells of this image (see ATLAS_CELLS below).
     // The image is read again lazily when a look is applied, so a slow

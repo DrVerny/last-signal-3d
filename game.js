@@ -901,14 +901,27 @@ async function loadHumans() {
       group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       // Jade (Casual Female) has the same oversized head as the player
       // model: its Hair is wider than its shoulders, so it reads as a
-      // wide flat disc about twice normal width. Shrink the head bone
+      // wide flat disc about twice normal width. The Atlas models
+      // (Caleb, Nurse) read as chibi, with heads too big for their
+      // bodies, so they get a moderate shrink. Shrink the head bone
       // before the height is normalised, so the normalisation measures
-      // the corrected head. Only models with separate Face/Hair
-      // materials need this; the Atlas models (Caleb, Nurse, Walter)
-      // are fine and are left alone.
+      // the corrected head. Walter is a static scan with no Head bone,
+      // so the traverse is a no-op for him. Every clip on the Casual
+      // models carries a Head scale track that would write the scale
+      // back to 1 every frame, so strip that track from every clip so
+      // the shrink stays. (The Atlas clips carry no Head scale track,
+      // so the strip is a no-op for them, but it is kept so a future
+      // re-export of those models cannot undo the shrink either.)
       let hasFaceHair = false;
       group.traverse((o) => { if (o.isMesh && o.material && (o.material.name === 'Face' || o.material.name === 'Hair')) hasFaceHair = true; });
-      if (hasFaceHair) group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
+      if (hasFaceHair) {
+        group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
+      } else {
+        group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.6); });
+      }
+      for (const clip of (gltf.animations || [])) {
+        clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale');
+      }
       // Normalise height to the character's target height, then re-ground feet at y=0.
       let s = 1;
       const box = new THREE.Box3().setFromObject(group);
