@@ -2185,7 +2185,7 @@ function toggleDriveView() {
 }
 // On-screen drive controls: GAS and BRAKE pedals (hold), a View button
 // and a Skip button. The pedals sit bottom-right, clear of the W/A/S/D
-// pad on the left and the zoom buttons.
+// pad on the left and the camera buttons.
 function showDriveControls() {
   if (!driveControlsEl) {
     driveControlsEl = document.createElement('div');
@@ -2360,7 +2360,7 @@ function updateTravelDrive(dt, t) {
       camera.lookAt(head.x, 1.0, head.z - 20);
     } else {
       // Chase view: behind and above the car, so the player sees himself
-      // driving. The camera distance follows the zoom setting.
+      // driving. The camera sits at the fixed 4 m distance.
       camera.position.set(0, 1.7 + zoomDist * 0.35 + Math.sin(t * 6) * 0.02, driveCar.position.z + zoomDist + 1.5);
       camera.lookAt(0, 1.0, driveCar.position.z - 8);
     }

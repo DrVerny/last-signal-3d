@@ -1,5 +1,5 @@
 // THE LAST SIGNAL - player presence: third-person avatar, touch controls,
-// zoom, realistic cars, door keys. Shared by all acts and the homes, so
+// realistic cars, door keys. Shared by all acts and the homes, so
 // the player sees himself the same way everywhere. No wallet needed;
 // demo mode works with no wallet connected. The avatar is built from
 // primitives (always available, no async load) and wears the equipped
@@ -33,9 +33,14 @@ export function sportsCarReadyNow() { return sportsCarReady; }
 // devices (no keyboard, the avatar shows where you are) and first-person
 // on desktop. The toggle is always available (C key or the Camera button).
 let thirdPerson = false;
-let zoomDist = 4;
-export const ZOOM_MIN = 2;
-export const ZOOM_MAX = 8;
+// The third-person camera sits at a fixed 4 m behind the avatar. There
+// used to be a zoom in/out (buttons, mouse wheel, pinch) from 2 m to
+// 8 m, but the user asked for it removed: zoomed all the way in the
+// player filled the screen, and zoomed all the way out the camera rose
+// above the train roof and the characters' heads poked out through it.
+// The camera stays at 4 m now, close enough to see the player, far
+// enough to stay inside the train.
+const zoomDist = 4;
 export function isThirdPerson() { return thirdPerson; }
 export function getZoom() { return zoomDist; }
 export function setThirdPerson(on) {
@@ -44,11 +49,6 @@ export function setThirdPerson(on) {
   try { const b = document.getElementById('touchCamBtn'); if (b) b.textContent = thirdPerson ? '3rd' : '1st'; } catch (e) { /* no touch button yet */ }
 }
 export function toggleThirdPerson() { setThirdPerson(!thirdPerson); }
-export function setZoom(d) {
-  zoomDist = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Number(d) || 4));
-  try { const l = document.getElementById('zoomLabel'); if (l) l.textContent = Math.round(zoomDist) + 'm'; } catch (e) { /* no label yet */ }
-}
-export function zoomBy(delta) { setZoom(zoomDist + delta); }
 export function isTouchDevice() {
   try {
     if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return true;
@@ -351,16 +351,7 @@ export function buildTouchControls() {
     const b = makeTouchKey(labels[k], k, holder);
     b.classList.add('touch-key-' + k);
   }
-  // Zoom buttons, bottom-right, with a distance label.
-  const zoom = document.createElement('div');
-  zoom.id = 'touchZoom';
-  zoom.innerHTML = '<button type="button" id="zoomOutBtn" aria-label="Zoom out">-</button>'
-    + '<span id="zoomLabel">4m</span>'
-    + '<button type="button" id="zoomInBtn" aria-label="Zoom in">+</button>';
-  document.body.appendChild(zoom);
-  document.getElementById('zoomInBtn').addEventListener('click', () => zoomBy(-1));
-  document.getElementById('zoomOutBtn').addEventListener('click', () => zoomBy(1));
-  // Camera toggle + pad toggle, above the zoom buttons.
+  // Camera toggle + pad toggle, bottom-right.
   const misc = document.createElement('div');
   misc.id = 'touchMisc';
   misc.innerHTML = '<button type="button" id="touchCamBtn">1st</button>'
@@ -368,40 +359,17 @@ export function buildTouchControls() {
   document.body.appendChild(misc);
   document.getElementById('touchCamBtn').addEventListener('click', () => toggleThirdPerson());
   document.getElementById('touchPadBtn').addEventListener('click', () => setTouchVisible(!touchVisible));
-  // Mouse wheel zooms the third-person camera on desktop.
-  addEventListener('wheel', (e) => {
-    if (!thirdPerson) return;
-    if (e.target && e.target.closest && (e.target.closest('button') || e.target.closest('.modal') || e.target.closest('#storeOverlay'))) return;
-    zoomBy(e.deltaY > 0 ? 1 : -1);
-  }, { passive: true });
-  // Pinch to zoom on touch screens. The canvas sets touch-action none, so
-  // the browser does not pinch-zoom the page itself, and until now two
-  // fingers on the canvas only spun the look-drag, because the drag
-  // handlers do not track which pointer moved. Track the canvas pointers
-  // in the capture phase and hold the move/down events back from the drag
-  // handlers while a pinch is active, so the camera holds still and only
-  // the zoom moves. Fingers apart zooms in (camera closer), fingers
-  // together zooms out, matching the +/- buttons and the mouse wheel.
-  // Zoom only applies in third-person, like the wheel; the drag freeze
-  // applies in either view so a pinch never spins the camera.
+  // Two fingers on the canvas: hold the look-drag still so a pinch never
+  // spins the camera. There is no pinch zoom any more (the user asked for
+  // zoom removed), so two fingers simply do nothing while they are down.
   const pinchPointers = new Map();
-  let pinchDist = 0;
-  let pinchAcc = 0;
   function pinchOnCanvas(e) {
     return e.target && e.target.tagName === 'CANVAS';
-  }
-  function pinchGap() {
-    const pts = Array.from(pinchPointers.values());
-    if (pts.length < 2) return 0;
-    const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
-    return Math.sqrt(dx * dx + dy * dy);
   }
   addEventListener('pointerdown', (e) => {
     if (!pinchOnCanvas(e)) return;
     pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinchPointers.size === 2) {
-      pinchDist = pinchGap();
-      pinchAcc = 0;
       // Keep the second finger from resetting the look-drag origin.
       e.stopPropagation();
     }
@@ -411,20 +379,12 @@ export function buildTouchControls() {
     const p = pinchPointers.get(e.pointerId);
     p.x = e.clientX; p.y = e.clientY;
     if (pinchPointers.size < 2) return;
-    // Two fingers down: freeze the look-drag and zoom instead.
+    // Two fingers down: freeze the look-drag.
     e.stopPropagation();
-    const d = pinchGap();
-    if (pinchDist > 0 && d > 0) {
-      pinchAcc += (pinchDist - d) * 0.01;
-      while (pinchAcc >= 1) { if (thirdPerson) zoomBy(1); pinchAcc -= 1; }
-      while (pinchAcc <= -1) { if (thirdPerson) zoomBy(-1); pinchAcc += 1; }
-    }
-    pinchDist = d;
   }, true);
   const pinchEnd = (e) => {
     if (!pinchPointers.has(e.pointerId)) return;
     pinchPointers.delete(e.pointerId);
-    if (pinchPointers.size < 2) { pinchDist = 0; pinchAcc = 0; }
   };
   addEventListener('pointerup', pinchEnd, true);
   addEventListener('pointercancel', pinchEnd, true);
@@ -438,15 +398,12 @@ export function buildTouchControls() {
   });
   setTouchVisible(isTouchDevice());
   setThirdPerson(isTouchDevice());
-  setZoom(zoomDist);
 }
 export function setTouchVisible(on) {
   touchVisible = !!on;
   try {
     const pad = document.getElementById('touchPad');
     if (pad) pad.style.display = touchVisible ? '' : 'none';
-    const zm = document.getElementById('touchZoom');
-    if (zm) zm.style.display = touchVisible ? '' : 'none';
     const mc = document.getElementById('touchMisc');
     if (mc) mc.style.display = '';
   } catch (e) { /* ignore */ }
@@ -865,5 +822,4 @@ export function initPlayer() {
     if (cb) cb.onclick = () => toggleThirdPerson();
   } catch (e) { /* optional */ }
   try { setThirdPerson(isTouchDevice()); } catch (e) { /* ignore */ }
-  try { setZoom(4); } catch (e) { /* ignore */ }
 }

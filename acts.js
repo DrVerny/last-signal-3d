@@ -245,7 +245,7 @@ window.__lsGoToAct = goToAct;
 // already finished) and the HUD buttons. No wallet needed - demo mode.
 try { initEconomy(); } catch (e) { /* economy is optional */ }
 try { wireLifeButtons(); } catch (e) { /* buttons are optional */ }
-// Player presence: third-person avatar, alphabet touch controller, zoom,
+// Player presence: third-person avatar, alphabet touch controller,
 // Restart and Camera buttons. No wallet needed - demo mode.
 try { initPlayer(); } catch (e) { /* player UI is optional */ }
 // A fresh player (no prologue done, no act save) starts in his room
