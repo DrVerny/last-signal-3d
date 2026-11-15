@@ -10,8 +10,9 @@
 
 import * as THREE from 'three';
 import { canvas, renderer, disposeScene } from './core.js';
-import { getBalance, moneyFmt } from './economy.js';
+import { getBalance, moneyFmt, grantPayout } from './economy.js';
 import { makeCrowd, updatePedestrian } from './action.js';
+import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar } from './player.js';
 import { readingTimeMs } from './speak.js';
 
@@ -32,6 +33,14 @@ let homeDoorLockedAt = -10; // throttle for the "locked" toast at a door
 let homeRoomKeys = [];
 // Ceiling fans: the spinning blade groups, so homeAnimate can turn them.
 let homeFans = [];
+// Wind tunnel lab: the tunnel fan blades, the gauge needle and reading,
+// and the run state. The fan spins up when the player runs the tunnel.
+let tunnelFan = null, tunnelGaugeNeedle = null, tunnelGaugeCanvas = null, tunnelGaugeTex = null;
+let tunnelRunning = false, tunnelRunT = 0, tunnelDone = false;
+// Symposium hall: the seated audience, for the idle sway.
+let symposiumAudience = [];
+let symposiumAudienceBuilt = false;
+let podiumDone = false;
 // The bed the player sleeps in, for the sleep view: { x, z, w }.
 let currentBedPos = null;
 // Sleeping: while true the avatar lies on the bed and the camera shows
@@ -235,6 +244,35 @@ function whiteFacadeTexture(cols, rows, litRatio) {
 function whiteFacadeMat(cols, rows, litRatio) {
   return new THREE.MeshStandardMaterial({ map: whiteFacadeTexture(cols, rows, litRatio), roughness: 0.85, metalness: 0.02 });
 }
+// Pale lab tiles: white squares with grey grout, for the wind tunnel
+// lab floor and the tiled band along its walls.
+function tileTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#dfe5e8'; ctx.fillRect(0, 0, 256, 256);
+  ctx.strokeStyle = '#9aa5ab'; ctx.lineWidth = 3;
+  for (let i = 0; i <= 4; i++) {
+    ctx.beginPath(); ctx.moveTo(i * 64, 0); ctx.lineTo(i * 64, 256); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * 64); ctx.lineTo(256, i * 64); ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+// A pale daytime sky for the lab's big windows.
+function daySkyTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, '#7fb2e0'); g.addColorStop(0.7, '#cfe4f2'); g.addColorStop(1, '#e8f2f8');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = '#fff2c0'; ctx.beginPath(); ctx.arc(200, 55, 24, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.ellipse(70, 90, 42, 14, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(120, 70, 34, 12, 0, 0, Math.PI * 2); ctx.fill();
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 // ---------- Toast and save ----------
 let homeToastTimer = 0;
@@ -360,7 +398,9 @@ function showHomeBar(kind) {
     terminal: 'TRAIN TERMINAL - GRAND CENTRAL',
     hotel: 'HOTEL - YOUR SUITE',
     airport: 'AIRPORT - JFK TERMINAL',
-    carpark: 'CAR PARK'
+    carpark: 'CAR PARK',
+    windtunnel: 'WIND TUNNEL LAB - ENGINEERING LAB',
+    symposium: 'SYMPOSIUM HALL - NEW YORK'
   };
   const infos = {
     mansion: homePrologue && !homeCallDone ? 'Your phone is ringing - click the phone or Pick up. Drag to look, WASD to walk.' : homePrologue ? 'Jade called. Go to the Train Terminal and board the 4 train.' : 'Drag to look around - WASD to walk - click the bed to sleep.',
@@ -370,7 +410,9 @@ function showHomeBar(kind) {
     terminal: homePrologue ? 'Walk through the concourse to the platform and board the 4 train. The train is at the far end.' : 'Drag to look around - WASD to walk - the 4 train is on the platform. Look around, then head back.',
     hotel: 'Drag to look around - WASD to walk - click the bed to sleep.',
     airport: 'Drag to look around - WASD to walk - look around, then head back.',
-    carpark: 'Drag to look around - WASD to walk - rows of parked cars. Look around, then head back.'
+    carpark: 'Drag to look around - WASD to walk - rows of parked cars. Look around, then head back.',
+    windtunnel: 'Drag to look around - WASD to walk - run the wind tunnel at the control panel.',
+    symposium: 'Drag to look around - WASD to walk - take the NYC podium on the stage.'
   };
   document.getElementById('homeBarTitle').textContent = titles[kind] || kind;
   document.getElementById('homeBarInfo').textContent = infos[kind] || '';
@@ -1268,8 +1310,343 @@ function buildCarpark(scene) {
     lamp(scene, lx, 4.5, lz, 0xffe9a8, 0.8, 12);
   }
   addTree(scene, -18, 12); addTree(scene, 18, -10); addTree(scene, 10, 14);
-  const sign = textSprite('CAR PARK', '#2a2118', '#ffd166', 'Parking - $2 an hour');
+  const sign = textSprite('CAR PARK', '#2a2118', '#ffd166', 'Parking - 2 ZAMA an hour');
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 5, -12); scene.add(sign);
+}
+
+// A projector slide for the symposium screen: a New York title card.
+function symposiumScreenTexture() {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 288;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#f4f6f8'; ctx.fillRect(0, 0, 512, 288);
+  ctx.fillStyle = '#1a2a4a'; ctx.fillRect(0, 0, 512, 90);
+  ctx.fillStyle = '#ffd166'; ctx.font = 'bold 40px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('NEW YORK SYMPOSIUM', 256, 58);
+  ctx.fillStyle = '#1a2a4a'; ctx.font = 'bold 30px Arial';
+  ctx.fillText('Engineering the future', 256, 150);
+  ctx.font = '24px Arial'; ctx.fillStyle = '#4a5a6a';
+  ctx.fillText('New York City - all are welcome', 256, 195);
+  ctx.fillStyle = '#c0392b'; ctx.fillRect(156, 230, 200, 6);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// Redraw the wind tunnel gauge reading (a canvas texture on the panel).
+function setTunnelGaugeText(text) {
+  if (!tunnelGaugeCanvas || !tunnelGaugeTex) return;
+  const ctx = tunnelGaugeCanvas.getContext('2d');
+  ctx.fillStyle = '#0a0f14'; ctx.fillRect(0, 0, 256, 64);
+  ctx.fillStyle = '#7ac74f'; ctx.font = 'bold 20px Arial'; ctx.textAlign = 'center';
+  ctx.fillText(text, 128, 38);
+  tunnelGaugeTex.needsUpdate = true;
+}
+function startTunnelRun() {
+  if (tunnelDone) { showHomeToast('Wind tunnel test complete - the data is in.'); return; }
+  if (tunnelRunning) { showHomeToast('The wind tunnel is already running...'); return; }
+  tunnelRunning = true; tunnelRunT = 0;
+  showHomeToast('Wind tunnel running - fan spinning up...');
+}
+function finishTunnelRun() {
+  tunnelRunning = false; tunnelDone = true;
+  setTunnelGaugeText('42 m/s - 1.2 kPa - DONE');
+  showHomeToast('Wind tunnel test complete - clean airflow at 42 m/s.');
+  grantPayout('windtunnel');
+}
+function buildWindtunnel(scene) {
+  // An engineering lab, 18 wide, 12 deep, built around one long wooden
+  // wind tunnel: a flared wooden contraction cone at the west end
+  // (wide mouth narrowing into the tunnel), a straight test section
+  // with glass viewing windows and metal latches, metal support frames
+  // under it, and a fan at the east end. The player walks around it and
+  // runs it from the control panel on the south side.
+  roomShell(scene, 18, 12, 3.6, 0x8a8a82, 0xcfd8dc);
+  // Tiled floor and a tiled band along the walls, like a real lab.
+  const floorTex = tileTexture(); floorTex.repeat.set(9, 6);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(18, 12), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.6 }));
+  floor.rotation.x = -Math.PI / 2; floor.position.set(0, 0.11, 0); floor.receiveShadow = true; scene.add(floor);
+  const wallTex = tileTexture(); wallTex.repeat.set(9, 1);
+  const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.7 });
+  for (const [w, x, z, ry] of [[18, 0, -5.92, 0], [18, 0, 5.92, 0], [12, -8.92, 0, Math.PI / 2], [12, 8.92, 0, Math.PI / 2]]) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(w, 1.2, 0.06), wallMat);
+    band.position.set(x, 0.6, z); band.rotation.y = ry; band.receiveShadow = true; scene.add(band);
+  }
+  // Big windows on the south wall, with a daytime sky.
+  const skyTex = daySkyTexture();
+  for (const wx of [-5, 0, 5]) {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(2.9, 2.3, 0.08), mat(0x2a2a2a, { roughness: 0.6 }));
+    frame.position.set(wx, 2.1, 5.94); scene.add(frame);
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 2.0), new THREE.MeshStandardMaterial({ map: skyTex, roughness: 0.2, metalness: 0.2 }));
+    win.position.set(wx, 2.1, 5.89); win.rotation.y = Math.PI; scene.add(win);
+  }
+  addCeilingFan(scene, -6, 3);
+  addCeilingFan(scene, 0, 3);
+  addCeilingFan(scene, 6, 3);
+  const wood = mat(0x8a6a42, { roughness: 0.7 });
+  const woodDark = mat(0x6b4a2a, { roughness: 0.7 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x9aa2a8, metalness: 0.8, roughness: 0.35 });
+  const tz = -1.5; // tunnel axis (z), centre height 1.25
+  // Metal support frames under the tunnel.
+  for (const fx of [-4.5, -1, 1.5, 4]) {
+    for (const dz of [-0.6, 0.6]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), steel);
+      leg.position.set(fx, 0.25, tz + dz); leg.castShadow = true; scene.add(leg);
+    }
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 1.32), steel);
+    bar.position.set(fx, 0.5, tz); scene.add(bar);
+  }
+  // The contraction cone: a flared wooden cone, wide mouth at the west
+  // end narrowing into the test section. CylinderGeometry is along Y,
+  // so it is laid on its side; radiusTop ends up at the west mouth.
+  const cone = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 0.75, 4, 24, 1, true), new THREE.MeshStandardMaterial({ color: 0x8a6a42, roughness: 0.7, side: THREE.DoubleSide }));
+  cone.rotation.z = Math.PI / 2; cone.position.set(-4.5, 1.25, tz); cone.castShadow = true; scene.add(cone);
+  const mouthRim = new THREE.Mesh(new THREE.TorusGeometry(1.6, 0.08, 10, 32), woodDark);
+  mouthRim.rotation.y = Math.PI / 2; mouthRim.position.set(-6.5, 1.25, tz); scene.add(mouthRim);
+  const throatRim = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.06, 10, 24), woodDark);
+  throatRim.rotation.y = Math.PI / 2; throatRim.position.set(-2.5, 1.25, tz); scene.add(throatRim);
+  // The test section: a wooden frame with glass viewing windows on both
+  // long sides and the top, held by metal latches. A model wing on a
+  // sting sits inside, visible through the glass.
+  const postY = [0.56, 1.94];
+  for (const py of postY) for (const pz of [tz - 0.69, tz + 0.69]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(7, 0.12, 0.12), wood);
+    post.position.set(1, py, pz); post.castShadow = true; scene.add(post);
+  }
+  for (const ex of [-2.5, 4.5]) {
+    for (const py of postY) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1.5), wood);
+      bar.position.set(ex, py, tz); scene.add(bar);
+    }
+    for (const pz of [tz - 0.69, tz + 0.69]) {
+      const upright = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.5, 0.12), wood);
+      upright.position.set(ex, 1.25, pz); scene.add(upright);
+    }
+  }
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.25, roughness: 0.1, metalness: 0.1, side: THREE.DoubleSide });
+  const glassS = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 1.26), glassMat);
+  glassS.position.set(1, 1.25, tz + 0.72); scene.add(glassS);
+  const glassN = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 1.26), glassMat);
+  glassN.position.set(1, 1.25, tz - 0.72); glassN.rotation.y = Math.PI; scene.add(glassN);
+  const glassT = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 1.38), glassMat);
+  glassT.rotation.x = -Math.PI / 2; glassT.position.set(1, 1.98, tz); scene.add(glassT);
+  // Metal latches along the glass edges.
+  for (const lx of [-2, -0.5, 1, 2.5, 4]) {
+    const latch = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.06), steel);
+    latch.position.set(lx, 1.25, tz + 0.76); scene.add(latch);
+    const latch2 = latch.clone(); latch2.position.z = tz - 0.76; scene.add(latch2);
+  }
+  // The model wing inside the test section, on a sting.
+  const sting = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.5, 8), steel);
+  sting.position.set(1, 0.85, tz); scene.add(sting);
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 0.35), mat(0xc0392b, { roughness: 0.5 }));
+  wing.position.set(1, 1.15, tz); wing.castShadow = true; scene.add(wing);
+  const fus = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.5, 8), mat(0x2a2a2a, { roughness: 0.5 }));
+  fus.rotation.z = Math.PI / 2; fus.position.set(1, 1.15, tz); scene.add(fus);
+  // The fan housing and diffuser at the east end, and the fan itself.
+  const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 1.0, 20), steel);
+  housing.rotation.z = Math.PI / 2; housing.position.set(5.0, 1.25, tz); housing.castShadow = true; scene.add(housing);
+  const diffuser = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.1, 0.8, 20), wood);
+  diffuser.rotation.z = Math.PI / 2; diffuser.position.set(5.9, 1.25, tz); diffuser.castShadow = true; scene.add(diffuser);
+  tunnelFan = new THREE.Group();
+  tunnelFan.position.set(5.0, 1.25, tz);
+  for (let i = 0; i < 4; i++) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.7, 0.18), mat(0x2a2a2a, { metalness: 0.6, roughness: 0.4 }));
+    const a = i * Math.PI / 2;
+    b.position.set(0, Math.cos(a) * 0.4, Math.sin(a) * 0.4);
+    b.rotation.x = -a;
+    tunnelFan.add(b);
+  }
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.2, 10), steel);
+  hub.rotation.z = Math.PI / 2; tunnelFan.add(hub);
+  scene.add(tunnelFan);
+  // The control panel: a console on the south side of the tunnel, with
+  // a pressure gauge, a needle, a digital reading and start buttons.
+  const consoleBody = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.0, 0.6), mat(0x2e4a6b, { roughness: 0.5, metalness: 0.3 }));
+  consoleBody.position.set(2.5, 0.5, 0.8); consoleBody.castShadow = true;
+  consoleBody.name = 'tunnelPanel'; consoleBody.userData.homeAction = 'tunnelPanel'; homeTargets.push(consoleBody); scene.add(consoleBody);
+  const consoleTop = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 0.7), mat(0x1a2a4a, { roughness: 0.5 }));
+  consoleTop.position.set(2.5, 1.04, 0.8); consoleTop.rotation.x = -0.25; scene.add(consoleTop);
+  for (let i = 0; i < 3; i++) {
+    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.04, 10), new THREE.MeshStandardMaterial({ color: [0x7ac74f, 0xffd166, 0xc0392b][i], roughness: 0.4 }));
+    btn.position.set(2.1 + i * 0.4, 1.09, 0.72); scene.add(btn);
+  }
+  // The pressure gauge on the console front, with a needle that swings
+  // as the fan spins up, and a digital reading below it.
+  const gaugeFace = new THREE.Mesh(new THREE.CircleGeometry(0.22, 24), new THREE.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.4 }));
+  gaugeFace.position.set(2.5, 0.72, 1.11); scene.add(gaugeFace);
+  const gaugeRing = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.02, 8, 24), steel);
+  gaugeRing.position.set(2.5, 0.72, 1.11); scene.add(gaugeRing);
+  const needlePivot = new THREE.Group();
+  needlePivot.position.set(2.5, 0.72, 1.12);
+  const needle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.18, 0.02), new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.4 }));
+  needle.position.set(0, 0.08, 0); needlePivot.add(needle);
+  needlePivot.rotation.z = -1.1; // at rest, hard left
+  scene.add(needlePivot);
+  tunnelGaugeNeedle = needlePivot;
+  tunnelGaugeCanvas = document.createElement('canvas'); tunnelGaugeCanvas.width = 256; tunnelGaugeCanvas.height = 64;
+  tunnelGaugeTex = new THREE.CanvasTexture(tunnelGaugeCanvas); tunnelGaugeTex.colorSpace = THREE.SRGBColorSpace;
+  setTunnelGaugeText('PRESSURE --');
+  const reading = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.24), new THREE.MeshBasicMaterial({ map: tunnelGaugeTex }));
+  reading.position.set(2.5, 0.3, 1.11); scene.add(reading);
+  hitBox(scene, 1.6, 1.6, 1.0, 2.5, 0.7, 0.8, 'tunnelPanel');
+  // A workbench along the south wall, and a tool cabinet.
+  const benchTop = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.1, 0.9), woodDark);
+  benchTop.position.set(-5, 0.85, 4.6); benchTop.castShadow = true; scene.add(benchTop);
+  for (const [dx, dz] of [[-1.1, -0.35], [1.1, -0.35], [-1.1, 0.35], [1.1, 0.35]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.85, 0.1), steel);
+    leg.position.set(-5 + dx, 0.42, 4.6 + dz); scene.add(leg);
+  }
+  const tool1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.15, 0.3), mat(0xc0392b, { roughness: 0.6 }));
+  tool1.position.set(-5.4, 0.98, 4.6); scene.add(tool1);
+  const tool2 = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.3, 10), steel);
+  tool2.rotation.z = Math.PI / 2; tool2.position.set(-4.5, 0.95, 4.6); scene.add(tool2);
+  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.8, 0.6), mat(0x2e6fb0, { roughness: 0.5, metalness: 0.3 }));
+  cabinet.position.set(6.5, 0.9, 4.8); cabinet.castShadow = true; scene.add(cabinet);
+  addPlant(scene, -8.2, 5.2, 0.9);
+  lamp(scene, 0, 3.0, 0, 0xffe0b0, 1.0, 16);
+  lamp(scene, -6, 3.0, 2, 0xffe0b0, 0.7, 10);
+  lamp(scene, 6, 3.0, 2, 0xffe0b0, 0.7, 10);
+  const sign = textSprite('WIND TUNNEL LAB', '#2a2118', '#ffd166', 'Engineering lab - run the tunnel');
+  sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.0, -5.8); scene.add(sign);
+  // The lab door: a real, visible, walkable exit on the south wall.
+  // It is locked and needs the wind tunnel key, which is on the workbench.
+  addExitDoor(scene, { x: 7, z: 5.9, ry: Math.PI, keyId: 'windtunnel', keyLabel: 'wind tunnel key', label: 'EXIT - LAB DOOR' });
+  addRoomKey(scene, -5, 4.6, 'windtunnel', 'wind tunnel key');
+}
+function takePodium() {
+  if (podiumDone) { showHomeToast('You already took the NYC podium - the hall heard you.'); return; }
+  podiumDone = true;
+  showHomeToast('You take the NYC podium - the hall falls quiet. Symposium complete.');
+  grantPayout('symposium');
+}
+// Seat the symposium audience: real rigged people sitting in the rows,
+// facing the stage. Seats are skipped in a fixed pattern so a few stay
+// empty, like a real hall. If the crowd models have not finished
+// loading yet, this tries again when crowdReady fires; the audience is
+// never built from blocky primitives.
+function buildSymposiumAudience(scene) {
+  if (symposiumAudienceBuilt) return;
+  const rows = [-1, 0.6, 2.2, 3.8];
+  const cols = [-4.8, -2.4, 0, 2.4, 4.8];
+  let seatIdx = 0, built = 0;
+  for (let r = 0; r < rows.length; r++) {
+    for (let c = 0; c < cols.length; c++) {
+      if ((r + c) % 5 === 0) continue; // a few seats stay empty
+      const sx = cols[c], sz = rows[r];
+      const p = makeSeatedPerson({ modelIndex: seatIdx, x: sx, z: sz, heading: (Math.random() - 0.5) * 0.2, scale: 0.95 + Math.random() * 0.1 });
+      seatIdx++;
+      if (!p) continue;
+      // Centre the hips over the chair: each model's hips sit at a
+      // different offset from its group origin, so shift by the gap.
+      try {
+        p.group.updateMatrixWorld(true);
+        const hp = new THREE.Vector3();
+        p.bones.hips.getWorldPosition(hp);
+        p.group.position.x += sx - hp.x;
+        p.group.position.z += sz - hp.z;
+      } catch (e) { /* the pose already put them close enough */ }
+      scene.add(p.group);
+      symposiumAudience.push(p);
+      built++;
+    }
+  }
+  if (built > 0) symposiumAudienceBuilt = true;
+}
+function buildSymposium(scene) {
+  // A red-lit auditorium, 16 wide, 14 deep: rows of seats facing a
+  // stage with green curtains, a projector screen, a SYMPOSIUM banner,
+  // and the NYC podium. The audience sits in the seats - real rigged
+  // people, like the main characters, never blocky primitives.
+  roomShell(scene, 16, 14, 5, 0x4a2020, 0x3a2028);
+  // Red wash over the hall, and a warm light on the stage.
+  lamp(scene, -5, 4.2, 0, 0xff4a3a, 1.0, 12);
+  lamp(scene, 5, 4.2, 0, 0xff4a3a, 1.0, 12);
+  lamp(scene, 0, 4.2, 4, 0xff4a3a, 0.8, 10);
+  lamp(scene, 0, 4.5, -5, 0xffe0b0, 1.2, 10);
+  // The stage: a raised platform at the north end, with a red carpet
+  // top and a red front skirt.
+  const stage = new THREE.Mesh(new THREE.BoxGeometry(10, 1.0, 3), mat(0x3a2a1a, { roughness: 0.8 }));
+  stage.position.set(0, 0.5, -5.5); stage.castShadow = true; stage.receiveShadow = true; scene.add(stage);
+  const stageTop = new THREE.Mesh(new THREE.BoxGeometry(10, 0.06, 3), mat(0x7a1a1a, { roughness: 1 }));
+  stageTop.position.set(0, 1.03, -5.5); stageTop.receiveShadow = true; scene.add(stageTop);
+  const skirt = new THREE.Mesh(new THREE.BoxGeometry(10, 1.0, 0.1), mat(0x6a1a1a, { roughness: 1 }));
+  skirt.position.set(0, 0.5, -3.98); scene.add(skirt);
+  // Green curtains: a back curtain with fold stripes, side drapes, and
+  // a valance across the top.
+  const curtain = new THREE.Mesh(new THREE.BoxGeometry(11, 4.2, 0.25), mat(0x1a5a2a, { roughness: 1 }));
+  curtain.position.set(0, 2.6, -6.85); scene.add(curtain);
+  for (let i = 0; i < 6; i++) {
+    const fold = new THREE.Mesh(new THREE.BoxGeometry(0.18, 4.2, 0.06), mat(0x0f3a1c, { roughness: 1 }));
+    fold.position.set(-4.2 + i * 1.68, 2.6, -6.7); scene.add(fold);
+  }
+  for (const s of [-1, 1]) {
+    const drape = new THREE.Mesh(new THREE.BoxGeometry(1.4, 4.2, 0.5), mat(0x123f1e, { roughness: 1 }));
+    drape.position.set(s * 5.4, 2.6, -6.4); drape.castShadow = true; scene.add(drape);
+  }
+  const valance = new THREE.Mesh(new THREE.BoxGeometry(11.5, 0.9, 0.4), mat(0x1a5a2a, { roughness: 1 }));
+  valance.position.set(0, 4.5, -6.5); scene.add(valance);
+  // The projector screen, showing the New York title card.
+  const screenFrame = new THREE.Mesh(new THREE.BoxGeometry(5.7, 3.2, 0.06), mat(0x1a1a1a, { roughness: 0.6 }));
+  screenFrame.position.set(0, 3.0, -6.75); scene.add(screenFrame);
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 3.0), new THREE.MeshStandardMaterial({ map: symposiumScreenTexture(), roughness: 0.4 }));
+  screen.position.set(0, 3.0, -6.7); scene.add(screen);
+  // The SYMPOSIUM banner above the stage.
+  const banner = textSprite('SYMPOSIUM', '#7a1a1a', '#ffd166', 'New York City');
+  banner.scale.set(6, 1.5, 1); banner.position.set(0, 4.4, -4.2); scene.add(banner);
+  // The NYC podium on the stage: a stand with a slanted top, a mic,
+  // and an NYC sign. Never any other city's name on it.
+  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.5), mat(0x4a3220, { roughness: 0.6 }));
+  stand.position.set(0, 1.55, -4.6); stand.castShadow = true; scene.add(stand);
+  const standTop = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.07, 0.6), mat(0x6b4226, { roughness: 0.6 }));
+  standTop.position.set(0, 2.12, -4.6); standTop.rotation.x = -0.3; scene.add(standTop);
+  const micStem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.5, 8), mat(0x1a1a1a, { metalness: 0.6, roughness: 0.4 }));
+  micStem.position.set(0.15, 2.3, -4.7); micStem.rotation.x = 0.3; scene.add(micStem);
+  const mic = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), mat(0x1a1a1a, { roughness: 0.5 }));
+  mic.position.set(0.15, 2.55, -4.78); scene.add(mic);
+  const nyc = textSprite('NYC', '#1a2a4a', '#ffd166', 'New York Symposium');
+  nyc.scale.set(1.7, 0.42, 1); nyc.position.set(0, 1.75, -4.28); scene.add(nyc);
+  hitBox(scene, 1.6, 1.8, 1.4, 0, 1.8, -4.6, 'podium');
+  // Two chairs and a water table behind the podium.
+  for (const cx of [-1.8, 1.8]) {
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.08, 0.5), mat(0x6a2a2a, { roughness: 0.9 }));
+    seat.position.set(cx, 1.45, -6.0); scene.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.65, 0.08), mat(0x6a2a2a, { roughness: 0.9 }));
+    back.position.set(cx, 1.78, -6.22); scene.add(back);
+  }
+  const wtable = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.05, 0.5), mat(0x4a3220, { roughness: 0.6 }));
+  wtable.position.set(2.6, 1.45, -6.0); scene.add(wtable);
+  for (const [dx, dz] of [[-0.4, -0.2], [0.4, -0.2], [-0.4, 0.2], [0.4, 0.2]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.4, 0.05), mat(0x2a2118, { roughness: 0.6 }));
+    leg.position.set(2.6 + dx, 1.22, -6.0 + dz); scene.add(leg);
+  }
+  for (const gx of [2.4, 2.8]) {
+    const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.035, 0.12, 10), new THREE.MeshStandardMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.6, roughness: 0.1 }));
+    glass.position.set(gx, 1.53, -6.0); scene.add(glass);
+  }
+  // Rows of seats facing the stage.
+  const rows = [-1, 0.6, 2.2, 3.8];
+  const cols = [-4.8, -2.4, 0, 2.4, 4.8];
+  for (const rz of rows) for (const cx of cols) {
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.08, 0.5), mat(0x6a2a2a, { roughness: 0.9 }));
+    seat.position.set(cx, 0.38, rz); seat.castShadow = true; scene.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.65, 0.08), mat(0x6a2a2a, { roughness: 0.9 }));
+    back.position.set(cx, 0.74, rz + 0.28); scene.add(back);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.42, 0.45), mat(0x2a2a2a, { roughness: 0.9 }));
+    base.position.set(cx, 0.21, rz); scene.add(base);
+  }
+  // Seat the audience now, or when the crowd models finish loading.
+  buildSymposiumAudience(scene);
+  if (!symposiumAudienceBuilt) {
+    try {
+      onCrowdReady(() => {
+        if (homeActive && homeKind === 'symposium' && homeScene && !symposiumAudienceBuilt) buildSymposiumAudience(homeScene);
+      });
+    } catch (e) { /* the hall stays empty rather than blocking the game */ }
+  }
+  const backSign = textSprite('NEW YORK SYMPOSIUM', '#7a1a1a', '#f2e9d8', 'All seats - please be seated');
+  backSign.scale.set(5, 1.25, 1); backSign.position.set(0, 3.5, 6.5); scene.add(backSign);
+  // The hall door: a real, visible, walkable exit on the south wall.
+  // It is locked and needs the symposium key, by the back row.
+  addExitDoor(scene, { x: -6, z: 6.9, ry: Math.PI, keyId: 'symposium', keyLabel: 'symposium key', label: 'EXIT - HALL DOOR' });
+  addRoomKey(scene, 6.5, 5.5, 'symposium', 'symposium key');
 }
 
 // ---------- Place engine ----------
@@ -1292,11 +1669,14 @@ export function enterPlace(kind, onLeave, options) {
   homeDoors = [];
   homeRoomKeys = [];
   homeFans = [];
+  tunnelFan = null; tunnelGaugeNeedle = null; tunnelGaugeCanvas = null; tunnelGaugeTex = null;
+  tunnelRunning = false; tunnelRunT = 0; tunnelDone = false;
+  symposiumAudience = []; symposiumAudienceBuilt = false; podiumDone = false;
   currentBedPos = null;
   sleeping = false; sleepT = 0; sleepRestDone = false;
   try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
   terminalPedestrians = [];
-  const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel';
+  const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel' || kind === 'windtunnel' || kind === 'symposium';
   if (isRoom) {
     homeScene.background = new THREE.Color(0x0a0d10);
     homeScene.fog = new THREE.FogExp2(0x0a0d10, 0.02);
@@ -1310,6 +1690,8 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'hotel') { buildHotel(homeScene); homeBounds = { x: [-4.4, 4.4], z: [-2.9, 2.9] }; homeStart = { x: 0, y: 1.7, z: 2.5, yaw: 0 }; }
   else if (kind === 'airport') { buildAirport(homeScene); homeBounds = { x: [-20, 20], z: [-16, 20] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
   else if (kind === 'carpark') { buildCarpark(homeScene); homeBounds = { x: [-18, 18], z: [-14, 18] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
+  else if (kind === 'windtunnel') { buildWindtunnel(homeScene); homeBounds = { x: [-8.4, 8.4], z: [-5.4, 5.4] }; homeStart = { x: 0, y: 1.7, z: 4.5, yaw: 0 }; }
+  else if (kind === 'symposium') { buildSymposium(homeScene); homeBounds = { x: [-7.4, 7.4], z: [-6.4, 6.4] }; homeStart = { x: 0, y: 1.7, z: 5.5, yaw: 0 }; }
   else return;
   // Hide any room key the player already owns (a replay), so it cannot
   // be picked up twice.
@@ -1328,7 +1710,9 @@ export function enterPlace(kind, onLeave, options) {
     terminal: homePrologue ? 'Grand Central. Walk through the concourse to Platform 4 and board the 4 train.' : 'Train Terminal - Grand Central. The 4 train is on Platform 4. Look around, then head back to the map.',
     hotel: 'Hotel - your suite. Click the bed to sleep.',
     airport: 'Airport - JFK Terminal 4. Look around, then head back to the map.',
-    carpark: 'Car Park - rows of parked cars. Look around, then head back to the map.'
+    carpark: 'Car Park - rows of parked cars. Look around, then head back to the map.',
+    windtunnel: 'Wind Tunnel Lab - the long wooden tunnel. Run it at the control panel by the test section.',
+    symposium: 'Symposium Hall - a full house. Take the NYC podium on the stage.'
   };
   showHomeToast(welcomes[kind] || kind);
   if (homeRaf) cancelAnimationFrame(homeRaf);
@@ -1352,6 +1736,9 @@ export function leavePlace() {
   try { disposeScene(homeScene); } catch (e) { /* ignore */ }
   homeScene = null; homeCamera = null; homeTargets = [];
   homeDoors = []; homeRoomKeys = []; homeFans = []; currentBedPos = null;
+  tunnelFan = null; tunnelGaugeNeedle = null; tunnelGaugeCanvas = null; tunnelGaugeTex = null;
+  tunnelRunning = false; tunnelRunT = 0; tunnelDone = false;
+  symposiumAudience = []; symposiumAudienceBuilt = false; podiumDone = false;
   sleeping = false; sleepT = 0; sleepRestDone = false;
   try { const a = getAvatar(); setAvatarPose('stand'); detachAvatar(); } catch (e) { /* ignore */ }
   try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
@@ -1490,6 +1877,35 @@ function homeAnimate() {
   if (homeKind === 'terminal') {
     for (const p of terminalPedestrians) updatePedestrian(p, dt);
   }
+  // Wind tunnel: the fan spins up while a test runs, the gauge needle
+  // follows, and the test completes after a few seconds.
+  if (homeKind === 'windtunnel' && tunnelFan) {
+    if (tunnelRunning) {
+      tunnelRunT += dt;
+      const sp = Math.min(1, tunnelRunT / 2); // spin up over 2 s
+      tunnelFan.rotation.x += dt * (2 + sp * 14);
+      if (tunnelGaugeNeedle) tunnelGaugeNeedle.rotation.z = -1.1 + sp * 2.0;
+      if (tunnelRunT > 2 && tunnelRunT < 2.2) setTunnelGaugeText('MEASURING - 42 m/s');
+      if (tunnelRunT >= 3.5) finishTunnelRun();
+    } else if (tunnelDone) {
+      tunnelFan.rotation.x += dt * 6; // keeps turning slowly after the test
+    }
+  }
+  // Walk up to the control panel to run the tunnel (a missed click is
+  // not a dead end).
+  if (homeKind === 'windtunnel' && !tunnelDone && !tunnelRunning) {
+    const dx = homeCamera.position.x - 2.5, dz = homeCamera.position.z - 0.8;
+    if (dx * dx + dz * dz < 1.6 * 1.6) startTunnelRun();
+  }
+  // Symposium: the seated audience sways gently, and walking up to the
+  // stage takes the NYC podium (a missed click is not a dead end).
+  if (homeKind === 'symposium') {
+    for (const p of symposiumAudience) updateSeatedPerson(p, t);
+    if (!podiumDone) {
+      const dx = homeCamera.position.x - 0, dz = homeCamera.position.z - (-3.2);
+      if (dx * dx + dz * dz < 1.5 * 1.5) takePodium();
+    }
+  }
   // Third-person: show the player avatar and put the camera behind it.
   {
     const mv2 = moveDelta(homeKeys, homeYaw, 1);
@@ -1547,6 +1963,10 @@ function homeHandleTap(clientX, clientY) {
     answerPhone();
   } else if (action === 'boardTrain') {
     boardTrain();
+  } else if (action === 'tunnelPanel') {
+    startTunnelRun();
+  } else if (action === 'podium') {
+    takePodium();
   } else if (action === 'bed') {
     if (homeKind === 'mansion' || homeKind === 'hotel') doSleep();
     else if (homeKind === 'safehouse') doSave();

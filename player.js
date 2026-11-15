@@ -6,6 +6,25 @@
 // outfit colour and cap from the store.
 import * as THREE from 'three';
 import { getEquipped, getEquippedCarDef, ITEM_BY_ID } from './economy.js';
+import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+
+// Real vehicle model (CC0, Quaternius sports car via Poly Pizza, see
+// models/vehicles/SOURCES.md): the BMW M4 is built from this real model
+// when it has loaded, so it looks like a real car, not a box. The model
+// loads once at import time; until it arrives (or if it fails) the
+// procedural M4 below is used, so the game never waits on a download.
+let sportsCarScene = null;
+let sportsCarReady = false;
+const sportsCarPromise = new Promise((resolve) => {
+  try {
+    const loader = new GLTFLoader();
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('sports car timed out')), 30000));
+    Promise.race([loader.loadAsync('models/vehicles/sports-car.glb'), timeout])
+      .then(gltf => { sportsCarScene = gltf.scene; sportsCarReady = true; resolve(true); })
+      .catch(() => resolve(false));
+  } catch (e) { resolve(false); }
+});
+export function sportsCarReadyNow() { return sportsCarReady; }
 
 // ---------- Third-person camera ----------
 // First-person is the camera at the player's eyes. Third-person puts the
@@ -437,43 +456,196 @@ export function isTouchVisible() { return touchVisible; }
 
 // ---------- Realistic cars (procedural) ----------
 // A car built from parts, not a single box: a shaped lower body with a
-// hood, a cabin with dark glass windows, a roofline, four wheels with
-// hubs, headlights, taillights, a grille and a bumper, and side mirrors.
+// hood, a cabin with glass windows, a roofline, four wheels with hubs,
+// headlights, taillights, a grille and a bumper, and side mirrors.
 // The car faces +z (front at +z); rotate the group by PI to face -z.
 // type changes the proportions: 'sedan' (balanced), 'coupe' (low and
-// long), 'suv' (tall, e.g. the BMW X5). colour is a hex number.
+// long), 'suv' (tall, e.g. the BMW X5), 'van' (tall one-box van with
+// blue-tinted windows). colour is a hex number.
+// A sculpted body from a 2D side profile: draw the silhouette (length
+// along x, height along y), extrude it across the width, and bevel the
+// edges, so the body is a shaped panel with sloped sides and rounded
+// edges, not a flat box. The profile runs rear (-x) to front (+x); the
+// mesh is rotated so +x becomes the car's +z (front).
+function extrudedBody(points, width, material, bevel) {
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) shape.lineTo(points[i][0], points[i][1]);
+  shape.closePath();
+  const b = bevel === undefined ? 0.04 : bevel;
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: width, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 2, steps: 1
+  });
+  geo.rotateY(-Math.PI / 2);
+  geo.center();
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.castShadow = true;
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of points) { if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1]; }
+  mesh.position.y = (minY + maxY) / 2;
+  return mesh;
+}
+// Car paint: a clearcoat physical material, so the body reads as real
+// metallic paint with a glossy coat, not flat plastic.
+function paintMat(colorHex) {
+  return new THREE.MeshPhysicalMaterial({ color: colorHex, metalness: 0.65, roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.12 });
+}
+// A realistic wheel: a tyre and a rim with five spokes and a hub, so the
+// wheel reads as a real alloy wheel, not a plain disc.
+function buildWheel(radius, width) {
+  const g = new THREE.Group();
+  const tyreMat = carMat(0x111111, 0.95, 0);
+  const rimMat = carMat(0x9aa2a8, 0.3, 0.85);
+  const tyre = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, width, 20), tyreMat);
+  tyre.rotation.z = Math.PI / 2; tyre.castShadow = true; g.add(tyre);
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.62, radius * 0.62, width + 0.02, 20), rimMat);
+  rim.rotation.z = Math.PI / 2; g.add(rim);
+  for (let i = 0; i < 5; i++) {
+    const a = i / 5 * Math.PI * 2;
+    const spoke = new THREE.Mesh(new THREE.BoxGeometry(width + 0.04, radius * 0.58, 0.09), rimMat);
+    spoke.position.set(0, Math.cos(a) * radius * 0.3, Math.sin(a) * radius * 0.3);
+    spoke.rotation.x = -a;
+    g.add(spoke);
+  }
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.16, radius * 0.16, width + 0.06, 10), carMat(0x1a1d20, 0.5, 0.6));
+  hub.rotation.z = Math.PI / 2; g.add(hub);
+  return g;
+}
 function carMat(color, roughness, metalness) {
   return new THREE.MeshStandardMaterial({ color, roughness: roughness === undefined ? 0.4 : roughness, metalness: metalness === undefined ? 0.5 : metalness });
+}
+// The BMW M4 built from the real Quaternius sports-car model (CC0):
+// a proper car silhouette with a sloped hood, a curved roofline and
+// separate wheels, repainted in the car's colour, with the windows made
+// semi-transparent (so the driver shows through and the in-car camera
+// can see out) and the M4 details added (kidney grille, spoiler, quad
+// exhausts, mirrors, steering wheel and dashboard). The model faces +z
+// (headlights at +z), the same as the procedural cars.
+function buildModelM4(color) {
+  const S = 1.12;
+  const g = new THREE.Group();
+  g.userData.keepAlive = true;
+  const model = sportsCarScene.clone(true);
+  model.scale.setScalar(S);
+  const paint = paintMat(color);
+  model.traverse(o => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      if (o.material && o.material.name === 'White') {
+        o.material = paint;
+      } else if (o.material && o.material.name === 'Windows') {
+        const glass = o.material.clone();
+        glass.transparent = true; glass.opacity = 0.5; glass.color.set(0x10181f);
+        o.material = glass;
+      } else if (o.material) {
+        o.material = o.material.clone();
+      }
+    }
+  });
+  g.add(model);
+  const trimMat = carMat(0x1a1d20, 0.6, 0.3);
+  const chromeMat = carMat(0xc8ccd0, 0.25, 0.9);
+  // Kidney grille: two tall dark kidneys with a chrome surround.
+  for (const sx of [-1, 1]) {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.3, 0.04), chromeMat);
+    frame.position.set(sx * 0.14, 0.62, 2.14); g.add(frame);
+    const kidney = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.24, 0.05), trimMat);
+    kidney.position.set(sx * 0.14, 0.62, 2.15); g.add(kidney);
+  }
+  // Rear spoiler lip and quad exhaust tips.
+  const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.05, 0.22), trimMat);
+  spoiler.position.set(0, 0.95, -2.2); spoiler.rotation.x = -0.12; g.add(spoiler);
+  for (const sx of [-1, 1]) for (const dx of [-0.09, 0.09]) {
+    const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.12, 10), chromeMat);
+    tip.rotation.x = Math.PI / 2; tip.position.set(sx * 0.55 + dx, 0.35, -2.28); g.add(tip);
+  }
+  // Side mirrors.
+  for (const sx of [-1, 1]) {
+    const mir = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.16), paint);
+    mir.position.set(sx * 1.01, 1.0, 0.8); g.add(mir);
+  }
+  // Interior: dashboard, two front seats and a steering wheel on the
+  // left, so the in-car view shows a real wheel and dash.
+  const dash = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.14, 0.35), trimMat);
+  dash.position.set(0, 0.95, 0.85); g.add(dash);
+  for (const sx of [-1, 1]) {
+    const seatBase = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.18, 0.48), trimMat);
+    seatBase.position.set(sx * 0.38, 0.6, 0.0); g.add(seatBase);
+    const seatBack = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.55, 0.14), trimMat);
+    seatBack.position.set(sx * 0.38, 0.88, -0.25); g.add(seatBack);
+  }
+  const wheel = new THREE.Group();
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.025, 8, 20), trimMat);
+  wheel.add(rim);
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.22, 8), trimMat);
+  column.rotation.x = Math.PI / 2 - 0.4; column.position.set(0, -0.02, -0.1); wheel.add(column);
+  for (const a of [0.5, Math.PI - 0.5, -Math.PI / 2]) {
+    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.02), trimMat);
+    spoke.position.set(Math.cos(a) * 0.09, Math.sin(a) * 0.09, 0); spoke.rotation.z = a; wheel.add(spoke);
+  }
+  wheel.position.set(-0.38, 0.98, 0.62); wheel.rotation.x = -0.4; g.add(wheel);
+  g.userData.steerPos = new THREE.Vector3(-0.38, 0.98, 0.62);
+  g.userData.headPos = new THREE.Vector3(-0.38, 1.08, 0.35);
+  g.traverse(oo => { oo.userData.keepAlive = true; });
+  return g;
 }
 export function buildCar(colorHex, opts) {
   const o = opts || {};
   const type = o.type || 'sedan';
   const color = (colorHex === undefined || colorHex === null) ? 0x9aa5ad : colorHex;
+  // The M4 uses the real model when it has loaded; until then the
+  // procedural M4 below is used, so the game never waits on a download.
+  if (type === 'm4' && sportsCarReady && sportsCarScene) return buildModelM4(color);
   const g = new THREE.Group();
   g.userData.keepAlive = true;
-  const bodyMat = carMat(color, 0.35, 0.55);
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0x10181f, roughness: 0.15, metalness: 0.7, transparent: true, opacity: 0.55 });
+  const bodyMat = paintMat(color);
+  // A van has blue-tinted windows; other cars keep dark glass.
+  const glassMat = new THREE.MeshStandardMaterial({ color: type === 'van' ? 0x2f6fb5 : 0x10181f, roughness: 0.15, metalness: 0.7, transparent: true, opacity: 0.55 });
   const trimMat = carMat(0x1a1d20, 0.6, 0.3);
   const chromeMat = carMat(0xc8ccd0, 0.25, 0.9);
-  const tyreMat = carMat(0x111111, 0.95, 0);
-  const hubMat = carMat(0x9aa2a8, 0.3, 0.85);
   // Proportions by type (length along z, width along x).
-  const dims = type === 'suv'
+  const dims = type === 'van'
+    ? { len: 4.9, wid: 2.0, bodyH: 1.05, bodyY: 0.85, cabLen: 3.6, cabY: 1.55, cabH: 0.7, wheelR: 0.38 }
+    : type === 'suv'
     ? { len: 4.6, wid: 1.95, bodyH: 0.75, bodyY: 0.62, cabLen: 2.6, cabY: 1.25, cabH: 0.62, wheelR: 0.38 }
+    : type === 'm4'
+    ? { len: 4.7, wid: 1.9, bodyH: 0.52, bodyY: 0.5, cabLen: 2.1, cabY: 1.02, cabH: 0.46, wheelR: 0.34 }
     : type === 'coupe'
     ? { len: 4.5, wid: 1.85, bodyH: 0.5, bodyY: 0.5, cabLen: 2.0, cabY: 1.0, cabH: 0.45, wheelR: 0.33 }
     : { len: 4.4, wid: 1.85, bodyH: 0.55, bodyY: 0.55, cabLen: 2.2, cabY: 1.08, cabH: 0.5, wheelR: 0.34 };
   const L = dims.len, W = dims.wid;
-  // Lower body: a long box with a slightly narrower hood section at the
-  // front, so the silhouette reads as a car, not a slab.
-  const lower = new THREE.Mesh(new THREE.BoxGeometry(W, dims.bodyH, L), bodyMat);
-  lower.position.y = dims.bodyY; lower.castShadow = true; g.add(lower);
-  // Hood: a lower, sloping panel at the front (+z).
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(W * 0.92, 0.16, L * 0.28), bodyMat);
-  hood.position.set(0, dims.bodyY + dims.bodyH / 2 - 0.02, L * 0.32); hood.rotation.x = 0.08; hood.castShadow = true; g.add(hood);
-  // Trunk: a short deck at the rear (-z).
-  const trunk = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, 0.14, L * 0.16), bodyMat);
-  trunk.position.set(0, dims.bodyY + dims.bodyH / 2 - 0.03, -L * 0.38); trunk.castShadow = true; g.add(trunk);
+  // Lower body: the M4, the coupe and the van are built from an extruded
+  // side profile (a sculpted silhouette with a sloped hood/nose and
+  // rounded bevelled edges), not a flat box. Sedans and SUVs keep the
+  // box body, since they are background traffic.
+  if (type === 'm4' || type === 'coupe' || type === 'van') {
+    const hl = L / 2;
+    const profile = type === 'van'
+      ? [[-hl, 0.32], [-hl, 1.18], [hl * 0.62, 1.18], [hl * 0.82, 0.88], [hl * 0.94, 0.72], [hl, 0.48], [hl * 0.98, 0.32]]
+      : type === 'm4'
+      ? [[-hl, 0.32], [-hl, 0.80], [-hl * 0.68, 0.86], [-hl * 0.34, 0.88], [hl * 0.34, 0.88], [hl * 0.68, 0.79], [hl * 0.97, 0.67], [hl, 0.45], [hl * 0.98, 0.32]]
+      : [[-hl, 0.32], [-hl, 0.78], [-hl * 0.68, 0.84], [-hl * 0.34, 0.86], [hl * 0.34, 0.86], [hl * 0.68, 0.77], [hl * 0.97, 0.65], [hl, 0.45], [hl * 0.98, 0.32]];
+    g.add(extrudedBody(profile, W * 0.96, bodyMat, 0.05));
+  } else {
+    // Lower body: a long box with a slightly narrower hood section at
+    // the front, so the silhouette reads as a car, not a slab.
+    const lower = new THREE.Mesh(new THREE.BoxGeometry(W, dims.bodyH, L), bodyMat);
+    lower.position.y = dims.bodyY; lower.castShadow = true; g.add(lower);
+    // Hood: a lower, sloping panel at the front (+z).
+    const hoodLen = L * 0.28;
+    const hoodZ = L * 0.32;
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(W * 0.92, 0.16, hoodLen), bodyMat);
+    hood.position.set(0, dims.bodyY + dims.bodyH / 2 - 0.02, hoodZ); hood.rotation.x = 0.08; hood.castShadow = true; g.add(hood);
+    // Trunk: a short deck at the rear (-z).
+    const trunk = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, 0.14, L * 0.16), bodyMat);
+    trunk.position.set(0, dims.bodyY + dims.bodyH / 2 - 0.03, -L * 0.38); trunk.castShadow = true; g.add(trunk);
+  }
+  // M4 power dome: a raised centre ridge on the long sculpted hood, so
+  // the nose reads as a BMW M4, not a flat slab.
+  if (type === 'm4') {
+    const dome = new THREE.Mesh(new THREE.BoxGeometry(W * 0.34, 0.1, L * 0.24), bodyMat);
+    dome.position.set(0, 0.85, L * 0.32); dome.rotation.x = 0.08; dome.castShadow = true; g.add(dome);
+  }
   // Cabin: glasshouse with a roof, set back from the nose, with a
   // windscreen slope at the front and a rear window at the back.
   const cabin = new THREE.Mesh(new THREE.BoxGeometry(W * 0.86, dims.cabH, dims.cabLen), glassMat);
@@ -488,22 +660,62 @@ export function buildCar(colorHex, opts) {
     const pillarR = new THREE.Mesh(new THREE.BoxGeometry(0.07, dims.cabH, 0.09), bodyMat);
     pillarR.position.set(sx * W * 0.42, dims.cabY, -L * 0.16); g.add(pillarR);
   }
-  // Wheels: four tyres with hubs, at the corners, slightly tucked in.
+  // A van's cabin is long, so one more pillar pair at the back divides
+  // the side glass into two windows.
+  if (type === 'van') {
+    for (const sx of [-1, 1]) {
+      const pillarB = new THREE.Mesh(new THREE.BoxGeometry(0.07, dims.cabH, 0.09), bodyMat);
+      pillarB.position.set(sx * W * 0.42, dims.cabY, -L * 0.3); g.add(pillarB);
+    }
+    // Sliding door outline and handles on both sides, so the van reads
+    // as a real van with a side door, not a plain box.
+    const doorMat = carMat(0x5a5f63, 0.5, 0.4);
+    for (const sx of [-1, 1]) {
+      const door = new THREE.Mesh(new THREE.BoxGeometry(0.02, 1.5, 1.15), doorMat);
+      door.position.set(sx * (W / 2 + 0.005), 1.05, 0.35); g.add(door);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.05, 0.22), chromeMat);
+      handle.position.set(sx * (W / 2 + 0.02), 1.25, 0.85); g.add(handle);
+      const slideHandle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.05, 0.22), chromeMat);
+      slideHandle.position.set(sx * (W / 2 + 0.02), 1.25, -0.15); g.add(slideHandle);
+    }
+    // Roof rails, so the tall van roof has a finished edge.
+    for (const sx of [-1, 1]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, L * 0.7), trimMat);
+      rail.position.set(sx * W * 0.36, dims.cabY + dims.cabH / 2 + 0.08, -L * 0.05); g.add(rail);
+    }
+  }
+  // Wheels: four alloy wheels (tyre, rim, spokes, hub) at the corners,
+  // slightly tucked in.
   const wheelZ = L * 0.32, wheelX = W / 2 - 0.08;
   for (const [wx, wz] of [[-wheelX, wheelZ], [wheelX, wheelZ], [-wheelX, -wheelZ], [wheelX, -wheelZ]]) {
-    const tyre = new THREE.Mesh(new THREE.CylinderGeometry(dims.wheelR, dims.wheelR, 0.22, 18), tyreMat);
-    tyre.rotation.z = Math.PI / 2; tyre.position.set(wx, dims.wheelR, wz); tyre.castShadow = true; g.add(tyre);
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(dims.wheelR * 0.55, dims.wheelR * 0.55, 0.24, 12), hubMat);
-    hub.rotation.z = Math.PI / 2; hub.position.set(wx, dims.wheelR, wz); g.add(hub);
+    const wheel = buildWheel(dims.wheelR, 0.22);
+    wheel.position.set(wx, dims.wheelR, wz);
+    g.add(wheel);
   }
   // Headlights: two bright lenses at the front, with a grille between.
+  // The M4 gets sharp swept headlights (angled back at the outer edge)
+  // and the BMW kidney grille: two tall dark kidneys with a chrome
+  // surround, instead of one wide bar.
   const lightMat = new THREE.MeshBasicMaterial({ color: 0xfff2c0 });
   for (const sx of [-1, 1]) {
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 0.06), lightMat);
-    hl.position.set(sx * W * 0.32, dims.bodyY + 0.12, L / 2 + 0.01); g.add(hl);
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(type === 'm4' ? 0.5 : 0.42, 0.14, 0.06), lightMat);
+    hl.position.set(sx * W * 0.32, dims.bodyY + 0.12, L / 2 + 0.01);
+    if (type === 'm4') hl.rotation.y = -sx * 0.28;
+    g.add(hl);
   }
-  const grille = new THREE.Mesh(new THREE.BoxGeometry(W * 0.5, 0.16, 0.05), trimMat);
-  grille.position.set(0, dims.bodyY + 0.02, L / 2 + 0.01); g.add(grille);
+  if (type === 'm4') {
+    for (const sx of [-1, 1]) {
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.3, 0.04), chromeMat);
+      frame.position.set(sx * 0.14, dims.bodyY + 0.04, L / 2 + 0.01); g.add(frame);
+      const kidney = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.24, 0.05), trimMat);
+      kidney.position.set(sx * 0.14, dims.bodyY + 0.04, L / 2 + 0.02); g.add(kidney);
+      const intake = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.05), trimMat);
+      intake.position.set(sx * W * 0.36, dims.bodyY - dims.bodyH / 2 + 0.12, L / 2 + 0.01); g.add(intake);
+    }
+  } else {
+    const grille = new THREE.Mesh(new THREE.BoxGeometry(W * 0.5, 0.16, 0.05), trimMat);
+    grille.position.set(0, dims.bodyY + 0.02, L / 2 + 0.01); g.add(grille);
+  }
   // Front bumper and rear bumper.
   const bumpF = new THREE.Mesh(new THREE.BoxGeometry(W * 0.98, 0.18, 0.1), trimMat);
   bumpF.position.set(0, dims.bodyY - dims.bodyH / 2 + 0.08, L / 2 + 0.02); g.add(bumpF);
@@ -514,6 +726,19 @@ export function buildCar(colorHex, opts) {
   for (const sx of [-1, 1]) {
     const tl = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.06), tailMat);
     tl.position.set(sx * W * 0.32, dims.bodyY + 0.12, -L / 2 - 0.01); g.add(tl);
+  }
+  // M4 details: side skirts, a rear spoiler lip, and quad exhaust tips.
+  if (type === 'm4') {
+    for (const sx of [-1, 1]) {
+      const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.12, L * 0.55), trimMat);
+      skirt.position.set(sx * (W / 2 - 0.02), dims.bodyY - dims.bodyH / 2 + 0.06, -L * 0.05); g.add(skirt);
+    }
+    const spoiler = new THREE.Mesh(new THREE.BoxGeometry(W * 0.9, 0.05, 0.22), trimMat);
+    spoiler.position.set(0, dims.bodyY + dims.bodyH / 2 + 0.02, -L * 0.42); spoiler.rotation.x = -0.12; g.add(spoiler);
+    for (const sx of [-1, 1]) for (const dx of [-0.09, 0.09]) {
+      const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.12, 10), chromeMat);
+      tip.rotation.x = Math.PI / 2; tip.position.set(sx * 0.55 + dx, dims.bodyY - dims.bodyH / 2 + 0.12, -L / 2 - 0.05); g.add(tip);
+    }
   }
   // Side mirrors.
   for (const sx of [-1, 1]) {
@@ -526,6 +751,33 @@ export function buildCar(colorHex, opts) {
   const strip2 = strip.clone(); strip2.position.x = -W / 2 - 0.01; g.add(strip2);
   const plate = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.03), new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.5 }));
   plate.position.set(0, dims.bodyY - 0.05, -L / 2 - 0.04); g.add(plate);
+  // Interior, visible through the glass: a dashboard, two front seats,
+  // and a steering wheel on the left, so the car is a real car inside
+  // as well as out. The wheel sits in front of the driver's seat.
+  const seatBaseY = dims.cabY - dims.cabH / 2 + 0.08;
+  const dash = new THREE.Mesh(new THREE.BoxGeometry(W * 0.8, 0.14, 0.35), trimMat);
+  dash.position.set(0, dims.cabY - 0.1, L * 0.14); g.add(dash);
+  for (const sx of [-1, 1]) {
+    const seatBase = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.18, 0.48), trimMat);
+    seatBase.position.set(sx * 0.38, seatBaseY, -0.05); g.add(seatBase);
+    const seatBack = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.55, 0.14), trimMat);
+    seatBack.position.set(sx * 0.38, seatBaseY + 0.28, -0.3); g.add(seatBack);
+  }
+  const steerY = dims.cabY + 0.08, steerZ = L * 0.1;
+  const wheel = new THREE.Group();
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.025, 8, 20), trimMat);
+  wheel.add(rim);
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.22, 8), trimMat);
+  column.rotation.x = Math.PI / 2 - 0.4; column.position.set(0, -0.02, -0.1); wheel.add(column);
+  for (const a of [0.5, Math.PI - 0.5, -Math.PI / 2]) {
+    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.02), trimMat);
+    spoke.position.set(Math.cos(a) * 0.09, Math.sin(a) * 0.09, 0); spoke.rotation.z = a; wheel.add(spoke);
+  }
+  wheel.position.set(-0.38, steerY, steerZ); wheel.rotation.x = -0.4; g.add(wheel);
+  // Driver head and steering wheel positions (car-local), for the
+  // in-car driving camera.
+  g.userData.steerPos = new THREE.Vector3(-0.38, steerY, steerZ);
+  g.userData.headPos = new THREE.Vector3(-0.38, dims.cabY + 0.02, 0.3);
   g.traverse(oo => { oo.userData.keepAlive = true; });
   return g;
 }
@@ -536,7 +788,8 @@ export function buildPlayerCar() {
   const def = getEquippedCarDef();
   let type = 'sedan';
   if (def && def.id === 'bmw-x5') type = 'suv';
-  else if (def && (def.id === 'bmw-m4' || def.id === 'coupe')) type = 'coupe';
+  else if (def && def.id === 'bmw-m4') type = 'm4';
+  else if (def && def.id === 'coupe') type = 'coupe';
   let hex = 0x9aa5ad;
   try { if (def && def.color) hex = new THREE.Color(def.color).getHex(); } catch (e) { /* keep default */ }
   const car = buildCar(hex, { type });

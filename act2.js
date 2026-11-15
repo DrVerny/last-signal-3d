@@ -946,6 +946,13 @@ function buildCityEnvironment() {
     mission2.add(car);
     cityCars.push({ group: car, speed: (5.5 + Math.random() * 3) * (east ? 1 : -1) });
   }
+  // The grey van: a plain grey van with blue windows, driving the east
+  // lane with the other traffic. No logo, no text, no rope, no person
+  // behind it - it is just a van on the road.
+  const greyVan = buildCar(0x9aa5ad, { type: 'van' });
+  greyVan.position.set(-20, 0, -9.0);
+  mission2.add(greyVan);
+  cityCars.push({ group: greyVan, speed: 6.5 });
   // Pedestrians on the sidewalks: a busy crowd, like the plaza video -
   // singles and pairs, different paces, some on a phone, some with bags.
   // They walk along the street (lane axis x) and wrap at the ends, so
@@ -1032,19 +1039,23 @@ function buildCityEnvironment() {
 // Types: mission (starts a mission), store (opens the store on a tab),
 // home (enters the mansion / safe house), visit (a walk-around exterior).
 const TRAVEL_PLACES = {
-  reservoir: { name: 'Rondout Reservoir', short: 'Reservoir', x: 0.10, y: 0.15, desc: 'Upstate New York - the Delaware Line', type: 'mission', mission: 1 },
-  hospital: { name: 'City Hospital', short: 'Hospital', x: 0.42, y: 0.10, desc: 'City hospital - north side', type: 'visit', kind: 'hospital' },
-  industry: { name: 'Industrial Area', short: 'Industry', x: 0.88, y: 0.16, desc: 'Water treatment plant', type: 'visit', kind: 'industry' },
-  mansion: { name: 'The Mansion', short: 'Mansion', x: 0.90, y: 0.48, desc: 'Your mansion - Long Island', type: 'home', kind: 'mansion' },
-  dealership: { name: 'Car Dealership', short: 'Dealership', x: 0.66, y: 0.38, desc: 'Buy cars - Queens', type: 'store', tab: 'cars' },
-  clothing: { name: 'Clothing Store', short: 'Clothing', x: 0.48, y: 0.42, desc: 'Buy clothes - Manhattan', type: 'store', tab: 'clothes' },
-  substation: { name: 'Con Edison Substation', short: 'Substation', x: 0.60, y: 0.60, desc: 'Long Island City, Queens', type: 'mission', mission: 2 },
-  safehouse: { name: 'Safe House Apartment', short: 'Safe House', x: 0.74, y: 0.74, desc: 'Your safe house - Brooklyn', type: 'home', kind: 'safehouse' },
-  bridge: { name: 'Verrazzano Bridge', short: 'Bridge', x: 0.86, y: 0.86, desc: 'Verrazzano-Narrows, tonight', type: 'mission', mission: 3 },
-  airport: { name: 'Airport', short: 'Airport', x: 0.08, y: 0.85, desc: 'JFK - flights out', type: 'visit', kind: 'airport' },
-  hotels: { name: 'Hotels', short: 'Hotels', x: 0.55, y: 0.25, desc: 'A hotel suite - Midtown', type: 'home', kind: 'hotel' },
-  terminal: { name: 'Train Terminal', short: 'Train Terminal', x: 0.30, y: 0.55, desc: 'Grand Central - board the 4 train', type: 'home', kind: 'terminal' },
-  carpark: { name: 'Car Park', short: 'Car Park', x: 0.35, y: 0.75, desc: 'Parking lot - Midtown South', type: 'visit', kind: 'carpark' }
+  reservoir: { name: 'Rondout Reservoir', short: 'Reservoir', x: 0.16, y: 0.10, desc: 'Upstate New York - the Delaware Line', type: 'mission', mission: 1 },
+  hospital: { name: 'City Hospital', short: 'Hospital', x: 0.45, y: 0.12, desc: 'City hospital - the Bronx', type: 'visit', kind: 'hospital' },
+  windtunnel: { name: 'Wind Tunnel Lab', short: 'Wind Tunnel', x: 0.44, y: 0.22, desc: 'Engineering lab - Morningside Heights', type: 'visit', kind: 'windtunnel' },
+  hotels: { name: 'Hotels', short: 'Hotels', x: 0.56, y: 0.32, desc: 'A hotel suite - Midtown', type: 'home', kind: 'hotel' },
+  symposium: { name: 'Symposium Hall', short: 'Symposium', x: 0.84, y: 0.32, desc: 'Symposium hall - Astoria, Queens', type: 'visit', kind: 'symposium' },
+  clothing: { name: 'Clothing Store', short: 'Clothing', x: 0.44, y: 0.44, desc: 'Buy clothes - Manhattan', type: 'store', tab: 'clothes' },
+  dealership: { name: 'Car Dealership', short: 'Dealership', x: 0.70, y: 0.42, desc: 'Buy cars - Queens', type: 'store', tab: 'cars' },
+  terminal: { name: 'Train Terminal', short: 'Terminal', x: 0.50, y: 0.50, desc: 'Grand Central - board the 4 train', type: 'home', kind: 'terminal' },
+  substation: { name: 'Con Edison Substation', short: 'Substation', x: 0.68, y: 0.52, desc: 'Long Island City, Queens', type: 'mission', mission: 2 },
+  mansion: { name: 'The Mansion', short: 'Mansion', x: 0.93, y: 0.55, desc: 'Your mansion - Long Island', type: 'home', kind: 'mansion' },
+  carpark: { name: 'Car Park', short: 'Car Park', x: 0.58, y: 0.58, desc: 'Parking lot - Midtown South', type: 'visit', kind: 'carpark' },
+  industry: { name: 'Industrial Area', short: 'Industry', x: 0.78, y: 0.62, desc: 'Water treatment plant', type: 'visit', kind: 'industry' },
+  zama: { name: 'Zama HQ', short: 'Zama HQ', x: 0.42, y: 0.68, desc: 'Zama - confidential computing, SoHo', type: 'visit', kind: 'zama', landmark: true },
+  court: { name: 'NYC Court', short: 'Court', x: 0.60, y: 0.72, desc: 'NYC Court - Foley Square, by Zama HQ', type: 'visit', kind: 'court', landmark: true },
+  safehouse: { name: 'Safe House Apartment', short: 'Safe House', x: 0.72, y: 0.76, desc: 'Your safe house - Brooklyn', type: 'home', kind: 'safehouse' },
+  airport: { name: 'Airport', short: 'Airport', x: 0.90, y: 0.84, desc: 'JFK - flights out', type: 'visit', kind: 'airport' },
+  bridge: { name: 'Verrazzano Bridge', short: 'Bridge', x: 0.45, y: 0.88, desc: 'Verrazzano-Narrows, tonight', type: 'mission', mission: 3 }
 };
 // Miles between every pair of places (symmetric: look up either order).
 // The far places are far: the reservoir is upstate, 85 miles from the
@@ -1073,7 +1084,24 @@ const DISTANCES = {
   'carpark>reservoir': 82, 'carpark>hospital': 38, 'carpark>industry': 40, 'carpark>mansion': 35,
   'carpark>dealership': 14, 'carpark>clothing': 10, 'carpark>substation': 8, 'carpark>safehouse': 6, 'carpark>bridge': 12,
   'airport>hotels': 38, 'airport>terminal': 30, 'airport>carpark': 22,
-  'hotels>terminal': 10, 'hotels>carpark': 16, 'terminal>carpark': 9
+  'hotels>terminal': 10, 'hotels>carpark': 16, 'terminal>carpark': 9,
+  // The four new places (wind tunnel lab, symposium hall, Zama HQ, NYC
+  // Court): each is in its own part of the city, with real miles to the
+  // other places. The court is one mile from Zama HQ, by design.
+  'windtunnel>reservoir': 68, 'windtunnel>hospital': 6, 'windtunnel>industry': 22, 'windtunnel>mansion': 30,
+  'windtunnel>dealership': 12, 'windtunnel>clothing': 6, 'windtunnel>substation': 8, 'windtunnel>safehouse': 14, 'windtunnel>bridge': 16,
+  'windtunnel>airport': 24, 'windtunnel>hotels': 5, 'windtunnel>terminal': 4, 'windtunnel>carpark': 7,
+  'symposium>reservoir': 78, 'symposium>hospital': 30, 'symposium>industry': 14, 'symposium>mansion': 18,
+  'symposium>dealership': 6, 'symposium>clothing': 10, 'symposium>substation': 5, 'symposium>safehouse': 12, 'symposium>bridge': 20,
+  'symposium>airport': 16, 'symposium>hotels': 12, 'symposium>terminal': 9, 'symposium>carpark': 11,
+  'zama>reservoir': 82, 'zama>hospital': 34, 'zama>industry': 24, 'zama>mansion': 26,
+  'zama>dealership': 10, 'zama>clothing': 4, 'zama>substation': 6, 'zama>safehouse': 8, 'zama>bridge': 12,
+  'zama>airport': 22, 'zama>hotels': 6, 'zama>terminal': 3, 'zama>carpark': 4,
+  'court>reservoir': 83, 'court>hospital': 35, 'court>industry': 25, 'court>mansion': 27,
+  'court>dealership': 11, 'court>clothing': 5, 'court>substation': 7, 'court>safehouse': 9, 'court>bridge': 13,
+  'court>airport': 23, 'court>hotels': 7, 'court>terminal': 4, 'court>carpark': 5,
+  'windtunnel>symposium': 12, 'windtunnel>zama': 8, 'windtunnel>court': 9,
+  'symposium>zama': 10, 'symposium>court': 11, 'zama>court': 1
 };
 function getMiles(a, b) {
   if (a === b) return 0;
@@ -1081,7 +1109,18 @@ function getMiles(a, b) {
 }
 const MISSION_PLACE = { 1: 'reservoir', 2: 'substation', 3: 'bridge' };
 const MISSION_TIME = { 1: 'day', 2: 'dusk', 3: 'night' };
-let travelActive = false, travelT = 0, travelDur = 18, travelOnArrive = null, travelGroup = null, travelCars = [], travelPedestrians = [];
+let travelActive = false, travelT = 0, travelDur = 60, travelOnArrive = null, travelGroup = null, travelCars = [], travelPedestrians = [];
+// Driving the car yourself: gas (W or D, or the on-screen GAS pedal),
+// brake (S, or the BRAKE pedal), and a camera view switch (C, or the
+// View button) between the chase view and the in-car view. The car
+// creeps at 3 m/s on its own so the drive always finishes; gas takes it
+// to 12 m/s. The drive is time-based (travelDur), so a slow drive still
+// arrives, and the Skip button arrives at once.
+let driveSpeed = 0, driveView = 'chase';
+const driveKeys = {};
+let drivePedalGas = false, drivePedalBrake = false;
+let driveControlsEl = null, driveKeyHandler = null, driveKeyUpHandler = null;
+const DRIVE_MAX_SPEED = 12, DRIVE_CREEP_SPEED = 3, DRIVE_ROAD_LEN = 720;
 // The player's own car in the drive, with the driver (player avatar)
 // seated inside, so the player sees himself driving in third-person.
 // The car is rebuilt each drive from the equipped car, and it lives in
@@ -1148,26 +1187,26 @@ function buildTravelScene() {
   // parked cars on both sides, trees lining the street, shops with
   // awnings, and a white striped crosswalk.
   const roadTex = hexTileTexture();
-  roadTex.repeat.set(2, 70);
-  const road = new THREE.Mesh(new THREE.PlaneGeometry(9, 320), new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95 }));
-  road.rotation.x = -Math.PI / 2; road.position.set(0, 0.02, -160); road.receiveShadow = true; travelGroup.add(road);
-  for (let z = -4; z >= -316; z -= 8) {
+  roadTex.repeat.set(2, 160);
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(9, DRIVE_ROAD_LEN), new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95 }));
+  road.rotation.x = -Math.PI / 2; road.position.set(0, 0.02, -DRIVE_ROAD_LEN / 2); road.receiveShadow = true; travelGroup.add(road);
+  for (let z = -4; z >= -DRIVE_ROAD_LEN + 4; z -= 8) {
     const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 3), new THREE.MeshBasicMaterial({ color: 0xd8b13a }));
     dash.rotation.x = -Math.PI / 2; dash.position.set(0, 0.04, z); travelGroup.add(dash);
   }
   // Green bike lanes along both edges of the road, with bicycle symbols.
   const bikeTex = bikeSymbolTexture();
   for (const x of [-3.6, 3.6]) {
-    const lane = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 320), stdMat({ color: 0x2e7a4a, roughness: 0.95 }));
-    lane.rotation.x = -Math.PI / 2; lane.position.set(x, 0.04, -160); travelGroup.add(lane);
+    const lane = new THREE.Mesh(new THREE.PlaneGeometry(1.0, DRIVE_ROAD_LEN), stdMat({ color: 0x2e7a4a, roughness: 0.95 }));
+    lane.rotation.x = -Math.PI / 2; lane.position.set(x, 0.04, -DRIVE_ROAD_LEN / 2); travelGroup.add(lane);
   }
-  for (const x of [-3.6, 3.6]) for (let z = -30; z >= -300; z -= 60) {
+  for (const x of [-3.6, 3.6]) for (let z = -30; z >= -700; z -= 60) {
     const sym = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), new THREE.MeshBasicMaterial({ map: bikeTex, transparent: true, opacity: 0.85, depthWrite: false }));
     sym.rotation.x = -Math.PI / 2; sym.rotation.z = Math.PI / 2; sym.position.set(x, 0.05, z); travelGroup.add(sym);
   }
   // "MAIN ST" painted on the road, every so often.
   const mainTex = mainStTexture();
-  for (const z of [-40, -140, -240]) {
+  for (const z of [-40, -140, -240, -340, -440, -540, -640]) {
     const t = new THREE.Mesh(new THREE.PlaneGeometry(8, 2), new THREE.MeshBasicMaterial({ map: mainTex, transparent: true, opacity: 0.9, depthWrite: false }));
     t.rotation.x = -Math.PI / 2; t.rotation.z = Math.PI / 2; t.position.set(0, 0.05, z); travelGroup.add(t);
   }
@@ -1178,7 +1217,7 @@ function buildTravelScene() {
   }
   // Parked cars along both curbs, trees lining the sidewalks.
   const parkCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a];
-  for (let z = -24; z >= -300; z -= 28) {
+  for (let z = -24; z >= -700; z -= 28) {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.4) continue;
       const pc = makeStreetCar(parkCols[Math.floor(Math.random() * parkCols.length)]);
@@ -1187,7 +1226,7 @@ function buildTravelScene() {
       travelGroup.add(pc);
     }
   }
-  for (let z = -18; z >= -300; z -= 24) {
+  for (let z = -18; z >= -700; z -= 24) {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.3) continue;
       const tree = makeStreetTree();
@@ -1196,15 +1235,15 @@ function buildTravelScene() {
   }
   // Pedestrians on the sidewalks, walking along the street in both
   // directions, like the plaza video. They scroll past as the car drives.
-  const driveCrowd = makeCrowd({ count: 10, lane: { axis: 'z', fixed: 5.6, min: -310, max: 0 } });
-  const driveCrowd2 = makeCrowd({ count: 10, lane: { axis: 'z', fixed: -5.6, min: -310, max: 0 } });
+  const driveCrowd = makeCrowd({ count: 10, lane: { axis: 'z', fixed: 5.6, min: -710, max: 0 } });
+  const driveCrowd2 = makeCrowd({ count: 10, lane: { axis: 'z', fixed: -5.6, min: -710, max: 0 } });
   for (const p of [...driveCrowd, ...driveCrowd2]) { travelGroup.add(p.group); travelPedestrians.push(p); }
   // Buildings on both sides, scrolling past as the camera drives.
   // Clean white modern style with rows of windows, like the hospital in
   // the photo. The window glow is turned up at dusk/night and down in
   // daylight by setTimeOfDay (the materials are kept in travelWindowMats).
   const winTex = whiteFacadeTexture(6, 12, 0.4);
-  for (let z = -10; z >= -310; z -= 14) {
+  for (let z = -10; z >= -710; z -= 14) {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.25) continue; // gaps so the street breathes
       const h = 8 + Math.random() * 16;
@@ -1274,16 +1313,35 @@ function buildTravelScene() {
     bar.position.set(9, 1.3, pz); travelGroup.add(bar);
   }
   // Traffic: cars coming the other way and cars ahead in our lane.
-  // Realistic cars (see player.js buildCar), not boxes.
+  // Realistic cars (see player.js buildCar), not boxes. Spread along
+  // the whole 720 m road, so the long drive never empties.
   const carCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0xc07a1a];
   for (let i = 0; i < 8; i++) {
     const oncoming = i % 2 === 0;
     const car = buildCar(carCols[i % carCols.length], { type: 'sedan' });
-    car.position.set(oncoming ? -2.2 : 2.2, 0, -20 - i * 36 - Math.random() * 10);
+    car.position.set(oncoming ? -2.2 : 2.2, 0, -20 - i * 80 - Math.random() * 20);
     if (!oncoming) car.rotation.y = Math.PI;
     travelGroup.add(car);
     travelCars.push({ group: car, speed: oncoming ? 14 : 4 });
   }
+  // Zama HQ tower on the long drive (east side, z = -450): a tall dark
+  // tower with a gold ZAMA sign, so the drive passes the Zama place on
+  // the map. A second gas station further down (west side, z = -560).
+  const zamaTowerMat = new THREE.MeshStandardMaterial({ color: 0x1a1d20, roughness: 0.4, metalness: 0.6 });
+  const zamaTower = new THREE.Mesh(new THREE.BoxGeometry(9, 26, 8), zamaTowerMat);
+  zamaTower.position.set(16, 13, -450); zamaTower.castShadow = true; travelGroup.add(zamaTower);
+  const zamaSign = makeTextSprite('ZAMA', '#ffd166'); zamaSign.scale.set(6, 1.4, 1); zamaSign.position.set(16, 28, -446); travelGroup.add(zamaSign);
+  const gas2Kiosk = new THREE.Mesh(new THREE.BoxGeometry(5, 3, 4), whiteFacadeMat(3, 1, 0.3));
+  gas2Kiosk.position.set(-15, 1.5, -560); travelGroup.add(gas2Kiosk);
+  const gas2Canopy = new THREE.Mesh(new THREE.BoxGeometry(9, 0.3, 7), stdMat({ color: 0x2e6fb0, roughness: 0.7 }));
+  gas2Canopy.position.set(-15, 4.2, -566); travelGroup.add(gas2Canopy);
+  for (const [px, pz] of [[-17, -565], [-13, -565]]) {
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 4.2, 8), stdMat({ color: 0xd8d8d8, metalness: 0.6, roughness: 0.4 }));
+    pillar.position.set(px, 2.1, pz); travelGroup.add(pillar);
+    const pump = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.2, 0.5), stdMat({ color: 0xd8d8d8, roughness: 0.5 }));
+    pump.position.set(px, 0.6, pz + 1.5); travelGroup.add(pump);
+  }
+  const gas2Sign = makeTextSprite('GAS', '#ffd166'); gas2Sign.scale.set(4, 1, 1); gas2Sign.position.set(-15, 5.6, -563); travelGroup.add(gas2Sign);
   // Sync the window glow to the current time of day (the scene is built
   // lazily on the first drive, so the materials start at the build-time
   // value and need one sync).
@@ -1291,45 +1349,134 @@ function buildTravelScene() {
   return travelGroup;
 }
 
-// Draw the city map on a canvas: all nine places, spread far apart, the
-// route from the current place to the selected one, and a pulsing marker
-// on the destination. Labels flip to the left near the right edge so they
-// never run off the canvas. The map tint matches the time of day of the
-// mission being headed to (day = lighter, dusk = purple, night = dark).
+// Draw the city map as a LIVE map of New York: real geography - the
+// Hudson River on the west, Manhattan with its street grid, the East
+// River, Brooklyn and Queens on Long Island, Staten Island, the
+// Verrazzano Bridge across the Narrows, and upstate at the top. Every
+// place sits at its real NYC spot, and the route is drawn like a
+// navigation route (a solid line with a casing, bending through the
+// streets), not a straight dashed line. Borough names are printed on
+// the map. Day is a light map, dusk and night are dark.
 function drawTravelMap(canvas, fromKey, toKey) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const mode = toKey && TRAVEL_PLACES[toKey].type === 'mission' ? MISSION_TIME[TRAVEL_PLACES[toKey].mission] : (pendingMission ? MISSION_TIME[TRAVEL_PLACES[pendingMission.key].mission] : MISSION_TIME[state.mission]);
-  ctx.fillStyle = mode === 'day' ? '#1a2a38' : mode === 'dusk' ? '#241a2e' : '#0d141b';
-  ctx.fillRect(0, 0, W, H);
-  // A few faint roads.
-  ctx.strokeStyle = '#2a3540'; ctx.lineWidth = 5;
-  ctx.beginPath(); ctx.moveTo(0, H * 0.55); ctx.bezierCurveTo(W * 0.3, H * 0.45, W * 0.55, H * 0.6, W, H * 0.5); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(W * 0.2, 0); ctx.bezierCurveTo(W * 0.25, H * 0.4, W * 0.5, H * 0.6, W * 0.75, H); ctx.stroke();
-  ctx.strokeStyle = '#1c2630'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(0, H * 0.3); ctx.lineTo(W, H * 0.35); ctx.stroke();
-  const from = TRAVEL_PLACES[fromKey], to = toKey ? TRAVEL_PLACES[toKey] : null;
-  // Route: dashed gold line from current to destination.
-  if (to) {
-    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
-    ctx.beginPath(); ctx.moveTo(from.x * W, from.y * H); ctx.lineTo(to.x * W, to.y * H); ctx.stroke();
-    ctx.setLineDash([]);
+  const light = mode === 'day';
+  const water = light ? '#a9c8de' : mode === 'dusk' ? '#2c3247' : '#16222e';
+  const land = light ? '#e9e6da' : mode === 'dusk' ? '#3a3f4a' : '#232d33';
+  const land2 = light ? '#dfe4d2' : mode === 'dusk' ? '#333845' : '#1e282e';
+  const streetCol = light ? '#ffffff' : mode === 'dusk' ? '#4a5060' : '#2e3a42';
+  const textCol = light ? '#20242a' : '#e8eef2';
+  const subCol = light ? '#5a6a75' : '#8a97a3';
+  const faintCol = light ? '#7a8a96' : '#5a6a75';
+  // Water base.
+  ctx.fillStyle = water; ctx.fillRect(0, 0, W, H);
+  function landPoly(points, fill) {
+    ctx.fillStyle = fill || land;
+    ctx.beginPath();
+    ctx.moveTo(points[0][0] * W, points[0][1] * H);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0] * W, points[i][1] * H);
+    ctx.closePath(); ctx.fill();
   }
-  // All nine places, spread across the map.
+  // New Jersey (west bank), leaving the Hudson River open beside Manhattan.
+  landPoly([[0, 0.16], [0.24, 0.18], [0.33, 0.30], [0.34, 0.55], [0.30, 0.78], [0, 0.80]], land2);
+  // Upstate and the Bronx (top).
+  landPoly([[0, 0], [1, 0], [1, 0.10], [0.62, 0.14], [0.40, 0.12], [0.24, 0.14], [0, 0.12]], land);
+  // Manhattan: a long narrow island, slightly tilted.
+  landPoly([[0.42, 0.13], [0.47, 0.12], [0.50, 0.28], [0.53, 0.45], [0.56, 0.62], [0.55, 0.78], [0.51, 0.80], [0.49, 0.62], [0.46, 0.45], [0.43, 0.28], [0.41, 0.16]], land);
+  // Long Island: Brooklyn and Queens (right).
+  landPoly([[0.60, 0.22], [1, 0.18], [1, 1], [0.66, 1], [0.60, 0.80], [0.58, 0.55], [0.58, 0.35]], land);
+  // Staten Island (bottom left).
+  landPoly([[0.10, 0.72], [0.30, 0.70], [0.34, 0.82], [0.30, 0.98], [0.12, 1], [0.06, 0.85]], land2);
+  // Manhattan street grid: cross streets and two avenues along the island.
+  const manW = y => 0.415 + (y - 0.13) * 0.13;
+  const manE = y => 0.475 + (y - 0.13) * 0.12;
+  ctx.strokeStyle = streetCol; ctx.lineWidth = 1;
+  for (const y of [0.20, 0.30, 0.40, 0.50, 0.60, 0.70]) {
+    ctx.beginPath(); ctx.moveTo(manW(y) * W, y * H); ctx.lineTo(manE(y) * W, y * H); ctx.stroke();
+  }
+  for (const f of [0.33, 0.66]) {
+    ctx.beginPath();
+    for (let y = 0.15; y <= 0.78; y += 0.09) {
+      const x = (manW(y) + f * (manE(y) - manW(y))) * W;
+      if (y === 0.15) ctx.moveTo(x, y * H); else ctx.lineTo(x, y * H);
+    }
+    ctx.stroke();
+  }
+  // Borough and river names, faint.
+  ctx.fillStyle = faintCol; ctx.font = 'bold 11px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('U P S T A T E', 0.5 * W, 0.05 * H);
+  ctx.fillText('NEW JERSEY', 0.13 * W, 0.45 * H);
+  ctx.fillText('QUEENS', 0.80 * W, 0.30 * H);
+  ctx.fillText('BROOKLYN', 0.78 * W, 0.72 * H);
+  ctx.fillText('LONG ISLAND', 0.88 * W, 0.55 * H);
+  ctx.fillText('STATEN ISLAND', 0.20 * W, 0.86 * H);
+  ctx.save(); ctx.translate(0.36 * W, 0.45 * H); ctx.rotate(-Math.PI / 2); ctx.fillText('HUDSON RIVER', 0, 0); ctx.restore();
+  ctx.save(); ctx.translate(0.585 * W, 0.45 * H); ctx.rotate(-Math.PI / 2); ctx.fillText('EAST RIVER', 0, 0); ctx.restore();
+  ctx.save(); ctx.translate(0.49 * W, 0.45 * H); ctx.rotate(Math.PI / 2 - 0.13); ctx.fillText('MANHATTAN', 0, 0); ctx.restore();
+  // Verrazzano Bridge across the Narrows, Staten Island to Brooklyn.
+  ctx.strokeStyle = light ? '#8a97a3' : '#5a6a75'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(0.33 * W, 0.82 * H); ctx.lineTo(0.61 * W, 0.86 * H); ctx.stroke();
+  ctx.strokeStyle = light ? '#5a6a75' : '#8a97a3'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0.40 * W, 0.825 * H); ctx.lineTo(0.40 * W, 0.845 * H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0.53 * W, 0.845 * H); ctx.lineTo(0.53 * W, 0.865 * H); ctx.stroke();
+  ctx.fillStyle = faintCol; ctx.font = '10px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('VERRAZZANO BRIDGE', 0.47 * W, 0.93 * H);
+  // LIVE badge and compass.
+  ctx.fillStyle = '#2e7a4a'; ctx.beginPath(); ctx.arc(14, 14, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = textCol; ctx.font = 'bold 11px Arial'; ctx.textAlign = 'left';
+  ctx.fillText('LIVE', 24, 18);
+  ctx.fillStyle = textCol; ctx.font = 'bold 13px Arial'; ctx.textAlign = 'right';
+  ctx.fillText('N', W - 12, 20);
+  ctx.strokeStyle = textCol; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(W - 12, 24); ctx.lineTo(W - 12, 36); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W - 12, 24); ctx.lineTo(W - 16, 30); ctx.lineTo(W - 8, 30); ctx.closePath(); ctx.fill();
+  const from = TRAVEL_PLACES[fromKey], to = toKey ? TRAVEL_PLACES[toKey] : null;
+  // Route: a navigation route - solid line with a casing, bending
+  // through the streets, with an arrowhead at the destination end.
+  if (to) {
+    const fx = from.x * W, fy = from.y * H, tx = to.x * W, ty = to.y * H;
+    const mx = (fx + tx) / 2, my = (fy + ty) / 2;
+    const dx = tx - fx, dy = ty - fy, len = Math.hypot(dx, dy) || 1;
+    const bend = Math.min(40, len * 0.18);
+    const bx = mx - dy / len * bend, by = my + dx / len * bend;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = light ? '#ffffff' : '#0d141b'; ctx.lineWidth = 7;
+    ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
+    const ang = Math.atan2(ty - by, tx - bx);
+    ctx.fillStyle = '#ffd166';
+    ctx.beginPath(); ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - Math.cos(ang - 0.4) * 12, ty - Math.sin(ang - 0.4) * 12);
+    ctx.lineTo(tx - Math.cos(ang + 0.4) * 12, ty - Math.sin(ang + 0.4) * 12);
+    ctx.closePath(); ctx.fill();
+  }
+  // All places, spread across the real city. Landmarks (Zama HQ and the
+  // Court) are diamonds; the rest are circles. The description shows
+  // only for the place you are at and the one you picked, so the labels
+  // never pile up in Midtown.
   for (const [key, p] of Object.entries(TRAVEL_PLACES)) {
     const x = p.x * W, y = p.y * H;
     const isFrom = key === fromKey, isTo = key === toKey;
     const st = placeStatus(key);
-    ctx.fillStyle = isTo ? '#ffd166' : isFrom ? '#7fb0ff' : st === 'next' ? '#ffd166' : st === 'done' ? '#3a4a58' : st === 'locked' ? '#2a3540' : '#5a6a75';
-    ctx.beginPath(); ctx.arc(x, y, isTo ? 11 : 8, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = mode === 'day' ? '#1a2a38' : mode === 'dusk' ? '#241a2e' : '#0d141b';
-    ctx.beginPath(); ctx.arc(x, y, isTo ? 5 : 3.5, 0, Math.PI * 2); ctx.fill();
-    // Labels flip to the left near the right edge so they stay on the map.
+    const col = isTo ? '#ffd166' : isFrom ? '#2e6fb0' : st === 'next' ? '#ffd166' : st === 'done' ? '#3a4a58' : st === 'locked' ? '#2a3540' : '#5a6a75';
+    ctx.fillStyle = col;
+    if (p.landmark) {
+      const r = isTo ? 11 : 8;
+      ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(x, y, isTo ? 10 : 7, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.strokeStyle = light ? '#ffffff' : '#0d141b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, isTo ? 13 : 10, 0, Math.PI * 2); ctx.stroke();
     const flip = p.x > 0.72;
-    ctx.fillStyle = '#e8eef2'; ctx.font = 'bold 15px Arial'; ctx.textAlign = flip ? 'right' : 'left';
+    ctx.fillStyle = textCol; ctx.font = 'bold 14px Arial'; ctx.textAlign = flip ? 'right' : 'left';
     ctx.fillText(p.short, flip ? x - 14 : x + 14, y + 5);
-    ctx.fillStyle = '#8a97a3'; ctx.font = '12px Arial';
-    ctx.fillText(p.desc, flip ? x - 14 : x + 14, y + 21);
+    if (isFrom || isTo) {
+      ctx.fillStyle = subCol; ctx.font = '11px Arial';
+      ctx.fillText(p.desc, flip ? x - 14 : x + 14, y + 20);
+    }
   }
   // Pulsing ring on the destination.
   if (to) {
@@ -1377,7 +1524,7 @@ export function openCityMap(fromKey, preselectKey) {
       + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;">CITY MAP - New York</div>'
       + '<div id="travelRoute" style="color:#ffd166;margin:6px 0 10px;font-size:15px;"></div>'
       + '<canvas id="travelCanvas" width="600" height="340" style="width:100%;border-radius:8px;display:block;cursor:pointer;"></canvas>'
-      + '<div id="travelHint" style="color:#9fb8c8;font-size:12px;margin-top:8px;">Click a place on the map, then Drive. Gold = your next mission. The map shows the real miles - far places take a longer drive. The bridge leg is a trek on foot - no car, walk the busy street.</div>'
+      + '<div id="travelHint" style="color:#9fb8c8;font-size:12px;margin-top:8px;">Live map of New York City - click a place, then Drive. Gold = your next mission. The bridge leg is a trek on foot - no car, walk the busy street. The wind tunnel lab is up in Morningside Heights, the symposium hall is in Astoria, and the NYC Court sits by Zama HQ in SoHo.</div>'
       + '<div style="display:flex;gap:10px;margin-top:14px;">'
       + '<button id="travelDriveBtn" type="button" style="flex:1;padding:12px;font-size:16px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:8px;cursor:pointer;"></button>'
       + '<button id="travelSkipBtn" type="button" style="padding:12px 18px;font-size:15px;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;cursor:pointer;">Skip drive</button>'
@@ -1456,10 +1603,41 @@ function refreshMapUI() {
     } else skipBtn.style.display = 'none';
   }
 }
+const LANDMARK_INFO = {
+  zama: { title: 'Zama HQ - SoHo, Manhattan', body: 'The home of confidential computing. This is where the sealed choices in this game are encrypted - your Act I and Act III choices are locked on-chain with Zama FHE, and only you can reveal them. The NYC Court is right next door, one mile away.' },
+  court: { title: 'NYC Court - Foley Square', body: 'This is where Act III takes you. The trial, the verdict, and the choice that decides the ending - right by Zama HQ, in the heart of lower Manhattan.' }
+};
+let landmarkEl = null;
+function showLandmarkCard(key) {
+  const info = LANDMARK_INFO[key] || { title: TRAVEL_PLACES[key].name, body: TRAVEL_PLACES[key].desc };
+  if (!landmarkEl) {
+    landmarkEl = document.createElement('div');
+    landmarkEl.id = 'landmarkCard';
+    landmarkEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,8,12,0.88);z-index:60;';
+    document.body.appendChild(landmarkEl);
+  }
+  landmarkEl.innerHTML = '<div style="width:min(520px,92vw);background:#101820;border:1px solid #2a3540;border-radius:12px;padding:20px 22px;color:#e8eef2;font-family:Arial,sans-serif;">'
+    + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;color:#ffd166;">' + info.title + '</div>'
+    + '<div style="margin:12px 0 16px;font-size:15px;line-height:1.5;color:#c8d4dc;">' + info.body + '</div>'
+    + '<button id="landmarkBackBtn" type="button" style="padding:12px 20px;font-size:15px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:8px;cursor:pointer;">Back to map</button>'
+    + '</div>';
+  landmarkEl.style.display = 'flex';
+  document.getElementById('landmarkBackBtn').onclick = () => {
+    landmarkEl.style.display = 'none';
+    openCityMap(key);
+  };
+}
 // What happens when the drive arrives at a place.
 function arriveAt(key) {
   const p = TRAVEL_PLACES[key];
   if (!p) return () => restoreMissionScene();
+  if (p.landmark) {
+    // Zama HQ and the NYC Court are landmarks on the live map: driving
+    // there shows a card about the place, then back to the map. The
+    // court is where Act III takes you; Zama HQ is where the sealed
+    // choices in this game are encrypted.
+    return () => { currentPlaceKey = key; showLandmarkCard(key); };
+  }
   if (p.type === 'mission') {
     if (pendingMission && pendingMission.key === key) {
       const fn = pendingMission.fn; pendingMission = null;
@@ -1521,6 +1699,49 @@ function showDriveHood() {
   driveHoodEl.style.display = 'block';
 }
 function hideDriveHood() { if (driveHoodEl) driveHoodEl.style.display = 'none'; }
+// Switch the driving camera between the chase view (third-person, see
+// yourself driving) and the in-car view (from the driver's seat, the
+// steering wheel in front of you). The hood overlay only shows in the
+// chase view; in-car you see the real hood.
+function toggleDriveView() {
+  driveView = driveView === 'chase' ? 'incar' : 'chase';
+  const b = document.getElementById('driveViewBtn');
+  if (b) b.textContent = driveView === 'chase' ? 'View: 3rd person (C)' : 'View: In-car (C)';
+  if (driveView === 'incar') hideDriveHood(); else if (travelActive) showDriveHood();
+}
+// On-screen drive controls: GAS and BRAKE pedals (hold), a View button
+// and a Skip button. The pedals sit bottom-right, clear of the W/A/S/D
+// pad on the left and the zoom buttons.
+function showDriveControls() {
+  if (!driveControlsEl) {
+    driveControlsEl = document.createElement('div');
+    driveControlsEl.id = 'driveControls';
+    driveControlsEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:55;';
+    driveControlsEl.innerHTML =
+      '<button id="driveGasBtn" type="button" style="position:absolute;right:18px;bottom:170px;width:96px;height:96px;border-radius:50%;background:#2e7a4a;color:#fff;font-size:15px;font-weight:bold;border:3px solid #4a9a6a;pointer-events:auto;touch-action:none;">GAS</button>'
+      + '<button id="driveBrakeBtn" type="button" style="position:absolute;right:132px;bottom:180px;width:80px;height:80px;border-radius:50%;background:#8a2a2a;color:#fff;font-size:14px;font-weight:bold;border:3px solid #b04a4a;pointer-events:auto;touch-action:none;">BRAKE</button>'
+      + '<button id="driveViewBtn" type="button" style="position:absolute;right:18px;top:120px;padding:10px 14px;font-size:14px;font-weight:bold;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;pointer-events:auto;">View: 3rd person (C)</button>'
+      + '<button id="driveSkipBtn" type="button" style="position:absolute;right:18px;top:64px;padding:10px 14px;font-size:14px;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;pointer-events:auto;">Skip drive</button>';
+    document.body.appendChild(driveControlsEl);
+    const hold = (el, on, off) => {
+      el.addEventListener('pointerdown', (ev) => { ev.preventDefault(); on(); });
+      el.addEventListener('pointerup', () => off());
+      el.addEventListener('pointerleave', () => off());
+      el.addEventListener('pointercancel', () => off());
+    };
+    hold(document.getElementById('driveGasBtn'), () => { drivePedalGas = true; }, () => { drivePedalGas = false; });
+    hold(document.getElementById('driveBrakeBtn'), () => { drivePedalBrake = true; }, () => { drivePedalBrake = false; });
+    document.getElementById('driveViewBtn').onclick = () => toggleDriveView();
+    document.getElementById('driveSkipBtn').onclick = () => { if (travelActive) endTravelDrive(); };
+  }
+  driveControlsEl.style.display = 'block';
+  const vb = document.getElementById('driveViewBtn');
+  if (vb) vb.textContent = 'View: 3rd person (C)';
+}
+function hideDriveControls() {
+  if (driveControlsEl) driveControlsEl.style.display = 'none';
+  drivePedalGas = false; drivePedalBrake = false;
+}
 
 // The drive itself: hide the missions, show the road, and drive the
 // camera forward through the city in the player's own car. The banner
@@ -1535,7 +1756,9 @@ function startTravelDrive(toKey, onArrive) {
   travelT = 0; travelOnArrive = onArrive; travelToKey = toKey;
   travelMiles = getMiles(mapFromKey, toKey);
   travelLastMilesShown = -1;
-  travelDur = Math.min(21, Math.max(10, 8 + travelMiles * 0.15));
+  // The drive takes longer for a far place, so the distance feels real:
+  // the 85-mile Reservoir to Substation leg is 60 seconds at full speed.
+  travelDur = Math.min(60, Math.max(12, Math.round(travelMiles / 85 * 60)));
   // The drive matches the time of the mission being driven to.
   if (to.type === 'mission') setTimeOfDay(MISSION_TIME[to.mission]);
   // The player's own car, in the equipped colour, with the driver (the
@@ -1578,10 +1801,26 @@ function startTravelDrive(toKey, onArrive) {
   state.yaw = 0; state.pitch = 0;
   showDriveHood();
   updateDriveBanner();
-  const skip = () => { if (travelActive) endTravelDrive(); };
-  travelGroup.userData.skip = skip;
-  canvas.addEventListener('pointerdown', skip, { once: true });
-  addEventListener('keydown', skip, { once: true });
+  // Drive controls: no more "any key skips" - the drive is driven now.
+  // W or D is gas, S is brake, C switches the camera view, Escape (or
+  // the Skip button) arrives at once. The on-screen GAS and BRAKE pedals
+  // do the same on touch.
+  driveSpeed = DRIVE_CREEP_SPEED; driveView = 'chase';
+  driveKeys.w = driveKeys.a = driveKeys.s = driveKeys.d = false;
+  driveKeyHandler = (e) => {
+    if (!travelActive) return;
+    const k = (e.key || '').toLowerCase();
+    if (k === 'escape') { endTravelDrive(); return; }
+    if (k === 'c') { toggleDriveView(); return; }
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd') driveKeys[k] = true;
+  };
+  driveKeyUpHandler = (e) => {
+    const k = (e.key || '').toLowerCase();
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd') driveKeys[k] = false;
+  };
+  addEventListener('keydown', driveKeyHandler);
+  addEventListener('keyup', driveKeyUpHandler);
+  showDriveControls();
 }
 function updateDriveBanner() {
   const to = TRAVEL_PLACES[travelToKey];
@@ -1590,7 +1829,7 @@ function updateDriveBanner() {
   const left = Math.max(0, Math.round(travelMiles * (1 - travelT / travelDur)));
   if (left === travelLastMilesShown) return;
   travelLastMilesShown = left;
-  showActionBanner('Driving your ' + car.name + ' to ' + to.name + ' - ' + left + ' miles to go. (Click or press any key to skip)');
+  showActionBanner('Driving your ' + car.name + ' to ' + to.name + ' - ' + left + ' miles to go. Hold W or D to drive, S to brake, C to switch view, Esc or Skip to arrive.');
 }
 function endTravelDrive() {
   if (!travelActive) return;
@@ -1598,6 +1837,10 @@ function endTravelDrive() {
   if (travelGroup) travelGroup.visible = false;
   hideDriveHood();
   hideActionBanner();
+  hideDriveControls();
+  if (driveKeyHandler) { try { removeEventListener('keydown', driveKeyHandler); } catch (e) { /* ignore */ } driveKeyHandler = null; }
+  if (driveKeyUpHandler) { try { removeEventListener('keyup', driveKeyUpHandler); } catch (e) { /* ignore */ } driveKeyUpHandler = null; }
+  driveView = 'chase'; driveSpeed = 0;
   // The driver (player avatar) gets out of the car: put him back on
   // his feet, at full size, and detach him from the car so the next
   // scene's presence hook can place him at the player position. The
@@ -1621,19 +1864,34 @@ function endTravelDrive() {
 function updateTravelDrive(dt, t) {
   if (!travelActive) return;
   travelT += dt;
-  // The player's car drives forward at ~12 m/s; the road is 320 long
-  // and the longest drive is 21 s (252 m), so the car stays on the road.
-  // The camera follows the car from behind and above (a third-person
-  // driving view), so the player sees himself driving. The camera
-  // distance follows the zoom setting, so the player can pull in close
-  // to the car or back out for a wider view of the road.
+  // The player drives: gas (W or D, or the GAS pedal) speeds the car up
+  // toward 12 m/s, brake (S, or the BRAKE pedal) slows it to a stop, and
+  // letting go settles back to a 3 m/s creep, so the drive always
+  // finishes. The road is 720 m long and the longest drive is 60 s, so
+  // at full speed the car reaches the end just as the drive ends.
+  const gas = driveKeys['w'] || driveKeys['d'] || drivePedalGas;
+  const brake = driveKeys['s'] || drivePedalBrake;
+  if (gas) driveSpeed = Math.min(DRIVE_MAX_SPEED, driveSpeed + 6 * dt);
+  else if (brake) driveSpeed = Math.max(0, driveSpeed - 10 * dt);
+  else if (driveSpeed > DRIVE_CREEP_SPEED) driveSpeed = Math.max(DRIVE_CREEP_SPEED, driveSpeed - 4 * dt);
+  else if (driveSpeed < DRIVE_CREEP_SPEED) driveSpeed = Math.min(DRIVE_CREEP_SPEED, driveSpeed + 4 * dt);
   const zoomDist = getZoom();
   if (driveCar) {
-    driveCar.position.z -= 12 * dt;
-    camera.position.set(0, 1.7 + zoomDist * 0.35 + Math.sin(t * 6) * 0.02, driveCar.position.z + zoomDist + 1.5);
-    camera.lookAt(0, 1.0, driveCar.position.z - 8);
+    driveCar.position.z = Math.max(-DRIVE_ROAD_LEN + 10, driveCar.position.z - driveSpeed * dt);
+    if (driveView === 'incar' && driveCar.userData.headPos) {
+      // In-car view: from the driver's seat, over the steering wheel,
+      // looking down the road through the windscreen.
+      const head = driveCar.localToWorld(driveCar.userData.headPos.clone());
+      camera.position.set(head.x, head.y + Math.sin(t * 6) * 0.01, head.z);
+      camera.lookAt(head.x, 1.0, head.z - 20);
+    } else {
+      // Chase view: behind and above the car, so the player sees himself
+      // driving. The camera distance follows the zoom setting.
+      camera.position.set(0, 1.7 + zoomDist * 0.35 + Math.sin(t * 6) * 0.02, driveCar.position.z + zoomDist + 1.5);
+      camera.lookAt(0, 1.0, driveCar.position.z - 8);
+    }
   } else {
-    camera.position.z -= 12 * dt;
+    camera.position.z -= driveSpeed * dt;
     camera.position.x = 0;
     camera.position.y = 1.7 + Math.sin(t * 6) * 0.02;
     camera.rotation.order = 'YXZ';
@@ -1644,8 +1902,8 @@ function updateTravelDrive(dt, t) {
   // walk the sidewalks in both directions as the car drives past.
   for (const c of travelCars) {
     c.group.position.z += c.speed * dt;
-    if (c.group.position.z > 10) c.group.position.z = -310;
-    if (c.group.position.z < -320) c.group.position.z = 0;
+    if (c.group.position.z > 10) c.group.position.z = -710;
+    if (c.group.position.z < -720) c.group.position.z = 0;
   }
   for (const p of travelPedestrians) updatePedestrian(p, dt);
   updateDriveBanner();

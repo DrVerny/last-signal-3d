@@ -1,34 +1,37 @@
-// THE LAST SIGNAL - in-game economy: money, the store, clothes, cars, accessories.
-// No wallet, no real money: this is play money earned by finishing missions.
+// THE LAST SIGNAL - in-game economy: ZAMA, the store, clothes, cars, accessories.
+// No wallet, no real money: ZAMA here is play money earned by finishing missions.
 // It persists in localStorage so it survives reloads. Demo mode works with
 // no wallet connected - the store and the money are purely in-game.
 
-// Mission payouts. They vary per mission and total exactly $100,000.
-export const PAYOUTS = { act1: 8000, act2m1: 12000, act2m2: 18000, act2m3: 22000, act3: 40000 };
+// Mission payouts. The story missions total exactly 1,000,000 ZAMA.
+// The two side missions (wind tunnel lab, symposium hall) add 5,000
+// ZAMA each, so the earnable total is 1,010,000 ZAMA.
+export const PAYOUTS = { act1: 80000, act2m1: 120000, act2m2: 180000, act2m3: 220000, act3: 400000, windtunnel: 5000, symposium: 5000 };
 export const PAYOUT_LABELS = {
   act1: 'Act I complete', act2m1: 'Mission 1 complete', act2m2: 'Mission 2 complete',
-  act2m3: 'Mission 3 complete', act3: 'Act III complete'
+  act2m3: 'Mission 3 complete', act3: 'Act III complete',
+  windtunnel: 'Wind tunnel lab mission', symposium: 'Symposium hall mission'
 };
 
 export const STORE_ITEMS = {
   clothes: [
-    { id: 'tee', name: 'Casual Tee', price: 1200, color: '#9aa5ad', desc: 'Everyday grey tee' },
-    { id: 'hoodie', name: 'Street Hoodie', price: 2500, color: '#c0392b', desc: 'Red hoodie, street style' },
-    { id: 'vest', name: 'Tactical Vest', price: 5000, color: '#4a7c59', desc: 'Green tactical vest' },
-    { id: 'leather', name: 'Leather Jacket', price: 6500, color: '#6b4226', desc: 'Brown leather jacket' },
-    { id: 'suit', name: 'Sharp Suit', price: 8000, color: '#1a1a1a', desc: 'Black sharp suit' }
+    { id: 'tee', name: 'Casual Tee', price: 12000, color: '#9aa5ad', desc: 'Everyday grey tee' },
+    { id: 'hoodie', name: 'Street Hoodie', price: 25000, color: '#c0392b', desc: 'Red hoodie, street style' },
+    { id: 'vest', name: 'Tactical Vest', price: 50000, color: '#4a7c59', desc: 'Green tactical vest' },
+    { id: 'leather', name: 'Leather Jacket', price: 65000, color: '#6b4226', desc: 'Brown leather jacket' },
+    { id: 'suit', name: 'Sharp Suit', price: 80000, color: '#1a1a1a', desc: 'Black sharp suit' }
   ],
   cars: [
     { id: 'sedan', name: 'City Sedan', price: 0, color: '#9aa5ad', desc: 'Reliable city sedan' },
-    { id: 'coupe', name: 'Sports Coupe', price: 22000, color: '#c0392b', desc: 'Fast red coupe' },
-    { id: 'bmw-m4', name: 'BMW M4', price: 28000, color: '#2e6fb0', desc: 'Blue BMW M4' },
-    { id: 'bmw-x5', name: 'BMW X5', price: 35000, color: '#1a1a1a', desc: 'Black BMW X5' }
+    { id: 'coupe', name: 'Sports Coupe', price: 50000, color: '#c0392b', desc: 'Fast red coupe' },
+    { id: 'bmw-m4', name: 'BMW M4', price: 100000, color: '#2e6fb0', desc: 'Blue BMW M4' },
+    { id: 'bmw-x5', name: 'BMW X5', price: 150000, color: '#1a1a1a', desc: 'Black BMW X5' }
   ],
   accessories: [
-    { id: 'cap', name: 'Cap', price: 800, color: '#2e4a6b', desc: 'A cap, worn forward' },
-    { id: 'sunglasses', name: 'Sunglasses', price: 1500, color: '#111111', desc: 'Dark shades' },
-    { id: 'watch', name: 'Watch', price: 2000, color: '#d8b13a', desc: 'A gold watch' },
-    { id: 'chain', name: 'Gold Chain', price: 3000, color: '#ffd166', desc: 'A gold chain' }
+    { id: 'cap', name: 'Cap', price: 8000, color: '#2e4a6b', desc: 'A cap, worn forward' },
+    { id: 'sunglasses', name: 'Sunglasses', price: 15000, color: '#111111', desc: 'Dark shades' },
+    { id: 'watch', name: 'Watch', price: 20000, color: '#d8b13a', desc: 'A gold watch' },
+    { id: 'chain', name: 'Gold Chain', price: 30000, color: '#ffd166', desc: 'A gold chain' }
   ]
 };
 export const ITEM_BY_ID = {};
@@ -44,9 +47,39 @@ function readJSON(key, fallback) {
 }
 function writeJSON(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* private mode */ } }
 
-export function moneyFmt(n) { return '$' + Number(n || 0).toLocaleString('en-US'); }
+// The Zama logo as an inline SVG: a dark Z on a gold rounded square, matching
+// the gold HUD style. Inline only - no external image, no CDN.
+export const ZAMA_LOGO_SVG = '<svg class="zama-coin" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="22" height="22" rx="6" fill="#ffd166"/><path d="M6 6.5H18V9l-6.1 6H18v2.5H6V15l6.1-6H6z" fill="#1a1a1a"/></svg>';
+export function moneyFmt(n) { return Number(n || 0).toLocaleString('en-US') + ' ZAMA'; }
+export function moneyHTML(n) { return ZAMA_LOGO_SVG + '<span class="zama-amt">' + moneyFmt(n) + '</span>'; }
+
+// A fresh player starts with 10 ZAMA. The balance is only written to storage
+// once the player earns or spends; until then getBalance() returns the
+// starting 10, so a fresh start (including ?fresh) always begins at 10 ZAMA.
+const START_BALANCE = 10;
 export function getBalance() {
-  try { return Number(localStorage.getItem(MONEY_KEY) || '0') || 0; } catch (e) { return 0; }
+  try {
+    const raw = localStorage.getItem(MONEY_KEY);
+    if (raw === null || raw === undefined) return START_BALANCE;
+    return Number(raw) || 0;
+  } catch (e) { return START_BALANCE; }
+}
+
+// One-time migration from the old USD saves: an existing balance in dollars
+// is converted to ZAMA at x10, once only, guarded by the flag below. A fresh
+// player has no saved balance, so there is nothing to convert - they start
+// at 10 ZAMA via getBalance().
+const CURRENCY_KEY = 'lastSignalCurrencyZama';
+export function migrateCurrency() {
+  try {
+    if (localStorage.getItem(CURRENCY_KEY)) return;
+    const raw = localStorage.getItem(MONEY_KEY);
+    if (raw !== null && raw !== undefined && raw !== '') {
+      const usd = Number(raw) || 0;
+      localStorage.setItem(MONEY_KEY, String(Math.max(0, Math.floor(usd * 10))));
+    }
+    localStorage.setItem(CURRENCY_KEY, '1');
+  } catch (e) { /* private mode - migration skipped, balance stays as-is */ }
 }
 function setBalance(n) { try { localStorage.setItem(MONEY_KEY, String(Math.max(0, Math.floor(n)))); } catch (e) { /* ignore */ } updateWalletHUD(); }
 export function addMoney(n) { setBalance(getBalance() + n); }
@@ -54,17 +87,19 @@ function spendMoney(n) { if (getBalance() < n) return false; setBalance(getBalan
 
 export function updateWalletHUD() {
   const el = document.getElementById('walletBal');
-  if (el) el.textContent = moneyFmt(getBalance());
+  if (el) el.innerHTML = moneyHTML(getBalance());
   const sb = document.getElementById('storeBalance');
-  if (sb) sb.textContent = 'Balance: ' + moneyFmt(getBalance());
+  if (sb) sb.innerHTML = 'Balance: ' + moneyHTML(getBalance());
 }
 
 // A gold toast on the shared #toast element, like the acts use.
+// Messages are built inside this file only, so innerHTML is safe here and
+// lets the Zama logo show in payout toasts.
 let payToastTimer = 0;
 export function showPayToast(msg) {
   const t = document.getElementById('toast');
   if (!t) return;
-  t.textContent = msg;
+  t.innerHTML = msg;
   t.style.opacity = '1';
   if (payToastTimer) clearTimeout(payToastTimer);
   payToastTimer = setTimeout(() => { t.style.opacity = '0'; }, 4000);
@@ -79,13 +114,13 @@ export function grantPayout(missionId, quiet) {
   paid.push(missionId);
   writeJSON(PAID_KEY, paid);
   addMoney(amount);
-  if (!quiet) showPayToast('Mission pay: +' + moneyFmt(amount) + ' - ' + (PAYOUT_LABELS[missionId] || missionId));
+  if (!quiet) showPayToast('Mission pay: +' + moneyHTML(amount) + ' - ' + (PAYOUT_LABELS[missionId] || missionId));
   return true;
 }
 
 // The player has already finished Act I and Act II Mission 1, so when the
 // economy first loads it grants the payouts for missions already done,
-// using the saves that exist. That gives $20,000 right away (Act I +
+// using the saves that exist. That gives 200,000 ZAMA right away (Act I +
 // Mission 1), so the store is usable immediately.
 export function grantRetroactivePayouts() {
   let total = 0;
@@ -96,7 +131,7 @@ export function grantRetroactivePayouts() {
   if ((mission >= 3 || has('lastSignalAct2')) && grantPayout('act2m2', true)) total += PAYOUTS.act2m2;
   if (has('lastSignalAct2') && grantPayout('act2m3', true)) total += PAYOUTS.act2m3;
   if (has('lastSignalAct3') && grantPayout('act3', true)) total += PAYOUTS.act3;
-  if (total > 0) showPayToast('Welcome back pay: +' + moneyFmt(total) + ' for missions already finished. Your balance: ' + moneyFmt(getBalance()));
+  if (total > 0) showPayToast('Welcome back pay: +' + moneyHTML(total) + ' for missions already finished. Your balance: ' + moneyHTML(getBalance()));
   return total;
 }
 
@@ -124,9 +159,9 @@ function buyItem(id) {
   const item = ITEM_BY_ID[id];
   if (!item) return false;
   if (isOwned(id)) return false;
-  if (!spendMoney(item.price)) { storeMsg('Not enough money - ' + item.name + ' costs ' + moneyFmt(item.price) + ', you have ' + moneyFmt(getBalance()) + '. Finish a mission to earn more.'); return false; }
+  if (!spendMoney(item.price)) { storeMsg('Not enough ZAMA - ' + item.name + ' costs ' + moneyHTML(item.price) + ', you have ' + moneyHTML(getBalance()) + '. Finish a mission to earn more.'); return false; }
   const owned = getOwned(); owned.push(id); writeJSON(OWNED_KEY, owned);
-  storeMsg('Bought ' + item.name + ' for ' + moneyFmt(item.price) + '.');
+  storeMsg('Bought ' + item.name + ' for ' + moneyHTML(item.price) + '.');
   return true;
 }
 function equipItem(id) {
@@ -284,7 +319,7 @@ let storeBuilt = false;
 
 function storeMsg(msg) {
   const el = document.getElementById('storeMsg');
-  if (el) el.textContent = msg || '';
+  if (el) el.innerHTML = msg || '';
 }
 function renderStoreItems() {
   const box = document.getElementById('storeItems');
@@ -300,11 +335,11 @@ function renderStoreItems() {
     const swatch = storeTab === 'cars' ? '' : '<span class="store-swatch" style="background:' + it.color + '"></span>';
     card.innerHTML = '<div class="store-item-name">' + swatch + it.name + '</div>'
       + '<div class="store-item-desc">' + it.desc + '</div>'
-      + '<div class="store-item-price">' + (it.price === 0 ? 'Free' : moneyFmt(it.price)) + '</div>';
+      + '<div class="store-item-price">' + (it.price === 0 ? 'Free' : moneyHTML(it.price)) + '</div>';
     const btn = document.createElement('button');
     btn.type = 'button';
     if (!owned) {
-      btn.textContent = 'Buy ' + (it.price === 0 ? 'Free' : moneyFmt(it.price));
+      btn.innerHTML = 'Buy ' + (it.price === 0 ? 'Free' : moneyHTML(it.price));
       btn.onclick = () => { if (buyItem(it.id)) { renderStoreItems(); drawPreview(); updateWalletHUD(); } else { renderStoreItems(); } };
     } else if (storeTab === 'accessories') {
       btn.textContent = isEq ? 'Unequip' : 'Wear';
@@ -372,6 +407,7 @@ export function isStoreOpen() {
 // Wire the HUD Store button and the B key. Called once from acts.js on boot.
 export function initEconomy() {
   buildStore();
+  migrateCurrency();
   updateWalletHUD();
   grantRetroactivePayouts();
   const btn = document.getElementById('storeBtn');
