@@ -81,13 +81,43 @@ function voiceProfileFor(who) {
   return VOICE_PROFILES[key] || VOICE_PROFILES[key.replace(/[0-9]+$/, '')] || DEFAULT_VOICE;
 }
 
+// Estimated reading time for a line, in ms: about 180 ms per word, at
+// least 1200 ms so a short line can still be read, at most 9000 ms so a
+// long line never holds the dialogue open for too long.
+export function readingTimeMs(text) {
+  const words = String(text || '').split(/\s+/).filter(Boolean).length;
+  if (!words) return 600;
+  return Math.max(1200, Math.min(9000, words * 180));
+}
+
 // Speak one dialogue line in the speaking character's voice, and start
 // their speaking gesture. The gesture runs even when the voice is muted or
 // unavailable, because it is tied to the line being shown, not the audio.
-export function speakLine(who, text) {
+// onDone (optional) fires exactly once when the line is finished: from the
+// utterance onend (or onerror, so a failed voice does not stall the game)
+// when speech plays, or after a reading-time delay when speech is muted
+// or unavailable. A safety timer fires it too if the browser never fires
+// onend, so the dialogue can never stall on a silent line.
+export function speakLine(who, text, onDone) {
+  let doneCalled = false;
+  let safetyTimer = null;
+  const done = () => {
+    if (doneCalled) return;
+    doneCalled = true;
+    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+    if (typeof onDone === 'function') {
+      try { onDone(); } catch (e) { /* callback must never break speech */ }
+    }
+  };
   try { setSpeakingCharacter(who); } catch (e) { /* gesture is best effort */ }
-  if (muted || !text) return;
-  if (!isSpeechAvailable()) return;
+  if (muted || !text) {
+    setTimeout(done, readingTimeMs(text));
+    return;
+  }
+  if (!isSpeechAvailable()) {
+    setTimeout(done, readingTimeMs(text));
+    return;
+  }
   try {
     const synth = window.speechSynthesis;
     if (synth.speaking || synth.pending) synth.cancel();
@@ -98,9 +128,12 @@ export function speakLine(who, text) {
     u.volume = 1;
     const voice = pickVoice(profile);
     if (voice) u.voice = voice;
+    u.onend = done;
+    u.onerror = done;
+    safetyTimer = setTimeout(done, Math.max(readingTimeMs(text) * 2, 15000));
     synth.resume();
     synth.speak(u);
-  } catch (e) { /* speech must never break the game */ }
+  } catch (e) { /* speech must never break the game */ done(); }
 }
 
 function stopAudio() {

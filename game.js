@@ -72,7 +72,15 @@ function trust(n, why) { state.trust = Math.max(0, Math.min(10, state.trust + n)
 function integrity(key, n) { state.integrity[key] = Math.max(0, Math.min(100, state.integrity[key] + n)); updateHUD(); }
 
 // ---------- Dialogue ----------
+// Dialogue advances by itself: a plain line moves on once it has been
+// spoken (or read, when the voice is muted or unavailable), after a short
+// pause. Choice lines still wait for the player to pick an option. The
+// Continue button stays as a skip: clicking it calls nextLine(), which
+// cancels any pending auto-advance below, so the game never
+// double-advances.
 let dlgQueue = [], dlgCb = null;
+let dlgToken = 0; // invalidates a pending auto-advance when a line is skipped, a choice is picked, or the dialogue closes
+let dlgTimer = null; // the pending auto-advance timer (the short pause after a line finishes)
 let dialogueActive = false; // source of truth for "a dialogue is open"; the walkers
 // pause while this is true. (Do not gate on the dialogue panel's CSS class:
 // the panel's class is managed in several places and is not a reliable signal.)
@@ -81,12 +89,16 @@ function showDialogue(lines, cb) {
   dlgQueue = lines.slice(); dlgCb = cb || null; dialogueActive = true; nextLine();
 }
 function nextLine() {
+  // Any pending auto-advance belongs to the line being left: cancel it.
+  // Skip, choice and auto-advance all funnel through here, so this one
+  // spot keeps the queue from ever advancing twice for one line.
+  dlgToken++;
+  if (dlgTimer) { clearTimeout(dlgTimer); dlgTimer = null; }
   const box = document.getElementById('dialogue');
   if (!dlgQueue.length) { box.classList.add('hidden'); dialogueActive = false; stopSpeaking(); if (dlgCb) { const f = dlgCb; dlgCb = null; f(); } return; }
   const line = dlgQueue.shift(); box.classList.remove('hidden');
   document.getElementById('dlgName').textContent = line.who;
   document.getElementById('dlgText').textContent = line.text;
-  speakLine(line.who, line.text);
   const ch = document.getElementById('dlgChoices'); ch.innerHTML = '';
   const next = document.getElementById('dlgNext');
   if (line.choices) {
@@ -96,7 +108,23 @@ function nextLine() {
       b.onclick = () => { if (c.effect) c.effect(); nextLine(); };
       ch.appendChild(b);
     });
-  } else { next.style.display = 'inline-block'; }
+    speakLine(line.who, line.text); // choice lines wait for the player, no auto-advance
+  } else {
+    next.style.display = 'inline-block';
+    // Plain line: move on by itself once spoken (or read), after a short
+    // natural pause. The token guard stops a late voice callback from
+    // advancing after the player already skipped ahead.
+    const myToken = dlgToken;
+    speakLine(line.who, line.text, () => {
+      if (myToken !== dlgToken) return;
+      if (dlgTimer) clearTimeout(dlgTimer);
+      dlgTimer = setTimeout(() => {
+        dlgTimer = null;
+        if (myToken !== dlgToken) return;
+        nextLine();
+      }, 500);
+    });
+  }
 }
 document.getElementById('dlgNext').onclick = nextLine;
 
@@ -1567,6 +1595,8 @@ export function resumeAct() {
 // in core.js is never disposed).
 export function stopAct() {
   actActive = false; dialogueActive = false; dlgQueue = []; dlgCb = null;
+  dlgToken++; // a pending auto-advance must not fire after the act stops
+  if (dlgTimer) { clearTimeout(dlgTimer); dlgTimer = null; }
   if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
   if (batteryInterval) { try { clearInterval(batteryInterval); } catch (e) { /* ignore */ } batteryInterval = 0; }
   try { stopSpeaking(); } catch (e) { /* ignore */ }

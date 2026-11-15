@@ -13,6 +13,7 @@ import { canvas, renderer, disposeScene } from './core.js';
 import { getBalance, moneyFmt } from './economy.js';
 import { makeCrowd, updatePedestrian } from './action.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar } from './player.js';
+import { readingTimeMs } from './speak.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
 let homeKind = null, homeOnLeave = null;
@@ -92,8 +93,40 @@ function stopRinging() {
   if (phoneGlow) phoneGlow.visible = false;
 }
 // The opening phone call: Jade calls with the reason for the first
-// mission. A small overlay with her lines and a Continue button.
+// mission. A small overlay with her lines. The lines advance by
+// themselves on a reading-time delay, so nobody has to click Continue;
+// the Continue button stays as a skip that jumps to the next line at once.
 let callEl = null;
+let callTimer = null; // pending auto-advance for the current call line
+let callToken = 0; // invalidates a pending auto-advance when the call is skipped or ends
+function endCall() {
+  if (callTimer) { clearTimeout(callTimer); callTimer = null; }
+  callToken++;
+  if (callEl) callEl.style.display = 'none';
+  homeCallDone = true;
+  showHomeBar(homeKind); // the "Go to the Train Terminal" button appears
+  showHomeToast('Jade hung up. Go to the Train Terminal and board the 4 train.');
+}
+function showCallLine() {
+  const textEl = document.getElementById('callText');
+  if (textEl) textEl.textContent = callLines[callIdx];
+  // Advance by itself after the line has been read. The Continue button
+  // cancels this pending advance because advanceCall() invalidates the token.
+  const myToken = callToken;
+  if (callTimer) clearTimeout(callTimer);
+  callTimer = setTimeout(() => {
+    callTimer = null;
+    if (myToken !== callToken) return;
+    advanceCall();
+  }, readingTimeMs(callLines[callIdx]));
+}
+function advanceCall() {
+  if (callTimer) { clearTimeout(callTimer); callTimer = null; }
+  callToken++;
+  callIdx++;
+  if (callIdx >= callLines.length) { endCall(); return; }
+  showCallLine();
+}
 function ensureCallOverlay() {
   if (callEl) return callEl;
   try {
@@ -107,17 +140,7 @@ function ensureCallOverlay() {
       + '<button id="callNext" type="button" style="background:#ffd166;color:#111;border:0;border-radius:8px;padding:11px 22px;font-size:16px;cursor:pointer;width:100%;">Continue</button>'
       + '</div>';
     document.body.appendChild(callEl);
-    document.getElementById('callNext').addEventListener('click', () => {
-      callIdx++;
-      if (callIdx >= callLines.length) {
-        callEl.style.display = 'none';
-        homeCallDone = true;
-        showHomeBar(homeKind); // the "Go to the Train Terminal" button appears
-        showHomeToast('Jade hung up. Go to the Train Terminal and board the 4 train.');
-      } else {
-        document.getElementById('callText').textContent = callLines[callIdx];
-      }
-    });
+    document.getElementById('callNext').addEventListener('click', () => { advanceCall(); });
   } catch (e) { callEl = null; }
   return callEl;
 }
@@ -132,7 +155,7 @@ function answerPhone() {
   callIdx = 0;
   const el = ensureCallOverlay();
   if (!el) { homeCallDone = true; showHomeBar(homeKind); return; }
-  document.getElementById('callText').textContent = callLines[0];
+  showCallLine(); // first line shows, then advances by itself
   el.style.display = 'flex';
 }
 
@@ -1321,6 +1344,8 @@ export function enterPlace(kind, onLeave, options) {
 export function leavePlace() {
   if (!homeActive) return;
   stopRinging();
+  if (callTimer) { clearTimeout(callTimer); callTimer = null; } // a pending call auto-advance must not fire after the room is gone
+  callToken++;
   homeActive = false;
   window.__lsHomeActive = false;
   if (homeRaf) { try { cancelAnimationFrame(homeRaf); } catch (e) { /* ignore */ } homeRaf = 0; }

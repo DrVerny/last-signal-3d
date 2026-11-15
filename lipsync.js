@@ -12,6 +12,8 @@
 // So the jaw is built here, at load time, from the models themselves:
 // the separate teeth mesh marks the mouth, and a jaw-open morph target is
 // generated on the face meshes by moving the lower lip and chin down.
+// Models with no teeth mesh (the rigged Quaternius models) estimate the
+// mouth from the head mesh instead, so their jaws move too.
 // The mouth is driven by the dialogue line (word timing), not by true
 // phoneme analysis, and it moves even when the voice is muted. The
 // characters, look, positions, story and gameplay are unchanged, and if
@@ -203,14 +205,71 @@ function addJawMorphToMesh(mesh, mouthWorld, forwardWorld) {
   } catch (e) { return -1; }
 }
 
+// Estimate the mouth position and face forward for a model with no teeth
+// mesh (the rigged Quaternius models). Finds the head mesh by name, or
+// falls back to the highest mesh in the upper third of the body,
+// preferring the largest one at that height. The mouth sits at the front
+// of the head, about a quarter of the head height up from the chin.
+// Returns { mouthWorld, forward } or null when no head can be found.
+function estimateMouthFromHead(group) {
+  try {
+    let head = null;
+    group.traverse((o) => {
+      if (head) return;
+      if (o.isMesh && o.name && o.name.toLowerCase().indexOf('head') !== -1) head = o;
+    });
+    if (!head) {
+      const groupBox = new THREE.Box3().setFromObject(group);
+      const upperY = groupBox.min.y + (groupBox.max.y - groupBox.min.y) * (2 / 3);
+      let bestY = -Infinity;
+      const cands = [];
+      group.traverse((o) => {
+        if (!o.isMesh) return;
+        const b = new THREE.Box3().setFromObject(o);
+        const cy = (b.min.y + b.max.y) / 2;
+        if (cy < upperY) return;
+        cands.push({ mesh: o, cy, vol: (b.max.x - b.min.x) * (b.max.y - b.min.y) * (b.max.z - b.min.z) });
+        if (cy > bestY) bestY = cy;
+      });
+      if (!cands.length) return null;
+      let best = null;
+      for (const c of cands) {
+        if (c.cy < bestY - 0.05) continue; // only meshes near the highest point
+        if (!best || c.vol > best.vol) best = c;
+      }
+      if (!best) return null;
+      head = best.mesh;
+    }
+    const headBox = new THREE.Box3().setFromObject(head);
+    const headCentre = headBox.getCenter(new THREE.Vector3());
+    const headSize = headBox.getSize(new THREE.Vector3());
+    if (headSize.y <= 0) return null;
+    // Face forward: the models face -z in local space, so the group's
+    // world -z is the direction out of the face.
+    let forward = new THREE.Vector3(0, 0, -1);
+    try {
+      const q = new THREE.Quaternion();
+      group.getWorldQuaternion(q);
+      forward.applyQuaternion(q);
+      forward.y = 0;
+      if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+      forward.normalize();
+    } catch (e) { forward.set(0, 0, -1); }
+    // Half the head's depth along the forward axis.
+    const halfDepth = (Math.abs(forward.x) * headSize.x + Math.abs(forward.z) * headSize.z) / 2;
+    const mouthWorld = headCentre.clone().addScaledVector(forward, halfDepth);
+    mouthWorld.y = headBox.min.y + headSize.y * 0.25;
+    return { mouthWorld, forward };
+  } catch (e) { return null; }
+}
+
 // Build the jaw morph for one loaded character group. Returns the list of
 // meshes that got a working jaw, each with its morph index.
-// Guard: the rigged Quaternius models have NO teeth mesh, so there is no
-// mouth landmark and no jaw morph is built for them - the function returns
-// an empty list and the character simply keeps a static face. That skip is
-// silent and the game plays as before; the speaking gestures (bob, nod,
-// lean) still make the character read as talking. Models that DO have a
-// teeth mesh still get the full jaw morph exactly as before.
+// Models with a teeth mesh use it as the mouth landmark, exactly as
+// before. Models without one (the rigged Quaternius models) estimate the
+// mouth from the head mesh instead, so they get a moving jaw too rather
+// than a static face. If no head can be found either, the function
+// returns an empty list and the character simply keeps a static face.
 function buildJawMorph(group) {
   const meshes = [];
   try {
@@ -219,13 +278,24 @@ function buildJawMorph(group) {
     group.traverse((o) => {
       if (o.isMesh && o.name && o.name.toLowerCase().indexOf('teeth') !== -1) teeth = o;
     });
-    if (!teeth) return meshes; // no mouth landmark (rigged models), no morph, no error
-    const mouthWorld = new THREE.Box3().setFromObject(teeth).getCenter(new THREE.Vector3());
-    let brow = null;
-    group.traverse((o) => {
-      if (o.isMesh && o.name && o.name.toLowerCase().indexOf('eyebrow') !== -1) brow = o;
-    });
-    const browWorld = brow ? new THREE.Box3().setFromObject(brow).getCenter(new THREE.Vector3()) : null;
+    let mouthWorld = null;
+    let forward = null;
+    let browWorld = null;
+    if (teeth) {
+      // Teeth path, unchanged: the teeth mesh marks the mouth.
+      mouthWorld = new THREE.Box3().setFromObject(teeth).getCenter(new THREE.Vector3());
+      let brow = null;
+      group.traverse((o) => {
+        if (o.isMesh && o.name && o.name.toLowerCase().indexOf('eyebrow') !== -1) brow = o;
+      });
+      browWorld = brow ? new THREE.Box3().setFromObject(brow).getCenter(new THREE.Vector3()) : null;
+    } else {
+      // No teeth mesh (rigged models): estimate the mouth from the head.
+      const est = estimateMouthFromHead(group);
+      if (!est) return meshes; // no head found either, no morph, no error
+      mouthWorld = est.mouthWorld;
+      forward = est.forward;
+    }
     const candidates = [];
     group.traverse((o) => {
       if (!o.isMesh) return;
@@ -243,7 +313,7 @@ function buildJawMorph(group) {
       const b = body.geometry && body.geometry.attributes && body.geometry.attributes.position;
       if (a && b && a.count > b.count) body = m;
     }
-    const forward = computeForward(body, mouthWorld, browWorld);
+    if (!forward) forward = computeForward(body, mouthWorld, browWorld);
     for (const mesh of candidates) {
       const idx = addJawMorphToMesh(mesh, mouthWorld, forward);
       if (idx >= 0) meshes.push({ mesh, index: idx });
