@@ -12,9 +12,15 @@ import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 
 // The civilian rigged models, with the role each plays in the crowd.
 // Two men (Matt, Sam) and two women (Casual Female, Lis) give variety.
+// sitThighL/R and sitShinL/R are the seated-pose angles (degrees about
+// each leg bone's local X axis) for that model's rig: the Matt/Lis/Sam
+// rigs share one set, while Jade's rig has different rest rotations on
+// its legs (left -166 deg, right +129 deg about X), so her legs need
+// different deltas to end up symmetric. Angles measured in Node from
+// the model files; see makeSeatedPerson.
 const CROWD_DEFS = [
   { file: 'models/rigged/caleb-alt-civilian.glb', sex: 'm', height: 1.82 },
-  { file: 'models/rigged/jade-rigged.glb', sex: 'f', height: 1.68 },
+  { file: 'models/rigged/jade-rigged.glb', sex: 'f', height: 1.68, sitThighL: 70, sitThighR: 130, sitShinL: -70, sitShinR: -90, sitShoulder: 45, sitHipsY: 0.47 },
   { file: 'models/rigged/nurse-rigged.glb', sex: 'f', height: 1.66 },
   { file: 'models/rigged/walter-rigged.glb', sex: 'm', height: 1.78 }
 ];
@@ -28,7 +34,22 @@ function loadOne(def) {
   return Promise.race([
     loader.loadAsync(def.file),
     new Promise((_, reject) => setTimeout(() => reject(new Error('crowd model timed out: ' + def.file)), 30000))
-  ]).then(gltf => ({ scene: gltf.scene, animations: gltf.animations || [], height: def.height, sex: def.sex, file: def.file }))
+  ]).then(gltf => ({
+    scene: gltf.scene, animations: gltf.animations || [], height: def.height, sex: def.sex, file: def.file,
+    // Seated-pose angles for this model's rig (defaults fit the
+    // Matt/Lis/Sam rigs; Jade's rig overrides them above). hipsY is the
+    // height the hips sit at: each rig's legs are a different length,
+    // so the hips sit where the feet reach the floor.
+    sit: {
+      thighL: def.sitThighL !== undefined ? def.sitThighL : 110,
+      thighR: def.sitThighR !== undefined ? def.sitThighR : 110,
+      shinL: def.sitShinL !== undefined ? def.sitShinL : -110,
+      shinR: def.sitShinR !== undefined ? def.sitShinR : -110,
+      shoulder: def.sitShoulder !== undefined ? def.sitShoulder : -25,
+      elbow: def.sitElbow !== undefined ? def.sitElbow : -55,
+      hipsY: def.sitHipsY !== undefined ? def.sitHipsY : 0.42
+    }
+  }))
     .catch(() => null);
 }
 // Start loading at import time, so the models are ready by the time the
@@ -70,8 +91,9 @@ export function cloneSkinned(source) {
   });
   return clone;
 }
-function pickModel() {
+function pickModel(index) {
   if (!crowdModels || !crowdModels.length) return null;
+  if (index !== undefined && index !== null) return crowdModels[((index % crowdModels.length) + crowdModels.length) % crowdModels.length];
   return crowdModels[Math.floor(Math.random() * crowdModels.length)];
 }
 function findBone(group, names) {
@@ -168,6 +190,112 @@ export function updateRiggedPerson(p, dt) {
     if (p.phone && p.headBone) p.headBone.rotation.x = 0.45;
   } catch (e) { /* a failed mixer update must never stop the crowd */ }
 }
+// ---------- Seated people (symposium audience) ----------
+// The seated pose, measured from the rigged model files in Node: the
+// thighs swing forward (about each leg bone's local X axis, applied on
+// top of the bone's rest rotation) and the shins drop, the forearms
+// rest on the lap, the torso leans slightly forward, and then the
+// group is lowered so the hips sit at seat height. Jade's SitDown clip
+// was measured too, but it is a deep squat-sit (knees 0.21 m below the
+// hips, feet 0.07 m under the floor for a 0.45 m chair), so the manual
+// pose is used for all four models. Verified numbers, production scale,
+// per model: hips 0.42-0.47, knees 0.35-0.47, lowest mesh point (the
+// shoe sole) -0.02 to 0.11 m, soles 0.29-0.52 m forward of the hips.
+// The pose is measured after scaling, so the numbers hold at any scale.
+function applySeatedPose(group, model) {
+  const sit = (model && model.sit) || { thighL: 110, thighR: 110, shinL: -110, shinR: -110, shoulder: -25, elbow: -55, hipsY: 0.42 };
+  const rest = new Map();
+  const delta = (bone, deg) => {
+    if (!bone) return;
+    if (!rest.has(bone)) rest.set(bone, bone.quaternion.clone());
+    const dq = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(deg));
+    bone.quaternion.copy(rest.get(bone)).multiply(dq);
+  };
+  const bones = {
+    hips: findBone(group, ['Hips']),
+    torso: findBone(group, ['Torso']),
+    head: findBone(group, ['Head']),
+    upperLegL: findBone(group, ['UpperLegL']),
+    upperLegR: findBone(group, ['UpperLegR']),
+    lowerLegL: findBone(group, ['LowerLegL']),
+    lowerLegR: findBone(group, ['LowerLegR'])
+  };
+  if (!bones.hips || !bones.upperLegL || !bones.lowerLegL) return null;
+  delta(bones.upperLegL, sit.thighL);
+  delta(bones.upperLegR, sit.thighR);
+  delta(bones.lowerLegL, sit.shinL);
+  delta(bones.lowerLegR, sit.shinR);
+  // Forearms rest on the lap: upper arms swing slightly forward, elbows bend.
+  // (The Matt rigs' shoulder local X maps to world -X, so their angle is
+  // negative; Jade's maps the other way, so hers is positive. The elbow
+  // sign is the same for all four rigs.)
+  delta(findBone(group, ['ShoulderL']), sit.shoulder);
+  delta(findBone(group, ['ShoulderR']), sit.shoulder);
+  delta(findBone(group, ['LowerArmL']), sit.elbow);
+  delta(findBone(group, ['LowerArmR']), sit.elbow);
+  // A slight forward lean, so the sitter reads as listening, not slouching.
+  delta(bones.torso, -7);
+  // Lower the group so the hips sit at seat height, whatever the model
+  // scale is: measure the posed hips in world space and shift by the gap.
+  group.updateMatrixWorld(true);
+  const hp = new THREE.Vector3();
+  bones.hips.getWorldPosition(hp);
+  group.position.y += sit.hipsY - hp.y;
+  group.updateMatrixWorld(true);
+  // The sway animation works from the posed rotations, not the rest pose.
+  const baseQuats = new Map();
+  if (bones.torso) baseQuats.set('torso', bones.torso.quaternion.clone());
+  if (bones.head) baseQuats.set('head', bones.head.quaternion.clone());
+  return { bones, baseQuats };
+}
+// Build one seated audience member from a rigged model. Returns null
+// when no crowd model is loaded yet. opts: { modelIndex, x, z, heading,
+// scale }. The person never walks; updateSeatedPerson gives them a
+// subtle idle sway. The hips end up at seat height over (x, z) - the
+// caller centres the hips over the chair, since each model's hips sit
+// at a different offset from its group origin.
+export function makeSeatedPerson(opts) {
+  const o = opts || {};
+  const model = pickModel(o.modelIndex);
+  if (!model) return null;
+  try {
+    const group = cloneSkinned(model.scene);
+    group.userData.keepAlive = true;
+    // Normalise height to the model's real height, then vary it a little
+    // so no two people are exactly the same height or build. The spread
+    // is kept tight for sitters, so every foot stays near the floor.
+    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * (0.97 + Math.random() * 0.06);
+    group.scale.set(s, s * (0.97 + Math.random() * 0.06), s);
+    group.traverse(m => { m.castShadow = true; });
+    group.position.set(o.x || 0, 0, o.z || 0);
+    group.rotation.y = o.heading || 0;
+    const posed = applySeatedPose(group, model);
+    if (!posed) return null;
+    return {
+      group, seated: true, rigged: true, mixer: null,
+      phase: Math.random() * 6.28, bones: posed.bones, baseQuats: posed.baseQuats
+    };
+  } catch (e) { return null; }
+}
+// A seated person's idle: a slow torso sway and an occasional head
+// turn, applied on top of the posed rotations. Call once per frame
+// from the room's animate loop. t is seconds.
+const _seatQ = new THREE.Quaternion();
+const _seatX = new THREE.Vector3(1, 0, 0);
+const _seatY = new THREE.Vector3(0, 1, 0);
+export function updateSeatedPerson(p, t) {
+  if (!p || !p.bones || !p.baseQuats) return;
+  try {
+    if (p.bones.torso && p.baseQuats.get('torso')) {
+      _seatQ.setFromAxisAngle(_seatX, Math.sin(t * 0.5 + p.phase) * 0.02);
+      p.bones.torso.quaternion.copy(p.baseQuats.get('torso')).multiply(_seatQ);
+    }
+    if (p.bones.head && p.baseQuats.get('head')) {
+      _seatQ.setFromAxisAngle(_seatY, Math.sin(t * 0.23 + p.phase * 1.7) * 0.12);
+      p.bones.head.quaternion.copy(p.baseQuats.get('head')).multiply(_seatQ);
+    }
+  } catch (e) { /* a failed sway must never stop the crowd */ }
+}
 // Swap a primitive pedestrian for a rigged clone, keeping its position,
 // heading, speed and walk phase, so the crowd upgrades in place when the
 // models finish loading. Returns true when it upgraded.
@@ -216,3 +344,5 @@ function flushUpgrades() {
     if (upgradePedestrian(p)) pendingUpgrades.splice(i, 1);
   }
 }
+// action.js imports this name; it is the same flush as above.
+export { flushUpgrades as processUpgradeQueue };
