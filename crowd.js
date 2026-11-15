@@ -106,7 +106,14 @@ export function cloneSkinned(source) {
 function pickModel(index) {
   if (!crowdModels || !crowdModels.length) return null;
   if (index !== undefined && index !== null) return crowdModels[((index % crowdModels.length) + crowdModels.length) % crowdModels.length];
-  return crowdModels[Math.floor(Math.random() * crowdModels.length)];
+  // Balance the sexes: pick a sex first (50/50), then a loaded model of
+  // that sex, so the crowd is never all men or all women even if only
+  // some models loaded. Fall back to any loaded model when none of the
+  // chosen sex is available.
+  const sex = Math.random() < 0.5 ? 'm' : 'f';
+  const ofSex = crowdModels.filter(m => m.sex === sex);
+  const pool = ofSex.length ? ofSex : crowdModels;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 function findBone(group, names) {
   let found = null;
@@ -114,14 +121,15 @@ function findBone(group, names) {
   return found;
 }
 // ---------- Crowd variety: ethnicity and body type ----------
-// New York is mixed: Black, White and Saxon (fair-skinned European)
-// people side by side, in every crowd. Three clearly different skin
-// tones, mixed in roughly equal measure, so the difference reads at play
-// distance. Hair, shirt and trousers vary too, and every person gets a
-// clearly different height and build: tall, short and medium; fat, thin
-// and medium. The variety is per person, not per place, so no crowd is
-// segregated by look.
-export const SKIN_TONES = [0x2e1a0e, 0x8a5a3a, 0xe8c8a8]; // Black, medium brown, fair White/Saxon
+// The crowd is Black and Saxon people mixed, in a range of tones from
+// deep brown-black to warm fair beige, so the difference reads at play
+// distance. A fair-skinned person is a real person with warm beige
+// skin, never a white statue: the rigged models are recoloured with
+// these tones, never left as a flat white primitive. Hair, shirt and
+// trousers vary too, and every person gets a clearly different height
+// and build: tall, short and medium; fat, thin and medium. The variety
+// is per person, not per place, so no crowd is segregated by look.
+export const SKIN_TONES = [0x2e1a0e, 0x5a3a22, 0x8a5a3a, 0xa06a42, 0xe8c8a8]; // Black and Saxon, deep brown-black to warm fair beige
 export const HAIR_COLOURS = [0x141414, 0x3a2418, 0x6a4a2a, 0xc8a848, 0x8a8a8a, 0x6a2a1a];
 export const SHIRT_COLOURS = [0x1a1a1a, 0x222f45, 0x5a3a22, 0x8a2a22, 0x2a4a6a, 0x3a5a3a, 0xc8b89a, 0x555555, 0x3a2a4a, 0x2a6a4a];
 export const PANTS_COLOURS = [0x2a4a6a, 0x1a1a1a, 0x3a2a1a, 0x555555, 0x333333, 0x4a3a2a];
@@ -149,6 +157,29 @@ export function pickLook() {
     shirt: SHIRT_COLOURS[Math.floor(Math.random() * SHIRT_COLOURS.length)],
     pants: PANTS_COLOURS[Math.floor(Math.random() * PANTS_COLOURS.length)]
   };
+}
+// Ages: the crowd spans the 20s, 30s, 40s and 50s, so no crowd is all
+// one age. Young adults in their 20s walk briskly with dark hair and
+// full height; people in their 30s walk at a normal pace; people in
+// their 40s walk slightly slower, a quarter with grey hair, slightly
+// shorter; people in their 50s walk slower still, most with grey hair,
+// slightly shorter with a slight stoop. Speeds are metres per second;
+// grey is the chance the hair is grey; height multiplies the body
+// height; stoop is a forward lean in radians on the torso.
+export function pickAge() {
+  const r = Math.random();
+  if (r < 0.30) return '20s';
+  if (r < 0.60) return '30s';
+  if (r < 0.85) return '40s';
+  return '50s';
+}
+export function ageTraits(age) {
+  switch (age) {
+    case '20s': return { speedMin: 1.3, speedMax: 1.65, grey: 0, height: 1.0, stoop: 0 };
+    case '30s': return { speedMin: 1.05, speedMax: 1.35, grey: 0.05, height: 1.0, stoop: 0 };
+    case '40s': return { speedMin: 0.9, speedMax: 1.2, grey: 0.25, height: 0.99, stoop: 0.05 };
+    default: return { speedMin: 0.7, speedMax: 1.0, grey: 0.6, height: 0.97, stoop: 0.1 };
+  }
 }
 // Atlas palette cells, measured from the GLB files: the three Atlas
 // models (Matt, Lis, Sam) share one 512x512 palette texture, and every
@@ -309,15 +340,22 @@ export function makeRiggedPerson(opts) {
     // Ethnicity + body type: every crowd person gets their own skin tone,
     // hair and clothes, and a clearly different height and build (fat,
     // thin, tall, short, medium). Callers may pass an explicit look/body
-    // to keep a person the same through an upgrade.
+    // to keep a person the same through an upgrade. Age is picked first:
+    // it sets the walk speed, the chance of grey hair and a slight
+    // height change, so the crowd spans the 20s, 30s, 40s and 50s.
+    const age = o.age || pickAge();
+    const traits = ageTraits(age);
     const look = o.look || pickLook();
+    if (!o.look && Math.random() < traits.grey) look.hair = 0x8a8a8a;
     const body = o.body || pickBodyType();
     applyLook(group, model, look);
     // Normalise height to the model's real height, then apply the body
     // type: height on Y, width on X/Z, with a tiny jitter so two people
-    // of the same type are not exactly alike. The Walk clip is
-    // bone-relative, so the walk cycle is unaffected by the scale.
-    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * body.height;
+    // of the same type are not exactly alike. The age height factor
+    // (slightly shorter in the 40s and 50s) rides on the same scale.
+    // The Walk clip is bone-relative, so the walk cycle is unaffected
+    // by the scale.
+    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * body.height * traits.height;
     const sj = 0.98 + Math.random() * 0.04;
     group.scale.set(s * body.width, s * sj, s * body.width);
     group.traverse(m => { m.castShadow = true; });
@@ -326,7 +364,7 @@ export function makeRiggedPerson(opts) {
     // horizontal position is reset after each mixer update (see
     // updateRiggedPerson), so the clip can never drag the person away
     // from their path; the group's translation does the moving.
-    let mixer = null, rootBone = null, rootRest = null, headBone = null;
+    let mixer = null, rootBone = null, rootRest = null, headBone = null, torsoBone = null;
     try {
       const walkClip = THREE.AnimationClip.findByName(model.animations || [], 'Walk');
       if (walkClip) {
@@ -339,6 +377,7 @@ export function makeRiggedPerson(opts) {
       if (!rootBone) group.traverse(m => { if (!rootBone && m.isBone) rootBone = m; });
       if (rootBone) rootRest = rootBone.position.clone();
       headBone = findBone(group, ['Head', 'Neck']);
+      torsoBone = findBone(group, ['Torso']);
     } catch (e) { mixer = null; }
     // A phone in the right hand for phone users: a small dark box on the
     // fist bone, with the head tilted down. A shopping bag hangs from the
@@ -357,18 +396,20 @@ export function makeRiggedPerson(opts) {
         bag.position.set(0, -0.25, 0); fist.add(bag);
       }
     }
-    const age = o.age || (Math.random() < 0.2 ? 'old' : Math.random() < 0.5 ? 'young' : 'adult');
+    // Walk speed from the age decade (20s brisk, 50s slow); phone users
+    // walk slower. An explicit speed (for example kept through an
+    // upgrade) is never overridden.
     let speed = o.speed;
     if (speed === undefined) {
-      speed = age === 'old' ? 0.55 + Math.random() * 0.2 : age === 'young' ? 1.3 + Math.random() * 0.35 : 0.9 + Math.random() * 0.3;
+      speed = traits.speedMin + Math.random() * (traits.speedMax - traits.speedMin);
     }
     if (o.phone) speed *= 0.75;
     const heading = o.heading !== undefined ? o.heading : Math.random() * Math.PI * 2;
     const bounds = o.bounds || { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };
     const lane = o.lane || null;
     return {
-      group, mixer, rootBone, rootRest, headBone, rigged: true,
-      phone: !!o.phone, pockets: !!o.pockets, bags: o.bags || 0, age,
+      group, mixer, rootBone, rootRest, headBone, torsoBone, rigged: true,
+      phone: !!o.phone, pockets: !!o.pockets, bags: o.bags || 0, age, stoop: traits.stoop,
       heading, bounds, lane, look, body,
       x: o.x !== undefined ? o.x : (lane ? (Math.random() * (lane.max - lane.min) + lane.min) : (Math.random() * (bounds.maxX - bounds.minX) + bounds.minX)),
       z: o.z !== undefined ? o.z : (lane ? lane.fixed : (Math.random() * (bounds.maxZ - bounds.minZ) + bounds.minZ)),
@@ -380,6 +421,8 @@ export function makeRiggedPerson(opts) {
 }
 // Advance a rigged person's walk clip and keep the root bone in place.
 // Call this from updatePedestrian for rigged people.
+const _stoopQ = new THREE.Quaternion();
+const _stoopX = new THREE.Vector3(1, 0, 0);
 export function updateRiggedPerson(p, dt) {
   if (!p || !p.mixer) return;
   try {
@@ -387,6 +430,14 @@ export function updateRiggedPerson(p, dt) {
     if (p.rootBone && p.rootRest) {
       p.rootBone.position.x = p.rootRest.x;
       p.rootBone.position.z = p.rootRest.z;
+    }
+    // Older people stoop slightly: add a small forward lean on the torso
+    // after the mixer update, so the walk sway is kept and the stoop
+    // rides on top of it. The mixer resets the torso each frame, so
+    // this never accumulates.
+    if (p.stoop && p.torsoBone) {
+      _stoopQ.setFromAxisAngle(_stoopX, p.stoop);
+      p.torsoBone.quaternion.multiply(_stoopQ);
     }
     // Phone users look down at the phone: re-apply the head tilt after
     // the mixer update, or the clip overwrites it.
@@ -466,14 +517,18 @@ export function makeSeatedPerson(opts) {
     group.userData.keepAlive = true;
     // Ethnicity + body type, as for walkers: each sitter gets their own
     // skin tone, hair and clothes, and a clearly different height and
-    // build. The seated pose is measured after scaling (see
-    // applySeatedPose), so the hips still land at seat height and the
-    // feet stay near the floor at every size; a short sitter's feet may
-    // dangle a little, as a short person's do.
+    // build. Age too: a sitter in their 40s or 50s may have grey hair
+    // and sit slightly shorter. The seated pose is measured after
+    // scaling (see applySeatedPose), so the hips still land at seat
+    // height and the feet stay near the floor at every size; a short
+    // sitter's feet may dangle a little, as a short person's do.
+    const age = o.age || pickAge();
+    const traits = ageTraits(age);
     const look = o.look || pickLook();
+    if (!o.look && Math.random() < traits.grey) look.hair = 0x8a8a8a;
     const body = o.body || pickBodyType();
     applyLook(group, model, look);
-    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * body.height;
+    const s = (o.scale !== undefined ? o.scale : 1) * (1.7 / model.height) * body.height * traits.height;
     const sj = 0.98 + Math.random() * 0.04;
     group.scale.set(s * body.width, s * sj, s * body.width);
     group.traverse(m => { m.castShadow = true; });
@@ -484,7 +539,7 @@ export function makeSeatedPerson(opts) {
     return {
       group, seated: true, rigged: true, mixer: null,
       phase: Math.random() * 6.28, bones: posed.bones, baseQuats: posed.baseQuats,
-      look, body
+      look, body, age
     };
   } catch (e) { return null; }
 }
@@ -509,11 +564,15 @@ export function updateSeatedPerson(p, t) {
 }
 // Swap a primitive pedestrian for a rigged clone, keeping its position,
 // heading, speed and walk phase, so the crowd upgrades in place when the
-// models finish loading. Returns true when it upgraded.
+// models finish loading. Returns true when it upgraded. If the person
+// is not in a scene yet (no parent), the rigged group is still built and
+// p.group is swapped to it, so the caller adds the rigged person when it
+// places them; the upgrade is never skipped just because the group had
+// no parent at that moment.
 export function upgradePedestrian(p) {
   if (!p || p.rigged || !crowdReady()) return false;
   const old = p.group;
-  if (!old || !old.parent) return false;
+  if (!old) return false;
   const parent = old.parent;
   const rigged = makeRiggedPerson({
     x: p.x, z: p.z, heading: p.heading, speed: p.speed,
@@ -523,7 +582,7 @@ export function upgradePedestrian(p) {
   });
   if (!rigged) return false;
   try {
-    parent.remove(old);
+    if (parent) parent.remove(old);
     try {
       old.traverse(m => {
         try { if (m.geometry) m.geometry.dispose(); } catch (e) { /* ignore */ }
@@ -540,10 +599,10 @@ export function upgradePedestrian(p) {
     // width on X/Z, tall/short height on Y). Copying the old scale
     // would flatten every upgraded person back to medium width.
     rigged.phase = p.phase;
-    parent.add(rigged.group);
+    if (parent) parent.add(rigged.group);
     p.group = rigged.group;
     p.mixer = rigged.mixer; p.rootBone = rigged.rootBone; p.rootRest = rigged.rootRest;
-    p.headBone = rigged.headBone; p.rigged = true;
+    p.headBone = rigged.headBone; p.torsoBone = rigged.torsoBone; p.stoop = rigged.stoop; p.rigged = true;
     p.legL = null; p.legR = null; p.armL = null; p.armR = null; p.headGroup = null; p.bagMeshes = [];
     return true;
   } catch (e) { return false; }

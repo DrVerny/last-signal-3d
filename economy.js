@@ -173,6 +173,11 @@ function equipItem(id) {
   setEquipped(eq);
   storeMsg('Equipped ' + item.name + '.');
   drawPreview();
+  // Re-tint the 3D avatar's shirt at once, so a newly equipped outfit
+  // shows in the game without a reload. Dynamic import (not a static
+  // one) so economy.js stays free of a circular import with player.js,
+  // which already imports the economy.
+  try { import('./player.js').then(m => { if (m.refreshPlayerOutfit) m.refreshPlayerOutfit(); }).catch(() => {}); } catch (e) { /* ignore */ }
 }
 function toggleAccessory(id) {
   const item = ITEM_BY_ID[id];

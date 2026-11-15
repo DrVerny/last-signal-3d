@@ -13,7 +13,7 @@ import { canvas, renderer, disposeScene } from './core.js';
 import { getBalance, moneyFmt, grantPayout } from './economy.js';
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar } from './player.js';
 import { readingTimeMs } from './speak.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
@@ -182,8 +182,8 @@ function endCall() {
   callActive = false;
   if (callEl) callEl.style.display = 'none';
   homeCallDone = true;
-  showHomeBar(homeKind); // the "Go to the Train Terminal" button appears
-  showHomeToast('Jade hung up. Go to the Train Terminal and board the 4 train.');
+  showHomeBar(homeKind); // the "Drive to the Train Terminal" button appears
+  showHomeToast('Jade hung up. Drive to the Train Terminal and board the 4 train.');
 }
 function showCallLine() {
   const textEl = document.getElementById('callText');
@@ -609,7 +609,7 @@ function buildHomeBar() {
     + '<button id="homeStandBtn" type="button">Stand up</button>'
     + '<button id="homeSitBtn" type="button">Sit on the couch</button>'
     + '<button id="homePickupBtn" type="button">Pick up the phone</button>'
-    + '<button id="homeTerminalBtn" type="button">Go to the Train Terminal</button>'
+    + '<button id="homeTerminalBtn" type="button">Drive to the Train Terminal</button>'
     + '<button id="homeBoardBtn" type="button">Board the train</button>'
     + '<button id="homeSleepBtn" type="button">Sleep</button>'
     + '<button id="homeSaveBtn" type="button">Save game</button>'
@@ -624,9 +624,9 @@ function buildHomeBar() {
   document.getElementById('homeSaveBtn').onclick = () => doSave();
   document.getElementById('homeLeaveBtn').onclick = () => leavePlace();
 }
-// The prologue: after the call, the player goes to the Train Terminal.
+// The prologue: after the call, the player drives to the Train Terminal.
 function goToTerminal() {
-  enterPlace('terminal', () => {}, { prologue: true, onBoardTrain: prologueOnBoardTrain });
+  startPrologueDrive();
 }
 // Board the 4 train: in the prologue this starts Act I. From the map
 // (Act II) the train is already ridden, so it just says so.
@@ -640,6 +640,304 @@ function boardTrain() {
   } else {
     showHomeToast('The 4 train - you already rode it. The story is in Act II now.');
   }
+}
+// ---------- Prologue drive: Mansion to the Train Terminal ----------
+// After Jade's call the player drives his own car to Grand Central
+// (30 miles) instead of appearing there. A straight night road with
+// buildings and street lights on both sides, the player's car with the
+// driver seated inside, a chase camera by default (C switches to
+// in-car), W or D gas, S brake, Escape or Skip arrives at once. The
+// drive uses the same speed and timing as the act2 travel drive: the
+// car creeps at 3 m/s on its own, gas takes it to 12 m/s, and the
+// 85-mile leg is 60 seconds, so 30 miles is about 21 seconds.
+const PL_DRIVE_MILES = 30;
+const PL_DRIVE_ROAD_LEN = 330;
+const PL_DRIVE_MAX_SPEED = 12, PL_DRIVE_CREEP_SPEED = 3;
+let plDriveActive = false, plDriveT = 0, plDriveDur = 21, plDriveSpeed = 0, plDriveView = 'chase';
+let plDriveCar = null;
+let plDriveKeys = {};
+let plDrivePedalGas = false, plDrivePedalBrake = false;
+let plDriveControlsEl = null, plDriveBannerEl = null;
+let plDriveKeyHandler = null, plDriveKeyUpHandler = null;
+let plDriveLastMilesShown = -1;
+// A building face with lit windows, drawn on canvas so it needs no
+// texture file. Made fresh for each drive and disposed with the scene.
+function plDriveFacadeTexture(base, litRatio) {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = base; ctx.fillRect(0, 0, 128, 256);
+  for (let r = 0; r < 12; r++) for (let col = 0; col < 6; col++) {
+    ctx.fillStyle = Math.random() < litRatio ? '#ffd166' : '#20242c';
+    ctx.fillRect(8 + col * 20, 10 + r * 20, 12, 14);
+  }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// A cobra-head street lamp: pole, arm over the road, glowing head and
+// a pool of light on the road. Built facing local +z (arm toward +z);
+// rotate the group so the arm reaches over the road.
+function plDriveLamp() {
+  const g = new THREE.Group();
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x2a2f36, roughness: 0.6, metalness: 0.5 });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 5.2, 8), poleMat);
+  pole.position.y = 2.6; g.add(pole);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 1.8), poleMat);
+  arm.position.set(0, 5.1, 0.9); g.add(arm);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.9), new THREE.MeshStandardMaterial({ color: 0x3a3f46, roughness: 0.5, metalness: 0.6 }));
+  head.position.set(0, 5.05, 1.8); g.add(head);
+  const glow = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.02, 0.7), new THREE.MeshBasicMaterial({ color: 0xffe9a0 }));
+  glow.position.set(0, 4.98, 1.8); g.add(glow);
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(2.2, 16), new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0.12 }));
+  pool.rotation.x = -Math.PI / 2; pool.position.set(0, 0.03, 1.8); g.add(pool);
+  return g;
+}
+// The drive road: a straight night road from the Mansion to Grand
+// Central, 330 m long. Dark sky, asphalt with a dashed centre line,
+// sidewalks, buildings with lit windows on both sides, street lamps
+// and a few parked cars, so the drive reads as a real city street at
+// night. The car starts at z = 4 and drives toward -z.
+function buildPrologueDriveScene() {
+  homeScene = new THREE.Scene();
+  homeScene.background = new THREE.Color(0x141c2e);
+  homeScene.fog = new THREE.FogExp2(0x141c2e, 0.004);
+  baseLights(homeScene, false);
+  // Ground under everything, so gaps between buildings are not void.
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(220, 420), new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2; ground.position.set(0, 0, 15 - PL_DRIVE_ROAD_LEN / 2); homeScene.add(ground);
+  // The road: dark asphalt, 9 m wide, with a dashed yellow centre line
+  // and white edge lines.
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(9, PL_DRIVE_ROAD_LEN), new THREE.MeshStandardMaterial({ color: 0x232326, roughness: 0.95 }));
+  road.rotation.x = -Math.PI / 2; road.position.set(0, 0.02, 15 - PL_DRIVE_ROAD_LEN / 2); homeScene.add(road);
+  const dashMat = new THREE.MeshBasicMaterial({ color: 0xf2c200 });
+  for (let z = 10; z >= 15 - PL_DRIVE_ROAD_LEN; z -= 8) {
+    const dash = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.02, 3), dashMat);
+    dash.position.set(0, 0.04, z); homeScene.add(dash);
+  }
+  for (const sx of [-1, 1]) {
+    const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.15, PL_DRIVE_ROAD_LEN), new THREE.MeshBasicMaterial({ color: 0xd8d8d8 }));
+    edge.rotation.x = -Math.PI / 2; edge.position.set(sx * 4.2, 0.04, 15 - PL_DRIVE_ROAD_LEN / 2); homeScene.add(edge);
+    const walk = new THREE.Mesh(new THREE.PlaneGeometry(3.5, PL_DRIVE_ROAD_LEN), new THREE.MeshStandardMaterial({ color: 0x3a3a40, roughness: 0.95 }));
+    walk.rotation.x = -Math.PI / 2; walk.position.set(sx * 6.25, 0.03, 15 - PL_DRIVE_ROAD_LEN / 2); homeScene.add(walk);
+  }
+  // Buildings with lit windows on both sides, varied heights and
+  // widths, set back behind the sidewalk, so the street reads as a
+  // real city, not one box.
+  const facades = [
+    plDriveFacadeTexture('#7a4a3a', 0.45),
+    plDriveFacadeTexture('#3a4a5a', 0.5),
+    plDriveFacadeTexture('#5a5a55', 0.4),
+    plDriveFacadeTexture('#2e3a4a', 0.55)
+  ];
+  for (let z = 8; z >= 15 - PL_DRIVE_ROAD_LEN; z -= 18) {
+    for (const sx of [-1, 1]) {
+      const w = 8 + Math.random() * 3, d = 8 + Math.random() * 4, h = 12 + Math.random() * 33;
+      const tex = facades[Math.floor(Math.random() * facades.length)];
+      const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9 }));
+      b.position.set(sx * (13 + Math.random() * 3), h / 2, z - Math.random() * 6);
+      homeScene.add(b);
+    }
+  }
+  // Street lamps along the road, alternating sides, arms over the road.
+  for (let z = 0; z >= 15 - PL_DRIVE_ROAD_LEN; z -= 30) {
+    const side = (Math.round(z / 30) % 2 === 0) ? 1 : -1;
+    const lamp = plDriveLamp();
+    lamp.position.set(side * 5.2, 0, z);
+    lamp.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+    homeScene.add(lamp);
+  }
+  // Parked cars along the right curb, clear of the driving lane.
+  const parkCols = [0x8a2a2a, 0x2e4a6a, 0x5a5a5a, 0x6a5a2a];
+  for (let i = 0; i < 4; i++) {
+    const pc = buildCar(parkCols[i % parkCols.length], { type: 'sedan' });
+    pc.rotation.y = Math.PI;
+    pc.position.set(5.6, 0, -40 - i * 55);
+    homeScene.add(pc);
+  }
+  // The player's own car, with the driver seated inside. The car faces
+  // -z (the driving direction), so it is rotated PI from the builder's
+  // +z front.
+  try {
+    plDriveCar = buildPlayerCar();
+    plDriveCar.rotation.y = Math.PI;
+    plDriveCar.position.set(0, 0, 4);
+    homeScene.add(plDriveCar);
+    const driver = getAvatar();
+    try { if (driver.parent) driver.parent.remove(driver); } catch (e) { /* ignore */ }
+    setAvatarPose('sit');
+    driver.visible = true;
+    driver.position.set(-0.38, 0.02, 0.35);
+    driver.rotation.set(0, 0, 0);
+    driver.scale.set(0.72, 0.72, 0.72);
+    plDriveCar.add(driver);
+  } catch (e) { plDriveCar = null; }
+  homeCamera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 500);
+  homeCamera.position.set(0, 1.7, 4);
+}
+// On-screen drive controls: GAS and BRAKE pedals (hold), a View button
+// and a Skip button, in the same spots as the act2 travel drive.
+function showPlDriveControls() {
+  if (!plDriveControlsEl) {
+    plDriveControlsEl = document.createElement('div');
+    plDriveControlsEl.id = 'plDriveControls';
+    plDriveControlsEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:55;';
+    plDriveControlsEl.innerHTML =
+      '<button id="plDriveGasBtn" type="button" style="position:absolute;right:18px;bottom:170px;width:96px;height:96px;border-radius:50%;background:#2e7a4a;color:#fff;font-size:15px;font-weight:bold;border:3px solid #4a9a6a;pointer-events:auto;touch-action:none;">GAS</button>'
+      + '<button id="plDriveBrakeBtn" type="button" style="position:absolute;right:132px;bottom:180px;width:80px;height:80px;border-radius:50%;background:#8a2a2a;color:#fff;font-size:14px;font-weight:bold;border:3px solid #b04a4a;pointer-events:auto;touch-action:none;">BRAKE</button>'
+      + '<button id="plDriveViewBtn" type="button" style="position:absolute;right:18px;top:120px;padding:10px 14px;font-size:14px;font-weight:bold;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;pointer-events:auto;">View: 3rd person (C)</button>'
+      + '<button id="plDriveSkipBtn" type="button" style="position:absolute;right:18px;top:64px;padding:10px 14px;font-size:14px;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;pointer-events:auto;">Skip drive</button>';
+    document.body.appendChild(plDriveControlsEl);
+    const hold = (el, on, off) => {
+      el.addEventListener('pointerdown', (ev) => { ev.preventDefault(); on(); });
+      el.addEventListener('pointerup', () => off());
+      el.addEventListener('pointerleave', () => off());
+      el.addEventListener('pointercancel', () => off());
+    };
+    hold(document.getElementById('plDriveGasBtn'), () => { plDrivePedalGas = true; }, () => { plDrivePedalGas = false; });
+    hold(document.getElementById('plDriveBrakeBtn'), () => { plDrivePedalBrake = true; }, () => { plDrivePedalBrake = false; });
+    document.getElementById('plDriveViewBtn').onclick = () => togglePlDriveView();
+    document.getElementById('plDriveSkipBtn').onclick = () => { if (plDriveActive) endPrologueDrive(); };
+  }
+  plDriveControlsEl.style.display = 'block';
+  const vb = document.getElementById('plDriveViewBtn');
+  if (vb) vb.textContent = 'View: 3rd person (C)';
+}
+function hidePlDriveControls() {
+  if (plDriveControlsEl) plDriveControlsEl.style.display = 'none';
+  plDrivePedalGas = false; plDrivePedalBrake = false;
+}
+// The miles banner at the top of the screen: the car, the destination
+// and the miles left, updated only when the number changes.
+function showPlDriveBanner(text) {
+  if (!plDriveBannerEl) {
+    plDriveBannerEl = document.createElement('div');
+    plDriveBannerEl.id = 'plDriveBanner';
+    plDriveBannerEl.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:55;max-width:92vw;background:rgba(8,12,18,0.85);border:1px solid #ffd166;border-radius:10px;color:#f2e9d8;font-size:15px;font-weight:bold;padding:10px 16px;text-align:center;pointer-events:none;';
+    document.body.appendChild(plDriveBannerEl);
+  }
+  plDriveBannerEl.textContent = text;
+  plDriveBannerEl.style.display = 'block';
+}
+function hidePlDriveBanner() { if (plDriveBannerEl) plDriveBannerEl.style.display = 'none'; }
+function updatePlDriveBanner() {
+  const left = Math.max(0, Math.round(PL_DRIVE_MILES * (1 - plDriveT / plDriveDur)));
+  if (left === plDriveLastMilesShown) return;
+  plDriveLastMilesShown = left;
+  const carName = (plDriveCar && plDriveCar.userData && plDriveCar.userData.carName) || 'City Sedan';
+  showPlDriveBanner('Driving your ' + carName + ' to Train Terminal - ' + left + ' miles to go. Hold W or D to drive, S to brake, C to switch view, Esc or Skip to arrive.');
+}
+// Switch the driving camera between the chase view (third-person, see
+// yourself driving) and the in-car view (from the driver's seat).
+function togglePlDriveView() {
+  plDriveView = plDriveView === 'chase' ? 'incar' : 'chase';
+  const b = document.getElementById('plDriveViewBtn');
+  if (b) b.textContent = plDriveView === 'chase' ? 'View: 3rd person (C)' : 'View: In-car (C)';
+}
+// Start the drive to the Terminal: leave the Mansion, build the road
+// scene, and drive the player's own car to Grand Central. The home
+// animate loop keeps running and drives the car from its drive branch.
+function startPrologueDrive() {
+  if (plDriveActive) return;
+  leavePlace();
+  buildPrologueDriveScene();
+  homeKind = 'drive';
+  homeActive = true;
+  window.__lsHomeActive = true;
+  plDriveActive = true;
+  plDriveT = 0;
+  plDriveDur = Math.min(60, Math.max(12, Math.round(PL_DRIVE_MILES / 85 * 60)));
+  plDriveLastMilesShown = -1;
+  plDriveSpeed = PL_DRIVE_CREEP_SPEED; plDriveView = 'chase';
+  plDriveKeys = {};
+  plDrivePedalGas = false; plDrivePedalBrake = false;
+  // Drive keys are caught in the capture phase and stopped, so a C
+  // press switches the drive view without also flipping the room
+  // camera to first-person, and Escape arrives without reaching the
+  // acts. W or D is gas, S is brake.
+  plDriveKeyHandler = (e) => {
+    if (!plDriveActive) return;
+    const k = (e.key || '').toLowerCase();
+    if (k === 'escape') { e.stopPropagation(); e.preventDefault(); endPrologueDrive(); return; }
+    if (k === 'c' && !e.repeat) { e.stopPropagation(); e.preventDefault(); togglePlDriveView(); return; }
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd') { e.stopPropagation(); plDriveKeys[k] = true; }
+  };
+  plDriveKeyUpHandler = (e) => {
+    const k = (e.key || '').toLowerCase();
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd') { e.stopPropagation(); plDriveKeys[k] = false; }
+  };
+  addEventListener('keydown', plDriveKeyHandler, true);
+  addEventListener('keyup', plDriveKeyUpHandler, true);
+  updatePlDriveBanner();
+  showPlDriveControls();
+  if (homeRaf) cancelAnimationFrame(homeRaf);
+  homeRaf = requestAnimationFrame(homeAnimate);
+  try { const l = document.getElementById('loading'); if (l) l.classList.add('hidden'); } catch (e) { /* ignore */ }
+}
+// Arrive at the Terminal (drive finished or skipped): stop the drive,
+// take the driver out of the car, and open the Terminal exactly as
+// goToTerminal used to, so the boarding and the Act I start work
+// exactly as before. enterPlace disposes the drive scene through
+// leavePlace, so no car mesh is left behind.
+function endPrologueDrive() {
+  if (!plDriveActive) return;
+  plDriveActive = false;
+  if (plDriveKeyHandler) { try { removeEventListener('keydown', plDriveKeyHandler, true); } catch (e) { /* ignore */ } plDriveKeyHandler = null; }
+  if (plDriveKeyUpHandler) { try { removeEventListener('keyup', plDriveKeyUpHandler, true); } catch (e) { /* ignore */ } plDriveKeyUpHandler = null; }
+  hidePlDriveControls();
+  hidePlDriveBanner();
+  plDriveView = 'chase'; plDriveSpeed = 0;
+  // The driver gets out of the car: back on his feet, at full size,
+  // detached from the car so the Terminal can place him at the player
+  // position.
+  try {
+    const driver = getAvatar();
+    if (plDriveCar && driver && driver.parent === plDriveCar) {
+      try { plDriveCar.remove(driver); } catch (e) { /* ignore */ }
+    }
+    setAvatarPose('stand');
+    driver.scale.set(1, 1, 1);
+    driver.rotation.set(0, 0, 0);
+    driver.visible = false;
+    detachAvatar();
+  } catch (e) { /* ignore */ }
+  plDriveCar = null;
+  enterPlace('terminal', () => {}, { prologue: true, onBoardTrain: prologueOnBoardTrain });
+}
+// One drive frame: speed from the pedals, the car rolls down the road,
+// the camera follows it, and the miles count down. Arrives when the
+// drive time runs out.
+function updatePrologueDrive(dt, t) {
+  if (!plDriveActive) return;
+  plDriveT += dt;
+  const gas = plDriveKeys['w'] || plDriveKeys['d'] || plDrivePedalGas;
+  const brake = plDriveKeys['s'] || plDrivePedalBrake;
+  if (gas) plDriveSpeed = Math.min(PL_DRIVE_MAX_SPEED, plDriveSpeed + 6 * dt);
+  else if (brake) plDriveSpeed = Math.max(0, plDriveSpeed - 10 * dt);
+  else if (plDriveSpeed > PL_DRIVE_CREEP_SPEED) plDriveSpeed = Math.max(PL_DRIVE_CREEP_SPEED, plDriveSpeed - 4 * dt);
+  else if (plDriveSpeed < PL_DRIVE_CREEP_SPEED) plDriveSpeed = Math.min(PL_DRIVE_CREEP_SPEED, plDriveSpeed + 4 * dt);
+  if (plDriveCar) {
+    plDriveCar.position.z = Math.max(15 - PL_DRIVE_ROAD_LEN + 10, plDriveCar.position.z - plDriveSpeed * dt);
+    if (plDriveView === 'incar' && plDriveCar.userData.headPos) {
+      // In-car view: from the driver's seat, over the steering wheel,
+      // looking down the road through the windscreen.
+      const head = plDriveCar.localToWorld(plDriveCar.userData.headPos.clone());
+      homeCamera.position.set(head.x, head.y + Math.sin(t * 6) * 0.01, head.z);
+      homeCamera.lookAt(head.x, 1.0, head.z - 20);
+    } else {
+      // Chase view: behind and above the car, so the player sees himself
+      // driving. The camera sits at the fixed 4 m distance.
+      homeCamera.position.set(0, 1.7 + 4 * 0.35 + Math.sin(t * 6) * 0.02, plDriveCar.position.z + 4 + 1.5);
+      homeCamera.lookAt(0, 1.0, plDriveCar.position.z - 8);
+    }
+  } else if (homeCamera) {
+    homeCamera.position.z -= plDriveSpeed * dt;
+    homeCamera.position.x = 0;
+    homeCamera.position.y = 1.7 + Math.sin(t * 6) * 0.02;
+    homeCamera.rotation.order = 'YXZ';
+    homeCamera.rotation.y = 0; homeCamera.rotation.x = 0; homeCamera.rotation.z = 0;
+  }
+  updatePlDriveBanner();
+  if (plDriveT >= plDriveDur) { endPrologueDrive(); return; }
+  renderer.render(homeScene, homeCamera);
 }
 function showHomeBar(kind) {
   buildHomeBar();
@@ -656,7 +954,7 @@ function showHomeBar(kind) {
     symposium: 'SYMPOSIUM HALL - NEW YORK'
   };
   const infos = {
-    mansion: homePrologue && !homeCallDone ? (prologueInBed ? 'You are in bed. The phone is ringing - stand up.' : prologueSeated ? 'You are on the couch. The phone is beside you - tap its green button.' : 'The phone is ringing. Walk to the couch, sit down and answer it.') : homePrologue ? 'Jade called. Go to the Train Terminal and board the 4 train.' : 'Drag to look around - WASD to walk - click the bed to sleep.',
+    mansion: homePrologue && !homeCallDone ? (prologueInBed ? 'You are in bed. The phone is ringing - stand up.' : prologueSeated ? 'You are on the couch. The phone is beside you - tap its green button.' : 'The phone is ringing. Walk to the couch, sit down and answer it.') : homePrologue ? 'Jade called. Drive to the Train Terminal and board the 4 train.' : 'Drag to look around - WASD to walk - click the bed to sleep.',
     safehouse: 'Drag to look around - WASD to walk - click the bed or table to save.',
     hospital: 'Drag to look around - WASD to walk - look around, then head back.',
     industry: 'Drag to look around - WASD to walk - look around, then head back.',
@@ -733,8 +1031,29 @@ function addExitDoor(scene, opts) {
   panel.position.set(0.58, 1.15, 0); panel.castShadow = true;
   panel.name = 'exitDoor'; panel.userData.homeAction = 'exitDoor';
   hinge.add(panel);
-  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 }));
-  handle.position.set(1.0, 1.1, 0.08); hinge.add(handle);
+  // Raised panels on both faces, so the door reads as a panelled door
+  // and not a flat box. Two panels per face, in a slightly lighter wood.
+  const doorPanelMat = mat(0x5a4030, { roughness: 0.55 });
+  for (const sz of [1, -1]) {
+    for (const py of [1.75, 0.65]) {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.75, 0.02), doorPanelMat);
+      p.position.set(0.58, py, sz * 0.045); hinge.add(p);
+    }
+  }
+  // A proper lever handle in brass, on both faces of the door, at handle
+  // height, so the door clearly has a handle from either side. Round
+  // backplate, horizontal lever bar, and a keyhole below it.
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 });
+  for (const sz of [1, -1]) {
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 16), handleMat);
+    plate.rotation.x = Math.PI / 2;
+    plate.position.set(1.05, 1.05, sz * 0.05); hinge.add(plate);
+    const lever = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), handleMat);
+    lever.position.set(0.97, 1.05, sz * 0.08); hinge.add(lever);
+    const keyhole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.02, 12), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.7, roughness: 0.4 }));
+    keyhole.rotation.x = Math.PI / 2;
+    keyhole.position.set(1.05, 0.88, sz * 0.05); hinge.add(keyhole);
+  }
   // A gold glow strip above the door, so it is easy to spot across the room.
   const glow = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 0.06), new THREE.MeshBasicMaterial({ color: 0xffd166 }));
   glow.position.set(0, 2.62, 0.05); g.add(glow);
@@ -2667,6 +2986,10 @@ function homeAnimate() {
   const t = Date.now() / 1000;
   const dt = homeAnimate.lastT === undefined ? 0.016 : Math.min(0.1, t - homeAnimate.lastT);
   homeAnimate.lastT = t;
+  // Prologue drive: the player is driving his car to the Train Terminal.
+  // The drive has its own scene and camera; this branch updates it and
+  // renders it, instead of the room movement below.
+  if (plDriveActive) { updatePrologueDrive(dt, t); return; }
   // While sleeping, the avatar lies on the bed and the camera watches
   // from the bedside, so the player sees himself sleeping. The rest
   // (save + "You slept") lands after about 4 seconds, and the view

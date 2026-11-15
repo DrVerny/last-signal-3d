@@ -5,7 +5,7 @@
 // if the DOM is unavailable, the helpers are silent no-ops.
 
 import * as THREE from 'three';
-import { makeRiggedPerson, updateRiggedPerson, queueUpgrade, processUpgradeQueue, pickLook, pickBodyType } from './crowd.js';
+import { makeRiggedPerson, updateRiggedPerson, queueUpgrade, processUpgradeQueue, pickLook, pickBodyType, pickAge, ageTraits } from './crowd.js';
 
 let bannerEl = null, flashEl = null;
 
@@ -170,8 +170,10 @@ const PED_HAIR = [0x1a1a1a, 0x3a2a1a, 0x5a5a5a, 0x8a8a8a, 0xc8a848, 0x6a2a1a];
 const PED_BAGS = [0xf2f2f2, 0x2a6ab0, 0xc02a2a, 0x2a8a7a, 0xd8b13a];
 // Skin tones match the rigged crowd: Black, medium brown, fair White /
 // Saxon, in roughly equal measure, so a primitive person who has not
-// been upgraded yet already reads as the same mixed crowd.
-const PED_SKINS = [0x2e1a0e, 0x8a5a3a, 0xe8c8a8];
+// been upgraded yet already reads as the same mixed crowd. The fair
+// tone is a warm beige, never pure white: a fair-skinned person is a
+// real person, not a white statue.
+const PED_SKINS = [0x2e1a0e, 0x5a3a22, 0x8a5a3a, 0xa06a42, 0xe8c8a8];
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
@@ -186,7 +188,12 @@ export function makePedestrian(opts) {
       if (rigged) return rigged;
     } catch (e) { /* fall through to the primitive figure */ }
     const o = opts || {};
-    const age = o.age || (Math.random() < 0.2 ? 'old' : Math.random() < 0.5 ? 'young' : 'adult');
+    // Age is a decade (20s, 30s, 40s, 50s), shared with the rigged
+    // crowd (crowd.js pickAge/ageTraits): it sets the walk speed, the
+    // chance of grey hair and a slight height change, so the crowd
+    // spans the ages and a person keeps the same age through an upgrade.
+    const age = o.age || pickAge();
+    const traits = ageTraits(age);
     const coat = o.coat !== undefined ? o.coat : Math.random() < 0.55;
     const phone = o.phone || false;
     const pockets = o.pockets || false;
@@ -195,26 +202,37 @@ export function makePedestrian(opts) {
     // Ethnicity + body type, the same as the rigged crowd: the primitive
     // is only a stand-in until the models load, but it already carries
     // the person's look and body, so the upgrade to a rigged clone keeps
-    // the same skin tone, hair, clothes, height and build.
+    // the same skin tone, hair, clothes, height and build. Grey hair is
+    // rolled into the look (not a separate colour) so the upgrade keeps
+    // it too.
     const look = o.look || pickLook();
+    if (!o.look && Math.random() < traits.grey) look.hair = 0x8a8a8a;
     const bodyType = o.body || pickBodyType();
     // Pace by age, with a random factor so no two people share a speed:
-    // old people stroll (0.55-0.75 m/s), adults walk (0.9-1.2), the young
-    // walk briskly (1.3-1.65). A phone slows the walker down.
+    // 20s walk briskly (1.3-1.65 m/s), 30s at a normal pace (1.05-1.35),
+    // 40s slightly slower (0.9-1.2), 50s slowest (0.7-1.0). A phone
+    // slows the walker down.
     let speed = o.speed;
     if (speed === undefined) {
-      speed = age === 'old' ? 0.55 + Math.random() * 0.2 : age === 'young' ? 1.3 + Math.random() * 0.35 : 0.9 + Math.random() * 0.3;
+      speed = traits.speedMin + Math.random() * (traits.speedMax - traits.speedMin);
     }
     if (phone) speed *= 0.75;
-    const ageH = age === 'old' ? 0.96 : 1.0;
+    const ageH = traits.height;
     const scale = o.scale !== undefined ? o.scale : bodyType.height * ageH * (0.98 + Math.random() * 0.04);
     const width = o.width !== undefined ? o.width : bodyType.width;
     const coatColor = o.coatColor !== undefined ? o.coatColor : look.shirt;
     const legColor = o.legColor !== undefined ? o.legColor : look.pants;
-    const hairColor = age === 'old' ? pick([0xd8d8d8, 0x8a8a8a]) : look.hair;
+    const hairColor = look.hair;
     const skinColor = o.skinColor !== undefined ? o.skinColor : look.skin;
 
     const g = new THREE.Group();
+    // Hidden until it upgrades to a rigged person: a boxy primitive
+    // figure must never be visible in the game, not even for a frame.
+    // The upgrade (queueUpgrade / processUpgradeQueue) swaps this group
+    // for a rigged clone the moment the crowd models load; if the
+    // models never load, the person stays hidden rather than standing
+    // in the game as a cardboard figure.
+    g.visible = false;
     const bodyMat = new THREE.MeshStandardMaterial({ color: coatColor, roughness: 0.9 });
     const skinMat = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.8 });
     const legMat = new THREE.MeshStandardMaterial({ color: legColor, roughness: 0.9 });
@@ -269,8 +287,8 @@ export function makePedestrian(opts) {
     // Hands in pockets: both arms hang straight, no swing.
     if (pockets) { armL.rotation.x = 0; armR.rotation.x = 0; }
     g.scale.set(scale, scale, scale);
-    // A slight forward stoop for older walkers.
-    if (age === 'old') g.rotation.x = 0.05;
+    // A slight forward stoop for older walkers (40s a little, 50s more).
+    if (traits.stoop) g.rotation.x = traits.stoop;
 
     const heading = o.heading !== undefined ? o.heading : Math.random() * Math.PI * 2;
     const bounds = o.bounds || { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };

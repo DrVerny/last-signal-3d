@@ -4,7 +4,7 @@ import { canvas, renderer, disposeScene } from './core.js';
 import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
 import { registerHumans, updateSpeakingGestures } from './gestures.js';
 import { registerLipSyncHumans } from './lipsync.js';
-import { initSoundUI, setAmbient, setTension, soundTick, sfxRepair, sfxTick, sfxPowerRestored, sfxBoom, sfxThud, sfxWhoosh } from './sound.js';
+import { initSoundUI, setAmbient, setAmbientLevel, setTension, soundTick, sfxRepair, sfxTick, sfxPowerRestored, sfxBoom, sfxThud, sfxWhoosh } from './sound.js';
 import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
@@ -189,12 +189,12 @@ function pressureDialTexture(label) {
       ctx.lineTo(cx + Math.sin(a) * r2, cy - Math.cos(a) * r2);
       ctx.stroke();
       if (major) {
-        ctx.font = 'bold 26px Arial';
-        ctx.fillText(String(p), cx + Math.sin(a) * 70, cy - Math.cos(a) * 70);
+        ctx.font = 'bold 34px Arial';
+        ctx.fillText(String(p), cx + Math.sin(a) * 64, cy - Math.cos(a) * 64);
       }
     }
-    ctx.font = 'bold 20px Arial'; ctx.fillText('PSI', cx, cy + 42);
-    ctx.font = 'bold 22px Arial'; ctx.fillText(label, cx, cy + 68);
+    ctx.font = 'bold 26px Arial'; ctx.fillText('PSI', cx, cy + 42);
+    ctx.font = 'bold 26px Arial'; ctx.fillText(label, cx, cy + 68);
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   });
 }
@@ -214,9 +214,14 @@ function buildPressureGauge(v) {
   body.rotation.x = Math.PI / 2; body.position.z = -0.03; g.add(body);
   const rim = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.045, 12, 40), new THREE.MeshStandardMaterial({ color: 0xb08d3e, metalness: 0.9, roughness: 0.3 }));
   rim.position.z = 0.04; g.add(rim);
-  const dial = new THREE.Mesh(new THREE.CircleGeometry(0.40, 40), new THREE.MeshStandardMaterial({ map: pressureDialTexture(v.label), roughness: 0.6 }));
+  // The dial face is UNLIT (MeshBasicMaterial): the lit standard material
+  // depended on the room point lights, so the gauge on the far side of
+  // the panel fell into shadow and rendered almost black, with the glass
+  // glare reading as a white starburst. Unlit, the cream face and the
+  // numbers read at full brightness from anywhere in the room.
+  const dial = new THREE.Mesh(new THREE.CircleGeometry(0.40, 40), new THREE.MeshBasicMaterial({ map: pressureDialTexture(v.label) }));
   dial.position.z = 0.02; g.add(dial);
-  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.40, 40), new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.13, roughness: 0.05, metalness: 0.1 }));
+  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.40, 40), new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.08, roughness: 0.05, metalness: 0.1 }));
   glass.position.z = 0.06; g.add(glass);
   const needle = new THREE.Group(); needle.position.z = 0.05; g.add(needle);
   const pointer = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.34, 0.012), new THREE.MeshStandardMaterial({ color: 0xc02020, roughness: 0.4 }));
@@ -242,7 +247,32 @@ function buildPressureGauge(v) {
     const s = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 10), flowMat);
     s.position.set(v.x, 1.1, -5.78); mission1.add(s); flow.push(s);
   }
-  return { needle, shown: 60, last: 60, spin: 0, angle: 0, wheel: null, spokes: [], flow, flowMat, waterMat };
+  // Live digital readout beside the dial: a dark panel with the PSI
+  // number, redrawn from a canvas texture whenever the shown pressure
+  // changes by 1. Unlit, so it reads from anywhere in the room.
+  const readoutCanvas = document.createElement('canvas');
+  readoutCanvas.width = 256; readoutCanvas.height = 96;
+  const readoutCtx = readoutCanvas.getContext('2d');
+  const readoutTex = new THREE.CanvasTexture(readoutCanvas);
+  readoutTex.colorSpace = THREE.SRGBColorSpace;
+  const readoutPanel = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.22), new THREE.MeshBasicMaterial({ map: readoutTex }));
+  readoutPanel.position.set(0.68, 0, 0.03); g.add(readoutPanel);
+  const readout = { canvas: readoutCanvas, ctx: readoutCtx, tex: readoutTex };
+  drawGaugeReadout({ readout, lastPsi: 60 }, 60);
+  return { needle, shown: 60, last: 60, spin: 0, angle: 0, wheel: null, spokes: [], flow, flowMat, waterMat, column, readout, lastPsi: 60 };
+}
+// Redraws one gauge's digital readout: big digits, green at or above the
+// 70 PSI target, amber below it, red when a line is nearly dry.
+function drawGaugeReadout(rec, psi) {
+  const { ctx, tex } = rec.readout;
+  ctx.fillStyle = '#0d0d0d'; ctx.fillRect(0, 0, 256, 96);
+  ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 4; ctx.strokeRect(2, 2, 252, 92);
+  ctx.fillStyle = psi >= 70 ? '#2aff7a' : psi >= 40 ? '#ffb020' : '#ff4444';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold 52px Arial';
+  ctx.fillText(psi + ' PSI', 128, 50);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  tex.needsUpdate = true;
 }
 function updatePressureGauges(dt, t) {
   for (const k of Object.keys(pressureGauges)) {
@@ -252,6 +282,21 @@ function updatePressureGauges(dt, t) {
     // The needle eases toward the live pressure instead of snapping.
     rec.shown += (target - rec.shown) * Math.min(1, dt * 4);
     rec.needle.rotation.z = (135 - (rec.shown / 100) * 270) * Math.PI / 180;
+    // Live digital readout: redraw when the shown PSI changes by 1, so
+    // the number follows a valve turn at once and a sabotage drop as it
+    // happens.
+    const psi = Math.round(rec.shown);
+    if (rec.readout && psi !== rec.lastPsi) { rec.lastPsi = psi; drawGaugeReadout(rec, psi); }
+    // Sight-glass water column: its HEIGHT follows the pressure, so a
+    // dropping line is visible as the water level falling. The bottom
+    // stays at the base of the tube (y 1.06) while the top rises and
+    // falls: tall near the top of the tube at 100, a stub at the bottom
+    // at 0. The flow beads travel inside the water column, not above it.
+    if (rec.column) {
+      const frac = Math.max(0.02, rec.shown / 100);
+      rec.column.scale.y = frac;
+      rec.column.position.y = 1.06 + 0.39 * frac;
+    }
     // The wheel turns when its valve is turned (pressure changes either
     // way: up by the player, down by the sabotage overcorrection).
     if (target !== rec.last) rec.spin += (target - rec.last) * 0.12;
@@ -268,7 +313,7 @@ function updatePressureGauges(dt, t) {
     for (let i = 0; i < rec.flow.length; i++) {
       const s = rec.flow[i];
       const ph = (i / rec.flow.length + t * speed) % 1;
-      s.position.y = 1.08 + ph * 0.74;
+      s.position.y = 1.08 + ph * 0.74 * Math.max(0.05, rec.shown / 100);
     }
   }
 }
@@ -305,11 +350,23 @@ const mission2 = new THREE.Group(); scene.add(mission2); mission2.visible = fals
 const mission3 = new THREE.Group(); scene.add(mission3); mission3.visible = false;
 // Camera bounds per mission (x/z clamp + default view).
 const VIEWS = {
-  1: { pos: [0, 1.7, 8], yaw: 0, x: [-8, 8], z: [-6, 12] },
+  1: { pos: [0, 1.7, 8], yaw: 0, x: [-8, 8], z: [-6, 14] },
   2: { pos: [0, 1.7, 9], yaw: 0, x: [-9, 9], z: [-6, 12] },
   3: { pos: [0, 2.2, 10], yaw: 0, x: [-1.2, 1.2], z: [-14, 12] }
 };
 let camBounds = VIEWS[1];
+// Act II arrival: the player steps off the train at Rondout station and
+// walks to the facility before Mission 1 starts. The platform is at the
+// south end (z 11 to 13.6), so the arrival spawn faces the train (yaw PI
+// looks south, +z) and the trigger line is z 7 on the dirt track.
+const ARRIVAL_VIEW = { pos: [-3.9, 1.7, 12.3], yaw: Math.PI };
+let arrivalDone = false; // true once the player has walked off the platform
+let mission1Started = false; // true once startMission1 has run
+// The dam the water is piped from: the concrete wall stands on the west
+// side at x -14, and the roar of its spillway is the Mission 1 ambient.
+// DAM_X/DAM_Z is the roar source point for the distance level.
+const DAM_X = -14, DAM_Z = 0, DAM_WATER_Y = 7.6;
+let lastDamLevel = -1; // last roar level sent to setAmbientLevel
 // The valve room inside the control station: the player enters through
 // the station door and walks to the valves. A separate bounds box, so
 // WASD stays inside the room while he is in there.
@@ -321,6 +378,13 @@ function resetView() {
   if (inValveRoom) {
     camera.position.set(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[1], VALVE_ROOM_BOUNDS.pos[2]);
     state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
+    return;
+  }
+  // Before Mission 1 has started, Reset view returns the player to the
+  // platform where he stepped off the train, not to the mission spawn.
+  if (state.mission === 1 && !mission1Started) {
+    camera.position.set(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[1], ARRIVAL_VIEW.pos[2]);
+    state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = VIEWS[1];
     return;
   }
   const v = VIEWS[state.mission];
@@ -467,11 +531,11 @@ async function loadHumans() {
     loadingError.classList.remove('hidden');
     loadingError.textContent = 'Could not load: ' + failures.join(', ') + '. The game can still start without them.';
     loadingContinue.classList.remove('hidden');
-    loadingContinue.onclick = () => { document.getElementById('loading').classList.add('hidden'); startMission1(); };
+    loadingContinue.onclick = () => { document.getElementById('loading').classList.add('hidden'); startArrival(); };
     loadingText.textContent = 'Some characters failed to load.';
   } else {
     document.getElementById('loading').classList.add('hidden');
-    startMission1();
+    startArrival();
   }
 }
 
@@ -486,7 +550,11 @@ let waterMesh;
 // outside to find the sabotage device.
 function buildValveRoom() {
   const room = new THREE.Group(); mission1.add(room);
-  const wallMat = stdMat({ color: 0x8a7a68, roughness: 0.95 });
+  // Underground chamber beneath the skyscraper: bare concrete walls,
+  // cool industrial light, no windows. The player reaches it by going
+  // down from the tower entrance (the door teleports him in, as before);
+  // the stairs by the entrance wall are the flight he came down.
+  const wallMat = stdMat({ color: 0x5f5f5c, roughness: 0.95 });
   const mk = (w, h, d, x, y, z) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
     m.position.set(x, y, z); m.receiveShadow = true; room.add(m); return m;
@@ -502,13 +570,16 @@ function buildValveRoom() {
   mk(3.4, 3.2, 0.15, -2.3, 1.6, -1);
   mk(3.4, 3.2, 0.15, 2.3, 1.6, -1);
   mk(1.2, 1.0, 0.15, 0, 2.7, -1);
-  // Warm interior lights and a ceiling fixture.
-  const l1 = new THREE.PointLight(0xffe0b0, 0.9, 9); l1.position.set(0, 2.8, -2.5); room.add(l1);
-  const l2 = new THREE.PointLight(0xffe0b0, 0.7, 9); l2.position.set(0, 2.8, -5); room.add(l2);
-  const fix = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.3), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, emissive: 0xffe9a8, emissiveIntensity: 1.2 }));
+  // Cool industrial lights and a caged ceiling fixture.
+  const l1 = new THREE.PointLight(0xd8e8ff, 0.9, 9); l1.position.set(0, 2.8, -2.5); room.add(l1);
+  const l2 = new THREE.PointLight(0xd8e8ff, 0.7, 9); l2.position.set(0, 2.8, -5); room.add(l2);
+  // A small light over the gauge panel, so the needles, brass rims and
+  // valve wheels read clearly even though the dial faces are unlit.
+  const gl = new THREE.PointLight(0xd8e8ff, 0.8, 7); gl.position.set(0, 3.0, -4.6); room.add(gl);
+  const fix = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.3), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, emissive: 0xd8e8ff, emissiveIntensity: 1.2 }));
   fix.position.set(0, 3.15, -3.5); room.add(fix);
   // VALVE ROOM sign above the door, inside.
-  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'WATER PRESSURE'), transparent: true, depthWrite: false }));
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
   sign.scale.set(3.2, 0.8, 1); sign.position.set(0, 2.45, -1.2); room.add(sign);
   // EXIT door in the doorway (click it to go back outside) + green EXIT sign.
   const exit = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.1, 0.08), stdMat({ color: 0x2a2118, roughness: 0.7 }));
@@ -519,6 +590,29 @@ function buildValveRoom() {
   window._valveRoomExitHit = exitHit;
   const exitSign = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.35), new THREE.MeshStandardMaterial({ color: 0x0a3a0a, emissive: 0x2aff7a, emissiveIntensity: 0.9 }));
   exitSign.position.set(0, 2.3, -1.05); room.add(exitSign);
+  // Exposed pipes run along the ceiling from the entrance wall to the
+  // back wall, then drop down to feed the three valves: the water comes
+  // straight from the dam, through the tower, down into this chamber.
+  const chamberPipeMat = stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 });
+  for (const px of [-3, 0, 3]) {
+    const run = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 4.7, 12), chamberPipeMat);
+    run.rotation.x = Math.PI / 2; run.position.set(px, 2.95, -3.35); run.castShadow = true; room.add(run);
+    const drop = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.4, 12), chamberPipeMat);
+    drop.position.set(px, 1.75, -5.7); drop.castShadow = true; room.add(drop);
+  }
+  // The flight of stairs down from the tower: eight steps along the
+  // right wall, from a landing by the entrance door down to the floor.
+  // A dark doorway at the top landing is the door he came down through.
+  const stairMat = stdMat({ color: 0x4a4a48, roughness: 0.95 });
+  for (let i = 0; i < 8; i++) {
+    const step = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.3, 0.4), stairMat);
+    step.position.set(3.3, 2.25 - i * 0.3, -1.5 - i * 0.35);
+    step.castShadow = true; step.receiveShadow = true; room.add(step);
+  }
+  const landing = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.1, 0.8), stairMat);
+  landing.position.set(3.3, 2.42, -1.2); landing.receiveShadow = true; room.add(landing);
+  const stairDoor = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 2.1), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 }));
+  stairDoor.position.set(3.3, 1.9, -0.93); room.add(stairDoor);
 }
 function enterValveRoom() {
   if (inValveRoom) return;
@@ -526,7 +620,7 @@ function enterValveRoom() {
   camera.position.set(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[1], VALVE_ROOM_BOUNDS.pos[2]);
   state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
   setObjectives(OBJ1, 2);
-  toast('Valve room - walk up to a valve wheel to open the pressure controls. Click the green EXIT door to go back outside.');
+  toast('Down in the valve chamber, under the tower - walk up to a valve wheel to open the pressure controls. Click the green EXIT door to go back outside.');
 }
 function exitValveRoom() {
   if (!inValveRoom) return;
@@ -536,24 +630,216 @@ function exitValveRoom() {
   toast('Back outside the station.');
 }
 
+// ---------- Rondout station, dam and water tower (Mission 1) ----------
+// The water facility is an underground chamber beneath a skyscraper,
+// piped directly from a dam, with the building standing around the dam.
+// The player arrives by train at Rondout station at the south end and
+// walks the dirt track north to the tower entrance.
+function buildDamComplex() {
+  const concrete = stdMat({ color: 0x8a8a84, roughness: 0.95 });
+  const steel = stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 });
+  // Concrete gravity dam wall on the west side, 28 m long, 9 m high,
+  // with a wider base batter and a crest walkway with parapets.
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(2.5, 9, 28), concrete);
+  wall.position.set(DAM_X, 4.5, 0); wall.castShadow = true; wall.receiveShadow = true; mission1.add(wall);
+  const base = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 28), concrete);
+  base.position.set(DAM_X, 1, 0); base.castShadow = true; base.receiveShadow = true; mission1.add(base);
+  const crest = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.3, 28), concrete);
+  crest.position.set(DAM_X, 9.15, 0); crest.castShadow = true; mission1.add(crest);
+  for (const px of [-15.6, -12.4]) {
+    const par = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.8, 28), concrete);
+    par.position.set(px, 9.7, 0); par.castShadow = true; mission1.add(par);
+  }
+  // Abutments tying the dam ends into the banks.
+  for (const az of [-15.5, 15.5]) {
+    const ab = new THREE.Mesh(new THREE.BoxGeometry(4, 9, 3), concrete);
+    ab.position.set(DAM_X, 4.5, az); ab.castShadow = true; mission1.add(ab);
+  }
+  // The reservoir held back behind the dam: a still sheet of water at
+  // 7.6 m, just below the crest, with a far earth bank closing it.
+  waterMesh = new THREE.Mesh(new THREE.PlaneGeometry(14, 28), new THREE.MeshStandardMaterial({ color: 0x1a5a8a, roughness: 0.15, metalness: 0.3 }));
+  waterMesh.rotation.x = -Math.PI / 2; waterMesh.position.set(-21, DAM_WATER_Y, 0); mission1.add(waterMesh);
+  const berm = new THREE.Mesh(new THREE.BoxGeometry(2, 3, 30), stdMat({ color: 0x4a5a34, roughness: 1 }));
+  berm.position.set(-28.5, 1.5, 0); berm.castShadow = true; mission1.add(berm);
+  // Spillway at the north end: water pours over the crest, down a
+  // concrete chute on the dam face, into a plunge pool at the base.
+  const chute = new THREE.Mesh(new THREE.BoxGeometry(0.25, 9, 1.6), concrete);
+  chute.rotation.z = 0.262; chute.position.set(-11.75, 4.6, -11); chute.castShadow = true; mission1.add(chute);
+  const spill = new THREE.Mesh(new THREE.BoxGeometry(0.06, 8.8, 1.4), new THREE.MeshStandardMaterial({ color: 0xcfe8ff, emissive: 0x9fd4ff, emissiveIntensity: 0.5, roughness: 0.2 }));
+  spill.rotation.z = 0.262; spill.position.set(-11.6, 4.64, -11); mission1.add(spill);
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(2.2, 20), new THREE.MeshStandardMaterial({ color: 0xbfe0ff, emissive: 0x7fb8e8, emissiveIntensity: 0.4, roughness: 0.2, transparent: true, opacity: 0.9 }));
+  pool.rotation.x = -Math.PI / 2; pool.position.set(-10.4, 0.07, -11); mission1.add(pool);
+  const foam = new THREE.Mesh(new THREE.CircleGeometry(1.4, 20), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+  foam.rotation.x = -Math.PI / 2; foam.position.set(-10.4, 0.08, -11); mission1.add(foam);
+  // Three parallel steel pipes, 0.9 m across, run straight from the dam
+  // base into the west face of the tower: the water is piped directly
+  // from the dam to the facility, and down to the underground chamber.
+  for (const pz of [-3, -5, -7]) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 5.75, 16), steel);
+    pipe.rotation.z = Math.PI / 2; pipe.position.set(-9.9, 0.9, pz); pipe.castShadow = true; mission1.add(pipe);
+    const intake = new THREE.Mesh(new THREE.BoxGeometry(1, 1.2, 1.2), concrete);
+    intake.position.set(-12.9, 0.9, pz); intake.castShadow = true; mission1.add(intake);
+    const collar = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.2, 1.2), steel);
+    collar.position.set(-7, 0.9, pz); collar.castShadow = true; mission1.add(collar);
+    const support = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.45, 0.3), concrete);
+    support.position.set(-10, 0.225, pz); mission1.add(support);
+    for (const fx of [-12.6, -7.2]) {
+      const flange = new THREE.Mesh(new THREE.TorusGeometry(0.48, 0.06, 8, 20), steel);
+      flange.rotation.y = Math.PI / 2; flange.position.set(fx, 0.9, pz); mission1.add(flange);
+    }
+  }
+}
+function buildWaterTower() {
+  // The skyscraper the facility sits under: a solid lobby at ground
+  // level with the entrance door, and a setback glass tower above it,
+  // 14 m wide and about 40 m tall. The front face stays at z -0.75,
+  // so the entrance door, the key hook and the sabotage board keep
+  // their exact positions on the lobby face.
+  box(mission1, 14, 4.5, 12, 0x2e3a44, 0, 2.25, -6.75, null, { color: 0x2e3a44, roughness: 0.6, metalness: 0.3 });
+  const palette = skyFacadePalette(0.35, false);
+  const tower = makeSkyscraper('setback', 13, 35, 11, palette[0]);
+  tower.position.set(0, 4.5, -6.75);
+  mission1.add(tower);
+  // Glass canopy over the entrance door and a red beacon on the roof.
+  box(mission1, 4, 0.15, 1.5, 0x3a3f44, 0, 3.1, -0.1, null, { color: 0x3a3f44, roughness: 0.7, metalness: 0.2 });
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff4444 }));
+  beacon.position.set(0, 40.1, -6.75); mission1.add(beacon);
+}
+function buildRondoutStation() {
+  // Rondout station at the south end: a ground-level track with a
+  // two-car commuter train, a raised concrete platform alongside it,
+  // and a RONDOUT sign. The player spawns on the platform facing the
+  // train (south), steps off through the open car door, and walks the
+  // dirt track north to the tower.
+  const concrete = stdMat({ color: 0x8a8a86, roughness: 0.95 });
+  // Platform: 24 m long, 2.6 m wide, 0.15 m high, top at y 0.15.
+  const platform = new THREE.Mesh(new THREE.BoxGeometry(24, 0.15, 2.6), concrete);
+  platform.position.set(0, 0.075, 12.3); platform.receiveShadow = true; mission1.add(platform);
+  // Yellow safety line along the platform edge.
+  const edgeLine = new THREE.Mesh(new THREE.BoxGeometry(24, 0.02, 0.3), new THREE.MeshStandardMaterial({ color: 0xd8b13a, roughness: 0.8 }));
+  edgeLine.position.set(0, 0.16, 11.2); mission1.add(edgeLine);
+  // Shelter: four posts, a flat canopy roof, and a bench.
+  const postMat = stdMat({ color: 0x3a3f44, metalness: 0.6, roughness: 0.4 });
+  for (const [px, pz] of [[-8.8, 11.4], [-5.2, 11.4], [-8.8, 13.2], [-5.2, 13.2]]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.6, 8), postMat);
+    post.position.set(px, 1.45, pz); post.castShadow = true; mission1.add(post);
+  }
+  const shelterRoof = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.1, 2.4), stdMat({ color: 0x2a4a6a, roughness: 0.6, metalness: 0.3 }));
+  shelterRoof.position.set(-7, 2.8, 12.3); shelterRoof.castShadow = true; mission1.add(shelterRoof);
+  const benchSeat = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.08, 0.5), stdMat({ color: 0x6a4a30, roughness: 0.9 }));
+  benchSeat.position.set(-7, 0.62, 12.5); mission1.add(benchSeat);
+  const benchBack = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 0.08), stdMat({ color: 0x6a4a30, roughness: 0.9 }));
+  benchBack.position.set(-7, 0.9, 12.72); mission1.add(benchBack);
+  // RONDOUT station sign above the platform.
+  const stnSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT', '#1a2a44', '#ffd166', 'DELAWARE AQUEDUCT - 6 AM'), transparent: true, depthWrite: false }));
+  stnSign.scale.set(4.5, 1.1, 1); stnSign.position.set(6, 3.4, 12.3); mission1.add(stnSign);
+  // Track bed, rails and sleepers running east-west.
+  const bed = new THREE.Mesh(new THREE.BoxGeometry(34, 0.12, 3.4), stdMat({ color: 0x4a4a48, roughness: 1 }));
+  bed.position.set(0, 0.06, 15.3); bed.receiveShadow = true; mission1.add(bed);
+  for (const rz of [14.6, 16.0]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(34, 0.12, 0.12), stdMat({ color: 0x9aa2a8, metalness: 0.9, roughness: 0.3 }));
+    rail.position.set(0, 0.18, rz); mission1.add(rail);
+  }
+  for (let x = -16; x <= 16; x += 1.1) {
+    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.08, 2.4), stdMat({ color: 0x3a2f24, roughness: 1 }));
+    tie.position.set(x, 0.12, 15.3); mission1.add(tie);
+  }
+  // The train: two commuter cars with lit windows, sliding doors on the
+  // platform side, bogies and wheels underneath. The first car's centre
+  // door stands open, warm light inside: the door he just stepped out of.
+  const bodyMat = stdMat({ color: 0xb8bcc0, roughness: 0.45, metalness: 0.5 });
+  const stripeMat = stdMat({ color: 0x2a4a6a, roughness: 0.5, metalness: 0.4 });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x201808, emissive: 0xffd166, emissiveIntensity: 0.9, roughness: 0.2, metalness: 0.3 });
+  const darkGlassMat = new THREE.MeshStandardMaterial({ color: 0x0e1a24, roughness: 0.1, metalness: 0.4 });
+  const train = new THREE.Group();
+  for (const carX of [-3.9, 3.9]) {
+    const car = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(7.4, 2.8, 2.6), bodyMat);
+    body.position.y = 2.1; body.castShadow = true; car.add(body);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(7.42, 0.5, 2.62), stripeMat);
+    stripe.position.y = 1.35; car.add(stripe);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.15, 2.4), stdMat({ color: 0x6a6e72, roughness: 0.7 }));
+    roof.position.y = 3.55; car.add(roof);
+    for (const wx of [-2.6, -1.7, 1.7, 2.6]) {
+      for (const wz of [1.31, -1.31]) {
+        const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.8), glassMat);
+        win.position.set(wx, 2.4, wz);
+        if (wz < 0) win.rotation.y = Math.PI;
+        car.add(win);
+      }
+    }
+    // Sliding doors on the platform side, one at each car centre.
+    if (carX < 0) {
+      // Open: the two panels slid apart, warm light spilling out.
+      for (const dx of [-0.68, 0.68]) {
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(0.65, 2.1, 0.08), stdMat({ color: 0x9aa2a8, roughness: 0.5, metalness: 0.5 }));
+        panel.position.set(dx, 1.75, -1.28); car.add(panel);
+      }
+      const glow = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 2.0), new THREE.MeshStandardMaterial({ color: 0x201808, emissive: 0xffd166, emissiveIntensity: 1.4 }));
+      glow.position.set(0, 1.75, -1.34); car.add(glow);
+    } else {
+      const door = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2.1, 0.08), stdMat({ color: 0x9aa2a8, roughness: 0.5, metalness: 0.5 }));
+      door.position.set(0, 1.75, -1.28); car.add(door);
+      const doorWin = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.7), glassMat);
+      doorWin.position.set(0, 2.1, -1.33); car.add(doorWin);
+    }
+    // Bogies and wheels underneath, wheels resting on the rails.
+    for (const bx of [-2.4, 2.4]) {
+      const bogie = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 2.2), stdMat({ color: 0x1a1d20, roughness: 0.8 }));
+      bogie.position.set(bx, 0.7, 0); car.add(bogie);
+      for (const [wx, wz] of [[-0.6, -0.8], [0.6, -0.8], [-0.6, 0.8], [0.6, 0.8]]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.15, 12), stdMat({ color: 0x111111, roughness: 0.9 }));
+        wheel.rotation.x = Math.PI / 2; wheel.position.set(bx + wx, 0.59, wz); car.add(wheel);
+      }
+    }
+    car.position.set(carX, 0, 15.3);
+    train.add(car);
+  }
+  // Cab end: windshield and headlights on the east end, red tail lights
+  // on the west end.
+  const shield = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 0.9), darkGlassMat);
+  shield.position.set(7.62, 2.6, 15.3); shield.rotation.y = Math.PI / 2; train.add(shield);
+  for (const hz of [14.6, 16.0]) {
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshBasicMaterial({ color: 0xfff2c0 }));
+    lamp.position.set(7.62, 1.2, hz); train.add(lamp);
+  }
+  for (const hz of [14.6, 16.0]) {
+    const tail = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2222 }));
+    tail.position.set(-7.62, 1.2, hz); train.add(tail);
+  }
+  mission1.add(train);
+}
+
 function buildMission1() {
   // Ground: grassy upstate field, dirt track to the station.
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), stdMat({ color: 0x4a5a34, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; mission1.add(ground);
   const track = new THREE.Mesh(new THREE.PlaneGeometry(3, 24), stdMat({ color: 0x6a5a44, roughness: 1 }));
   track.rotation.x = -Math.PI / 2; track.position.set(0, 0.02, 2); track.receiveShadow = true; mission1.add(track);
-  // The reservoir itself, to the left: a wide still sheet of water.
-  waterMesh = new THREE.Mesh(new THREE.PlaneGeometry(30, 40), new THREE.MeshStandardMaterial({ color: 0x1a5a8a, roughness: 0.15, metalness: 0.3 }));
-  waterMesh.rotation.x = -Math.PI / 2; waterMesh.position.set(-22, 0.05, 0); mission1.add(waterMesh);
-  const shore = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 40), stdMat({ color: 0x5a5a50, roughness: 1 }));
-  shore.position.set(-7, 0.2, 0); mission1.add(shore);
-  // Control station: aging brick building with a pitched roof.
-  box(mission1, 9, 3.6, 5.5, 0x7a4a3a, 0, 1.8, -3.5, null, { roughness: 0.95 });
-  const roof1 = box(mission1, 9.6, 0.18, 3.2, 0x3a3a3a, 0, 3.9, -4.9);
-  roof1.rotation.x = 0.35;
-  const roof2 = box(mission1, 9.6, 0.18, 3.2, 0x3a3a3a, 0, 3.9, -2.1);
-  roof2.rotation.x = -0.35;
+  // The dam, the pipes and the skyscraper: one connected water complex.
+  // The reservoir is held back behind the dam wall to the west, and
+  // three steel pipes run straight from the dam base into the tower.
+  buildDamComplex();
+  buildWaterTower();
+  // Rondout station at the south end: the train he arrived on.
+  buildRondoutStation();
   window._stationDoor = box(mission1, 1.2, 2.2, 0.15, 0x2a2118, 0, 1.1, -0.68, 'stationDoor');
+  // The station door gets a real handle and panels, so it reads as a
+  // door and not a flat black box. Brass lever handle on both faces, at
+  // handle height, plus two raised panels on the front face.
+  const stationHandleMat = new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 });
+  for (const sz of [1, -1]) {
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 16), stationHandleMat);
+    plate.rotation.x = Math.PI / 2;
+    plate.position.set(0.45, 1.05, -0.68 + sz * 0.085); mission1.add(plate);
+    const lever = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), stationHandleMat);
+    lever.position.set(0.37, 1.05, -0.68 + sz * 0.115); mission1.add(lever);
+  }
+  const stationPanelMat = new THREE.MeshStandardMaterial({ color: 0x3a2c1e, roughness: 0.6 });
+  for (const py of [1.7, 0.65]) {
+    const sp = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.02), stationPanelMat);
+    sp.position.set(0, py, -0.59); mission1.add(sp);
+  }
   // Generous invisible click target in front of the door: the door itself
   // is a thin dark slab, so a click slightly off it would otherwise miss
   // and the player could never enter the valve room.
@@ -586,8 +872,8 @@ function buildMission1() {
     const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1), new THREE.MeshStandardMaterial({ color: 0x0e1a24, roughness: 0.1, metalness: 0.4 }));
     win.position.set(wx, 2, -0.72); mission1.add(win);
   }
-  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT RESERVOIR', '#2a2118', '#ffd166', 'CONTROL STATION'), transparent: true, depthWrite: false }));
-  sign.scale.set(5, 1.25, 1); sign.position.set(0, 4.6, -3.2); mission1.add(sign);
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT DAM', '#2a2118', '#ffd166', 'WATER FACILITY'), transparent: true, depthWrite: false }));
+  sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.8, -0.6); mission1.add(sign);
   // The valve room, inside the control station: the player enters through
   // the station door and walks to the valves. The three valve assemblies
   // live on the back wall of the room, not outside on a plinth, so the
@@ -634,12 +920,14 @@ function buildMission1() {
   const mainPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 7.5, 12), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 }));
   mainPipe.rotation.z = Math.PI / 2; mainPipe.position.set(0, 0.4, -5.85); mainPipe.castShadow = true; mission1.add(mainPipe);
   // Digital control panel, cracked screen, red warning light - sabotaged.
-  const panel = box(mission1, 1.6, 2, 0.5, 0x2a2f33, 5.2, 1.2, -1, 'digitalPanel', { roughness: 0.5, metalness: 0.4 });
+  // It stands on the grass east of the tower entrance (the lobby face is
+  // solid, so it cannot stay where the old building's wall was).
+  const panel = box(mission1, 1.6, 2, 0.5, 0x2a2f33, 8.2, 1.2, -1, 'digitalPanel', { color: 0x2a2f33, roughness: 0.5, metalness: 0.4 });
   panel.rotation.y = -0.5;
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.9), new THREE.MeshStandardMaterial({ color: 0x1a0505, emissive: 0xff2222, emissiveIntensity: 0.8, roughness: 0.3 }));
-  screen.position.set(5.0, 1.5, -0.72); screen.rotation.y = -0.5; mission1.add(screen);
+  screen.position.set(8.0, 1.5, -0.72); screen.rotation.y = -0.5; mission1.add(screen);
   const warnGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xff2222, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
-  warnGlow.scale.set(1.6, 1.6, 1); warnGlow.position.set(5.0, 2.4, -0.7); mission1.add(warnGlow);
+  warnGlow.scale.set(1.6, 1.6, 1); warnGlow.position.set(8.0, 2.4, -0.7); mission1.add(warnGlow);
   // Sabotage device (hidden until the water is stable): small green board on the station wall.
   const dev = box(mission1, 0.35, 0.25, 0.05, 0x7ac74f, -2.2, 1.4, -0.7, 'device1');
   dev.rotation.y = 0; dev.visible = false;
@@ -731,7 +1019,24 @@ function moralChoiceWater() {
     { who: 'Jade', text: 'It is not supposed to. Now - that board on the wall. Click it. It is not MTA issue.' }
   ], () => { setObjectives(OBJ1, 4); toast('Click the small green circuit board on the station wall - it is outside, so leave the valve room first if you are still in it.'); });
 }
+// Act II arrival: the player steps off the train at Rondout station.
+// No briefing, no objectives, no dialogue yet: he walks off the
+// platform toward the tower first, and the mission starts when he
+// crosses z 7 (see the arrival trigger in animate()).
+function startArrival() {
+  try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
+  mission1Started = false; arrivalDone = false;
+  setTimeOfDay('day'); // Rondout arrival is bright morning.
+  currentPlaceKey = 'reservoir';
+  setObjectives([], 0);
+  updateHUD();
+  camera.position.set(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[1], ARRIVAL_VIEW.pos[2]);
+  state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = VIEWS[1];
+  toast('Rondout station, 6 AM. You step off the train.');
+}
 function startMission1() {
+  if (mission1Started) return; // the arrival trigger fires exactly once
+  mission1Started = true;
   // Build the jaw morphs now that the game is on screen, not during the
   // load: mouth estimation must never be able to hold the loading overlay
   // up. The morphs are ready before the first line needs them.
@@ -856,7 +1161,6 @@ function buildMission2() {
 // cityPedestrians walk the sidewalks, and the traffic jam honks.
 const cityCars = [];
 const cityPedestrians = [];
-const jamCars = [];
 let cityTrain = null;
 let hornTimer = 0;
 let hornCtx = null;
@@ -1155,27 +1459,36 @@ function buildCityEnvironment() {
     const lamp = makeStreetLight(lry, 0.08);
     lamp.group.position.set(lx, 0, lz); mission2.add(lamp.group);
   }
-  // The traffic hold-up: a line of cars stopped bumper to bumper in the
-  // east lane, going nowhere, horns sounding. They are static (not in
-  // cityCars) - the jam is the point.
+  // Parked cars along the curb, so the street reads as busy without
+  // blocking the driving lanes. The old bumper-to-bumper jam sat in the
+  // east lane and the flowing cars drove straight through it, so the
+  // road looked packed. Now the lanes flow and the parked row is off
+  // to the side, clear of traffic.
   for (let i = 0; i < 5; i++) {
-    const jc = makeStreetCar(parkCols[i % parkCols.length]);
-    jc.position.set(-2 + i * 2.7, 0, -9.0);
-    mission2.add(jc);
-    jamCars.push(jc);
+    const pc = makeStreetCar(parkCols[i % parkCols.length]);
+    pc.position.set(-30 + i * 9, 0, -7.2);
+    mission2.add(pc);
   }
-  // Cars: two lanes, one each way. Realistic cars (see player.js
-  // buildCar), not boxes, with a shaped body, glass cabin, wheels,
-  // headlights and taillights.
-  const carColors = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a];
-  for (let i = 0; i < 6; i++) {
+  // Cars: two lanes, one each way, with DIFFERENT types of cars on the
+  // road - sedan, SUV, taxi, pickup truck, bus, hatchback and van - so
+  // the highway reads as real traffic, not one car copied six times.
+  // Each lane moves at one speed, so cars in a lane keep their spacing
+  // and never bunch up into a pack.
+  const trafficMix = [
+    { type: 'sedan', col: 0xc0392b }, { type: 'suv', col: 0x2e6fb0 },
+    { type: 'taxi', col: 0xf2c200 }, { type: 'truck', col: 0x5a5a5a },
+    { type: 'bus', col: 0x2e7a4a }, { type: 'hatchback', col: 0xd8d8d8 },
+    { type: 'sedan', col: 0xc07a1a }, { type: 'suv', col: 0x3a3a3a },
+  ];
+  const laneSpeed = { east: 7, west: -6.5 };
+  for (let i = 0; i < trafficMix.length; i++) {
     const east = i % 2 === 0; // even cars go east (+x) on the near lane
-    const col = carColors[i % carColors.length];
-    const car = buildCar(col, { type: 'sedan' });
-    car.position.set(-40 + i * 14 + Math.random() * 6, 0, east ? -9.0 : -11.0); // car lanes, inside the bike lanes
+    const spec = trafficMix[i];
+    const car = buildCar(spec.col, { type: spec.type });
+    car.position.set(-44 + i * 11, 0, east ? -9.0 : -11.0); // car lanes, inside the bike lanes
     if (!east) car.rotation.y = Math.PI; // face the direction of travel
     mission2.add(car);
-    cityCars.push({ group: car, speed: (5.5 + Math.random() * 3) * (east ? 1 : -1) });
+    cityCars.push({ group: car, speed: east ? laneSpeed.east : laneSpeed.west });
   }
   // The grey van: a plain grey van with blue windows, driving the east
   // lane with the other traffic. No logo, no text, no rope, no person
@@ -1183,7 +1496,7 @@ function buildCityEnvironment() {
   const greyVan = buildCar(0x9aa5ad, { type: 'van' });
   greyVan.position.set(-20, 0, -9.0);
   mission2.add(greyVan);
-  cityCars.push({ group: greyVan, speed: 6.5 });
+  cityCars.push({ group: greyVan, speed: laneSpeed.east });
   // Pedestrians on the sidewalks: a busy crowd, like the plaza video -
   // singles and pairs, different paces, some on a phone, some with bags.
   // They walk along the street (lane axis x) and wrap at the ends, so
@@ -3195,6 +3508,19 @@ function animate() {
       if (dist2D(camera.position.x, camera.position.z, vx, -5.7) < 1.8) { openValveModal(); break; }
     }
   }
+  // Arrival: the player stepped off the train at Rondout station. The
+  // mission only starts once he walks off the platform toward the
+  // facility: crossing z 7 on the dirt track, past the platform end at
+  // z 11. He spawns at z 12.3, so this cannot fire at spawn, and the
+  // flag makes it fire exactly once per Act II entry.
+  if (state.mission === 1 && !mission1Started && !arrivalDone
+    && document.getElementById('dialogue').classList.contains('hidden')
+    && document.getElementById('valveModal').classList.contains('hidden')) {
+    if (camera.position.z < 7) {
+      arrivalDone = true;
+      startMission1();
+    }
+  }
   // Station key: walking up to the hook picks it up, so a missed click
   // is not a dead end. The key is right beside the door, before the
   // player needs it.
@@ -3253,7 +3579,7 @@ function animate() {
   const bobAmp = moving ? 0.035 : 0.008;
   const bobFreq = moving ? 5.2 : 0.8;
   camera.position.y = (state.mission === 3 ? 1.9 : 1.7) + Math.sin(t * bobFreq) * bobAmp * sway;
-  if (waterMesh) waterMesh.position.y = 0.05 + Math.sin(t * 0.6) * 0.02;
+  if (waterMesh) waterMesh.position.y = DAM_WATER_Y + Math.sin(t * 0.6) * 0.02;
   for (const ch of chargeMeshes) {
     if (!state.derrickDown && ch.material.emissive) ch.material.emissiveIntensity = 1.2 + Math.sin(t * 5) * 0.8;
   }
@@ -3337,6 +3663,21 @@ function animate() {
   if (chaseActive) { tension = 0.8; hb = 105; }
   setTension(tension);
   soundTick(dt, { moving, heartbeatBpm: hb });
+  // Dam roar: loud near the dam, quieter at the platform, muffled
+  // underground in the valve room. Only while Mission 1 is active and
+  // the dam ambient is playing; Missions 2 and 3 switch ambients and
+  // the level resets to full on the switch, so this never runs there.
+  if (state.mission === 1) {
+    try {
+      let lvl;
+      if (inValveRoom) lvl = 0.2;
+      else {
+        const d = dist2D(camera.position.x, camera.position.z, DAM_X, DAM_Z);
+        lvl = Math.max(0.15, Math.min(1.0, 1.15 - d * 0.04));
+      }
+      if (Math.abs(lvl - lastDamLevel) > 0.02) { lastDamLevel = lvl; setAmbientLevel(lvl); }
+    } catch (e) { /* sound is best effort, never break the frame */ }
+  }
   updateDeckChase(dt); // Verrazzano deck chase, no-op when inactive
   // Third-person: show the player avatar and put the camera behind it.
   {
@@ -3353,7 +3694,7 @@ buildMission2();
 buildMission3();
 setObjectives(OBJ1, 0); updateHUD(); initVoiceUI();
 initSoundUI(); // procedural sound: ambient, effects, score, sound toggle
-setAmbient('field'); // the reservoir: wind and open air
+setAmbient('dam'); // the dam: the roar of water flowing, loud near the dam
 setTension(0.15);
 // Wire the wallet Connect button. Act I and Act III call initZamaUI on
 // their own boot, but Act II boots standalone when the player resumes

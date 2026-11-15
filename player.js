@@ -45,8 +45,24 @@ export function isThirdPerson() { return thirdPerson; }
 export function getZoom() { return zoomDist; }
 export function setThirdPerson(on) {
   thirdPerson = !!on;
+  // Remember the choice, so it survives a reload and the next act: the
+  // player wants to see himself, and the old code reset the camera to
+  // first-person on desktop every time the page loaded.
+  try { localStorage.setItem('lastSignalCamera3rd', thirdPerson ? '1' : '0'); } catch (e) { /* ignore */ }
   try { const b = document.getElementById('camBtn'); if (b) b.textContent = thirdPerson ? 'Camera: 3rd (C)' : 'Camera: 1st (C)'; } catch (e) { /* no button yet */ }
   try { const b = document.getElementById('touchCamBtn'); if (b) b.textContent = thirdPerson ? '3rd' : '1st'; } catch (e) { /* no touch button yet */ }
+}
+// The camera mode to start with: the saved choice if there is one, else
+// third-person. The player wants to see himself walk, drive and sleep,
+// so third-person is the default on every device, not first-person on
+// desktop.
+function cameraModeDefault() {
+  try {
+    const saved = localStorage.getItem('lastSignalCamera3rd');
+    if (saved === '1') return true;
+    if (saved === '0') return false;
+  } catch (e) { /* ignore */ }
+  return true;
 }
 export function toggleThirdPerson() { setThirdPerson(!thirdPerson); }
 export function isTouchDevice() {
@@ -59,16 +75,39 @@ export function isTouchDevice() {
 }
 
 // ---------- Player avatar ----------
-// A procedural humanoid, about 1.8 m tall, built from boxes and spheres.
-// Two-segment arms and legs (shoulder/elbow, hip/knee) so it can walk,
-// sit in a car, and lie flat on a bed. The jacket uses the equipped
-// clothes colour and a cap is added when the cap accessory is equipped,
-// so the avatar shows what the player bought in the store.
+// The player is a realistic rigged young man (Quaternius "Casual Male",
+// models/rigged/player-rigged.glb, CC0, 23-joint rig with Walk and Idle
+// clips), not the old boxy figure. The model loads asynchronously with
+// a 30-second timeout; until it arrives (or if it fails) a procedural
+// fallback figure stands in, so the game never hangs and the avatar is
+// never missing. The outer group is stable: getAvatar() returns it
+// immediately, and the rig (or the fallback) lives inside it, so every
+// caller (home, acts, driving) keeps working unchanged. The rig has
+// separate materials per part, so the shirt is tinted with the equipped
+// clothes colour and the skin with a realistic brown tone. The raw
+// file's Skin is near-black and its Face near-white (the pack's
+// placeholder colours), so both are recoloured on load.
+const PLAYER_MODEL = 'models/rigged/player-rigged.glb';
+const PLAYER_HEIGHT = 1.75; // target standing height in metres
+const PLAYER_SKIN = 0x6b4a2f; // warm medium-dark brown skin
 let avatar = null;
-let avatarParts = null;
+let avatarParts = null; // procedural fallback parts (null once rigged)
 let avatarPose = 'stand';
 let avatarWalkPhase = 0;
 let avatarScene = null;
+let avatarRigged = false; // true once the rigged model replaced the fallback
+let avatarRigLoadStarted = false;
+let avatarRig = null; // the loaded rig group (child of avatar)
+let avatarFallback = null; // the procedural fallback group (child of avatar)
+let avatarMixer = null;
+let avatarWalkAction = null;
+let avatarIdleAction = null;
+let avatarMoveAction = null; // 'walk' | 'idle' | null
+let avatarRootBone = null;
+let avatarRootRest = null;
+let avatarBones = null; // Map of bone name -> bone
+let avatarRestQuats = null; // Map of bone -> rest quaternion
+let avatarShirtMat = null; // the rig's shirt material, for re-tinting
 function outfitColor() {
   try {
     const eq = getEquipped();
@@ -83,8 +122,20 @@ function hasCapEquipped() {
 function avMat(color, roughness) {
   return new THREE.MeshStandardMaterial({ color, roughness: roughness === undefined ? 0.85 : roughness });
 }
-export function buildPlayerAvatar() {
-  if (avatar) return avatar;
+// Re-tint the player's shirt with the currently equipped clothes
+// colour (call after buying or equipping in the store). The rig's
+// Shirt material is tinted; the fallback's jacket material is tinted.
+export function refreshPlayerOutfit() {
+  try {
+    const col = outfitColor();
+    if (avatarRigged && avatarShirtMat) { avatarShirtMat.color.copy(col); return; }
+    if (avatarParts && avatarParts.jacketMat) avatarParts.jacketMat.color.copy(col);
+  } catch (e) { /* ignore */ }
+}
+// The procedural fallback figure (the old boxy avatar), used only until
+// the rigged model loads, or permanently if it never does. Same size and
+// same poses as before, so nothing that uses the avatar can tell.
+function buildFallbackAvatar() {
   const skin = 0xc9a186, hairC = 0x2a2018, pants = 0x2a2f38, shoe = 0x1a1a1a;
   const jacket = outfitColor();
   const g = new THREE.Group();
@@ -147,10 +198,172 @@ export function buildPlayerAvatar() {
   const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.42, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; g.add(shadow);
   g.traverse(o => { o.userData.keepAlive = true; });
+  return { group: g, parts: { legL, legR, armL, armR, headGroup, torso, capMesh, jacketMat } };
+}
+
+export function buildPlayerAvatar() {
+  if (avatar) return avatar;
+  const g = new THREE.Group();
+  g.userData.keepAlive = true;
+  const fb = buildFallbackAvatar();
+  g.add(fb.group);
   avatar = g;
-  avatarParts = { legL, legR, armL, armR, headGroup, torso, capMesh };
+  avatarFallback = fb.group;
+  avatarParts = fb.parts;
   avatarPose = 'stand';
+  if (!avatarRigLoadStarted) { avatarRigLoadStarted = true; loadPlayerRig(); }
   return avatar;
+}
+
+// Load the rigged young man. Recolours skin/face and the shirt, scales
+// him to the player's height, re-grounds his feet, sets up the Walk
+// and Idle clips, then swaps the fallback for the rig. Any failure
+// leaves the fallback in place, so the game never hangs.
+async function loadPlayerRig() {
+  try {
+    const loader = new GLTFLoader();
+    const gltf = await Promise.race([
+      loader.loadAsync(PLAYER_MODEL),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('player model timed out after 30s')), 30000))
+    ]);
+    const rig = gltf.scene;
+    rig.userData.keepAlive = true;
+    rig.traverse(o => { o.userData.keepAlive = true; });
+    // Recolour: skin and face to the player's skin tone, shirt to the
+    // equipped clothes colour. The raw file's Skin is near-black and
+    // its Face near-white, so without this the player would be a black
+    // silhouette with a white face. Materials are cloned so the source
+    // file is never mutated; the shirt clone is kept for re-tinting.
+    const matByName = {};
+    rig.traverse(o => {
+      if (o.isMesh && o.material && o.material.name && !matByName[o.material.name]) matByName[o.material.name] = o.material;
+    });
+    const tint = (names, colour) => {
+      for (const n of names) {
+        if (!matByName[n]) continue;
+        const m = matByName[n].clone();
+        m.color.setHex(colour);
+        rig.traverse(o => { if (o.isMesh && o.material && o.material.name === n) o.material = m; });
+        if (n === 'Shirt') avatarShirtMat = m;
+      }
+    };
+    tint(['Skin', 'Face'], PLAYER_SKIN);
+    tint(['Shirt'], outfitColor().getHex());
+    rig.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    // Normalise height to the player's height, then re-ground the feet.
+    // The scale lives on the INNER rig group, never on the outer avatar
+    // group: the drive code sets the outer group's scale to 0.72 to seat
+    // the driver in the car and back to 1 after, and that must keep
+    // working exactly as before.
+    let s = 1;
+    const box = new THREE.Box3().setFromObject(rig);
+    const size = new THREE.Vector3(); box.getSize(size);
+    if (size.y > 0) s = PLAYER_HEIGHT / size.y;
+    rig.scale.setScalar(s);
+    const box2 = new THREE.Box3().setFromObject(rig);
+    rig.position.y = -box2.min.y;
+    // Bones, mixer and clips. The root bone's rest position is kept so
+    // the Walk clip's root motion cannot slide the avatar across the
+    // floor (the clip moves the root forward as it walks).
+    const bones = new Map();
+    rig.traverse(o => { if (o.isBone) bones.set(o.name, o); });
+    const restQuats = new Map();
+    bones.forEach(b => restQuats.set(b, b.quaternion.clone()));
+    let mixer = null, walkAction = null, idleAction = null, rootBone = null, rootRest = null;
+    try {
+      const walkClip = THREE.AnimationClip.findByName(gltf.animations || [], 'Walk');
+      const idleClip = THREE.AnimationClip.findByName(gltf.animations || [], 'Idle');
+      mixer = new THREE.AnimationMixer(rig);
+      if (walkClip) walkAction = mixer.clipAction(walkClip);
+      if (idleClip) idleAction = mixer.clipAction(idleClip);
+      rootBone = bones.get('Bone') || bones.get('Root') || null;
+      if (!rootBone) { for (const b of bones.values()) { rootBone = b; break; } }
+      if (rootBone) rootRest = rootBone.position.clone();
+    } catch (e) { mixer = null; walkAction = null; idleAction = null; }
+    // A soft blob shadow under the feet, like the fallback had.
+    const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.42, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
+    shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; shadow.userData.keepAlive = true; rig.add(shadow);
+    // Cap, if the cap accessory is equipped: on top of the head,
+    // measured from the hair so it sits on the head, not above it.
+    let headTop = PLAYER_HEIGHT;
+    try {
+      const hairBox = new THREE.Box3();
+      rig.traverse(o => { if (o.isMesh && o.material && o.material.name === 'Hair') hairBox.expandByObject(o); });
+      if (!hairBox.isEmpty()) headTop = hairBox.max.y;
+    } catch (e) { /* use PLAYER_HEIGHT */ }
+    if (hasCapEquipped()) {
+      try {
+        const cap = new THREE.Group();
+        const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.135, 0.08, 16), avMat(0x2e4a6b, 0.85));
+        crown.position.y = 0.04; cap.add(crown);
+        const brim = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.02, 0.12), avMat(0x2e4a6b, 0.85));
+        brim.position.set(0, 0.01, 0.14); cap.add(brim);
+        // headTop is in outer-group space; the cap is a child of the
+        // rig, so convert it to rig-local space (undo the rig's scale
+        // and re-ground offset) so it sits on the head, not above it.
+        cap.position.set(0, (headTop - rig.position.y) / s - 0.03 / s, 0.02 / s);
+        cap.userData.keepAlive = true;
+        rig.add(cap);
+      } catch (e) { /* no cap */ }
+    }
+    // Swap the fallback for the rig, keeping the outer group (and its
+    // position, rotation and scale) exactly as it was.
+    const outer = avatar;
+    if (!outer) return;
+    if (avatarFallback && avatarFallback.parent === outer) {
+      try { outer.remove(avatarFallback); } catch (e) { /* ignore */ }
+      try {
+        avatarFallback.traverse(m => {
+          try { if (m.geometry) m.geometry.dispose(); } catch (e) { /* ignore */ }
+          try {
+            const mats = Array.isArray(m.material) ? m.material : (m.material ? [m.material] : []);
+            for (const mm of mats) { try { mm.dispose(); } catch (e) { /* ignore */ } }
+          } catch (e) { /* ignore */ }
+        });
+      } catch (e) { /* ignore */ }
+      avatarFallback = null;
+    }
+    outer.add(rig);
+    avatarRig = rig;
+    avatarMixer = mixer; avatarWalkAction = walkAction; avatarIdleAction = idleAction;
+    avatarRootBone = rootBone; avatarRootRest = rootRest;
+    avatarBones = bones; avatarRestQuats = restQuats;
+    avatarRigged = true;
+    avatarParts = null;
+    // Re-apply the current pose on the rig (it may be lying or sitting).
+    setAvatarPose(avatarPose);
+  } catch (e) { /* keep the fallback; the game never hangs on the avatar */ }
+}
+
+// Restore every rig bone to its rest rotation.
+function restoreRiggedBones() {
+  if (!avatarBones || !avatarRestQuats) return;
+  avatarBones.forEach(b => {
+    const q = avatarRestQuats.get(b);
+    if (q) b.quaternion.copy(q);
+  });
+}
+
+// Seat the rigged player: thighs forward, shins down, arms forward,
+// like the seated crowd. Deltas are on top of the rest rotations, in
+// degrees about each bone's local X axis (same numbers as Jade's seated
+// pose in crowd.js; this rig is the male counterpart of hers).
+function riggedSitPose() {
+  if (!avatarBones || !avatarRestQuats) return;
+  const deg = THREE.MathUtils.degToRad;
+  const delta = (name, d) => {
+    const bone = avatarBones.get(name);
+    if (!bone) return;
+    const rest = avatarRestQuats.get(bone);
+    if (!rest) return;
+    const dq = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), deg(d));
+    bone.quaternion.copy(rest).multiply(dq);
+  };
+  delta('UpperLegL', 70); delta('UpperLegR', 130);
+  delta('LowerLegL', -70); delta('LowerLegR', -90);
+  delta('ShoulderL', 45); delta('ShoulderR', 45);
+  delta('LowerArmL', -55); delta('LowerArmR', -55);
+  delta('Torso', -7);
 }
 export function getAvatar() { return avatar || buildPlayerAvatar(); }
 export function detachAvatar() {
@@ -163,9 +376,32 @@ export function detachAvatar() {
 // updateAvatarWalk and only runs in the stand/walk pose.
 export function setAvatarPose(pose) {
   const a = getAvatar();
+  avatarPose = pose;
+  if (avatarRigged && avatarRig) {
+    // Rigged: stop any walk/idle so it cannot overwrite the pose.
+    try { if (avatarMixer) avatarMixer.stopAllAction(); } catch (e) { /* ignore */ }
+    avatarMoveAction = null;
+    a.rotation.x = 0; a.rotation.z = 0;
+    if (pose === 'lie') {
+      // Lie flat on the back: rotate the group so the head (+y) points
+      // to -z. The group's origin is at the feet, so place it at the
+      // foot of the bed and the head lands on the pillow.
+      a.rotation.x = -Math.PI / 2;
+    } else if (pose === 'sit') {
+      riggedSitPose();
+    } else {
+      // Stand: bones back to rest, then the Idle clip holds a natural
+      // standing pose (never the bind T-pose). updateAvatarWalk swaps
+      // to Walk when the player moves.
+      restoreRiggedBones();
+      try {
+        if (avatarIdleAction) { avatarIdleAction.play(); avatarMoveAction = 'idle'; }
+      } catch (e) { /* ignore */ }
+    }
+    return;
+  }
   const p = avatarParts;
   if (!p) return;
-  avatarPose = pose;
   // Reset all limb rotations first, then apply the pose.
   p.legL.hip.rotation.set(0, 0, 0); p.legL.knee.rotation.set(0, 0, 0);
   p.legR.hip.rotation.set(0, 0, 0); p.legR.knee.rotation.set(0, 0, 0);
@@ -188,9 +424,34 @@ export function setAvatarPose(pose) {
     p.armR.shoulder.rotation.x = -0.75; p.armR.elbow.rotation.x = -0.4;
   }
 }
-// Procedural walk: arms and legs swing opposite, knees bend, with a
-// small bob. Only runs while the avatar is standing/walking.
+// Walk: the rigged model plays its embedded Walk clip (feet stepping,
+// not gliding) and Idle when still; the procedural fallback swings its
+// limbs. Only runs while the avatar is standing/walking.
 export function updateAvatarWalk(moving, dt) {
+  if (avatarRigged && avatarRig) {
+    if (avatarPose !== 'stand' || !avatarMixer) return;
+    const d = dt || 0.016;
+    try {
+      const want = moving ? 'walk' : 'idle';
+      if (avatarMoveAction !== want) {
+        if (want === 'walk' && avatarWalkAction) {
+          try { if (avatarIdleAction) avatarIdleAction.stop(); avatarWalkAction.play(); } catch (e) { /* ignore */ }
+        } else if (want === 'idle' && avatarIdleAction) {
+          try { if (avatarWalkAction) avatarWalkAction.stop(); avatarIdleAction.play(); } catch (e) { /* ignore */ }
+        }
+        avatarMoveAction = want;
+      }
+      avatarMixer.update(d);
+      // The Walk clip moves the root bone forward as it walks; pin the
+      // root back to its rest spot so the avatar walks in place and the
+      // game (not the clip) moves him.
+      if (avatarRootBone && avatarRootRest) {
+        avatarRootBone.position.x = avatarRootRest.x;
+        avatarRootBone.position.z = avatarRootRest.z;
+      }
+    } catch (e) { /* ignore */ }
+    return;
+  }
   const p = avatarParts;
   if (!p || avatarPose !== 'stand') return;
   if (moving) {
@@ -397,7 +658,7 @@ export function buildTouchControls() {
     }
   });
   setTouchVisible(isTouchDevice());
-  setThirdPerson(isTouchDevice());
+  setThirdPerson(cameraModeDefault());
 }
 export function setTouchVisible(on) {
   touchVisible = !!on;
@@ -560,16 +821,26 @@ export function buildCar(colorHex, opts) {
   const glassMat = new THREE.MeshStandardMaterial({ color: type === 'van' ? 0x2f6fb5 : 0x10181f, roughness: 0.15, metalness: 0.7, transparent: true, opacity: 0.55 });
   const trimMat = carMat(0x1a1d20, 0.6, 0.3);
   const chromeMat = carMat(0xc8ccd0, 0.25, 0.9);
-  // Proportions by type (length along z, width along x).
+  // Proportions by type (length along z, width along x). cabZ is where
+  // the cabin sits along the car: near the middle for a sedan, at the
+  // front for a pickup truck (the bed is behind it), centred for a bus.
   const dims = type === 'van'
-    ? { len: 4.9, wid: 2.0, bodyH: 1.05, bodyY: 0.85, cabLen: 3.6, cabY: 1.55, cabH: 0.7, wheelR: 0.38 }
+    ? { len: 4.9, wid: 2.0, bodyH: 1.05, bodyY: 0.85, cabLen: 3.6, cabY: 1.55, cabH: 0.7, cabZ: -0.29, wheelR: 0.38 }
     : type === 'suv'
-    ? { len: 4.6, wid: 1.95, bodyH: 0.75, bodyY: 0.62, cabLen: 2.6, cabY: 1.25, cabH: 0.62, wheelR: 0.38 }
+    ? { len: 4.6, wid: 1.95, bodyH: 0.75, bodyY: 0.62, cabLen: 2.6, cabY: 1.25, cabH: 0.62, cabZ: -0.28, wheelR: 0.38 }
     : type === 'm4'
-    ? { len: 4.7, wid: 1.9, bodyH: 0.52, bodyY: 0.5, cabLen: 2.1, cabY: 1.02, cabH: 0.46, wheelR: 0.34 }
+    ? { len: 4.7, wid: 1.9, bodyH: 0.52, bodyY: 0.5, cabLen: 2.1, cabY: 1.02, cabH: 0.46, cabZ: -0.28, wheelR: 0.34 }
     : type === 'coupe'
-    ? { len: 4.5, wid: 1.85, bodyH: 0.5, bodyY: 0.5, cabLen: 2.0, cabY: 1.0, cabH: 0.45, wheelR: 0.33 }
-    : { len: 4.4, wid: 1.85, bodyH: 0.55, bodyY: 0.55, cabLen: 2.2, cabY: 1.08, cabH: 0.5, wheelR: 0.34 };
+    ? { len: 4.5, wid: 1.85, bodyH: 0.5, bodyY: 0.5, cabLen: 2.0, cabY: 1.0, cabH: 0.45, cabZ: -0.27, wheelR: 0.33 }
+    : type === 'taxi'
+    ? { len: 4.4, wid: 1.85, bodyH: 0.55, bodyY: 0.55, cabLen: 2.2, cabY: 1.08, cabH: 0.5, cabZ: -0.26, wheelR: 0.34 }
+    : type === 'truck'
+    ? { len: 5.2, wid: 2.0, bodyH: 0.65, bodyY: 0.62, cabLen: 1.7, cabY: 1.2, cabH: 0.6, cabZ: 1.15, wheelR: 0.4 }
+    : type === 'bus'
+    ? { len: 7.6, wid: 2.45, bodyH: 0.95, bodyY: 0.85, cabLen: 6.2, cabY: 1.6, cabH: 0.85, cabZ: 0, wheelR: 0.42 }
+    : type === 'hatchback'
+    ? { len: 3.9, wid: 1.8, bodyH: 0.55, bodyY: 0.55, cabLen: 2.3, cabY: 1.05, cabH: 0.48, cabZ: -0.15, wheelR: 0.33 }
+    : { len: 4.4, wid: 1.85, bodyH: 0.55, bodyY: 0.55, cabLen: 2.2, cabY: 1.08, cabH: 0.5, cabZ: -0.26, wheelR: 0.34 };
   const L = dims.len, W = dims.wid;
   // Lower body: the M4, the coupe and the van are built from an extruded
   // side profile (a sculpted silhouette with a sloped hood/nose and
@@ -593,9 +864,34 @@ export function buildCar(colorHex, opts) {
     const hoodZ = L * 0.32;
     const hood = new THREE.Mesh(new THREE.BoxGeometry(W * 0.92, 0.16, hoodLen), bodyMat);
     hood.position.set(0, dims.bodyY + dims.bodyH / 2 - 0.02, hoodZ); hood.rotation.x = 0.08; hood.castShadow = true; g.add(hood);
-    // Trunk: a short deck at the rear (-z).
-    const trunk = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, 0.14, L * 0.16), bodyMat);
-    trunk.position.set(0, dims.bodyY + dims.bodyH / 2 - 0.03, -L * 0.38); trunk.castShadow = true; g.add(trunk);
+    // Trunk: a short deck at the rear (-z). A pickup truck has no trunk:
+    // it has an open bed instead, added below.
+    if (type !== 'truck') {
+      const trunk = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, 0.14, L * 0.16), bodyMat);
+      trunk.position.set(0, dims.bodyY + dims.bodyH / 2 - 0.03, -L * 0.38); trunk.castShadow = true; g.add(trunk);
+    }
+  }
+  // A pickup truck's open bed: a floor and low walls behind the cab, so
+  // the rear reads as a truck bed, not a sedan trunk.
+  if (type === 'truck') {
+    const bedFloor = new THREE.Mesh(new THREE.BoxGeometry(W * 0.9, 0.06, L * 0.5), trimMat);
+    bedFloor.position.set(0, dims.bodyY + dims.bodyH / 2 - 0.05, -L * 0.28); g.add(bedFloor);
+    for (const sx of [-1, 1]) {
+      const bedWall = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.45, L * 0.5), bodyMat);
+      bedWall.position.set(sx * (W / 2 - 0.03), dims.bodyY + dims.bodyH / 2 + 0.18, -L * 0.28); g.add(bedWall);
+    }
+    const tailgate = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, 0.45, 0.06), bodyMat);
+    tailgate.position.set(0, dims.bodyY + dims.bodyH / 2 + 0.18, -L * 0.52); g.add(tailgate);
+  }
+  // A taxi's roof sign, and a bus's destination sign, so each reads as
+  // its own kind of vehicle at a glance.
+  if (type === 'taxi') {
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.28), new THREE.MeshBasicMaterial({ color: 0xffe9a0 }));
+    sign.position.set(0, dims.cabY + dims.cabH / 2 + 0.1, dims.cabZ); g.add(sign);
+  }
+  if (type === 'bus') {
+    const dest = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.3, 0.06), new THREE.MeshBasicMaterial({ color: 0x1a2a3a }));
+    dest.position.set(0, dims.cabY + 0.2, L / 2 - 0.05); g.add(dest);
   }
   // M4 power dome: a raised centre ridge on the long sculpted hood, so
   // the nose reads as a BMW M4, not a flat slab.
@@ -604,18 +900,19 @@ export function buildCar(colorHex, opts) {
     dome.position.set(0, 0.85, L * 0.32); dome.rotation.x = 0.08; dome.castShadow = true; g.add(dome);
   }
   // Cabin: glasshouse with a roof, set back from the nose, with a
-  // windscreen slope at the front and a rear window at the back.
+  // windscreen slope at the front and a rear window at the back. The
+  // cabin sits at cabZ: mid-car for a sedan, at the front for a truck.
   const cabin = new THREE.Mesh(new THREE.BoxGeometry(W * 0.86, dims.cabH, dims.cabLen), glassMat);
-  cabin.position.set(0, dims.cabY, -L * 0.06); cabin.castShadow = true; g.add(cabin);
+  cabin.position.set(0, dims.cabY, dims.cabZ); cabin.castShadow = true; g.add(cabin);
   const roof = new THREE.Mesh(new THREE.BoxGeometry(W * 0.8, 0.07, dims.cabLen * 0.82), bodyMat);
-  roof.position.set(0, dims.cabY + dims.cabH / 2 + 0.02, -L * 0.06); roof.castShadow = true; g.add(roof);
+  roof.position.set(0, dims.cabY + dims.cabH / 2 + 0.02, dims.cabZ); roof.castShadow = true; g.add(roof);
   // Pillars: thin body-colour strips at the cabin corners so the glass
   // reads as windows, not a solid dark box.
   for (const sx of [-1, 1]) {
     const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.07, dims.cabH, 0.09), bodyMat);
-    pillar.position.set(sx * W * 0.42, dims.cabY, L * 0.02); g.add(pillar);
+    pillar.position.set(sx * W * 0.42, dims.cabY, dims.cabZ + dims.cabLen * 0.38); g.add(pillar);
     const pillarR = new THREE.Mesh(new THREE.BoxGeometry(0.07, dims.cabH, 0.09), bodyMat);
-    pillarR.position.set(sx * W * 0.42, dims.cabY, -L * 0.16); g.add(pillarR);
+    pillarR.position.set(sx * W * 0.42, dims.cabY, dims.cabZ - dims.cabLen * 0.38); g.add(pillarR);
   }
   // A van's cabin is long, so one more pillar pair at the back divides
   // the side glass into two windows.
@@ -821,5 +1118,5 @@ export function initPlayer() {
     const cb = document.getElementById('camBtn');
     if (cb) cb.onclick = () => toggleThirdPerson();
   } catch (e) { /* optional */ }
-  try { setThirdPerson(isTouchDevice()); } catch (e) { /* ignore */ }
+  try { setThirdPerson(cameraModeDefault()); } catch (e) { /* ignore */ }
 }

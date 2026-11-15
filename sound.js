@@ -14,7 +14,7 @@ try { soundMuted = localStorage.getItem(SOUND_MUTE_KEY) === '1'; } catch (e) { s
 
 let ctx = null, master = null, ambientBus = null, sfxBus = null, musicBus = null;
 let noiseBuf = null;
-let currentAmbient = null, activeAmbient = null;
+let currentAmbient = null, activeAmbient = null, ambientLevel = 1;
 let scoreNodes = null, tensionTarget = 0.2;
 let tickTime = 0, lastBeat = 0, stepTimer = 0, chirpTimer = 3, blipTimer = 5, lastShutter = 0;
 
@@ -45,6 +45,16 @@ const AMBIENTS = {
   bridge: [
     { src: 'noise', filter: { type: 'bandpass', freq: 450, q: 0.4 }, gain: 0.09, lfo: { rate: 0.07, depth: 0.05, param: 'gain' } },
     { src: 'sine', freq: 50, gain: 0.03 }
+  ],
+  // The dam at Rondout: the roar of water falling and rushing through
+  // the spillway. Layered noise - deep rumble, mid roar, high spray
+  // hiss - with a slow wobble so it breathes like real water. Louder
+  // than the other ambients on purpose: the player should hear the dam.
+  dam: [
+    { src: 'noise', filter: { type: 'lowpass', freq: 180 }, gain: 0.14, lfo: { rate: 0.5, depth: 0.05, param: 'gain' } },
+    { src: 'noise', filter: { type: 'bandpass', freq: 500, q: 0.5 }, gain: 0.10, lfo: { rate: 0.11, depth: 0.04, param: 'gain' } },
+    { src: 'noise', filter: { type: 'highpass', freq: 2500 }, gain: 0.03, lfo: { rate: 0.23, depth: 0.015, param: 'gain' } },
+    { src: 'sine', freq: 45, gain: 0.04 }
   ],
   control: [
     { src: 'sine', freq: 55, gain: 0.03 },
@@ -171,10 +181,12 @@ export function ensureAudio() {
 
 // Crossfade to a named ambient (see AMBIENTS), or 'off' to silence it.
 // Safe to call before audio exists: the name is remembered and applied
-// when the context unlocks on the first user gesture.
+// when the context unlocks on the first user gesture. Switching ambients
+// resets the level to full; use setAmbientLevel to scale it after.
 export function setAmbient(name) {
   if (name === currentAmbient) return;
   currentAmbient = name || null;
+  ambientLevel = 1;
   if (!ctx) return;
   try {
     const old = activeAmbient;
@@ -187,9 +199,18 @@ export function setAmbient(name) {
     g.gain.value = 0;
     g.connect(ambientBus);
     const layers = AMBIENTS[name].map(spec => buildLayer(spec, g));
-    g.gain.setTargetAtTime(1, ctx.currentTime, 0.6);
+    g.gain.setTargetAtTime(ambientLevel, ctx.currentTime, 0.6);
     activeAmbient = { name, gain: g, layers };
   } catch (e) { /* ambient is decoration, never fatal */ }
+}
+
+// Scale the active ambient's level (0 to 1) without switching it: the
+// caller uses this to fade a roar by distance, or muffle it indoors.
+// Safe to call before audio exists or when no ambient is active.
+export function setAmbientLevel(v) {
+  ambientLevel = Math.max(0, Math.min(1, v === undefined || v === null ? 1 : v));
+  if (!ctx || !activeAmbient) return;
+  try { activeAmbient.gain.gain.setTargetAtTime(ambientLevel, ctx.currentTime, 0.3); } catch (e) { /* ignore */ }
 }
 
 // The procedural score: two detuned low sines beating against each other
@@ -384,11 +405,16 @@ function updateSoundButton() {
 
 // Wire the HUD sound button, unlock audio on the first user gesture, and
 // give every button a soft click sound. Call once at boot in each act.
+// The document listeners attach only once, so calling this from each act
+// in the single-page game never stacks duplicate click sounds.
+let soundUIWired = false;
 export function initSoundUI() {
   updateSoundButton();
   try {
     const b = document.getElementById('soundBtn');
     if (b) b.onclick = () => toggleSoundMuted();
+    if (soundUIWired) return;
+    soundUIWired = true;
     const unlock = () => { ensureAudio(); };
     document.addEventListener('pointerdown', unlock);
     document.addEventListener('keydown', unlock);

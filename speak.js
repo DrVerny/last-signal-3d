@@ -101,10 +101,12 @@ export function readingTimeMs(text) {
 export function speakLine(who, text, onDone) {
   let doneCalled = false;
   let safetyTimer = null;
+  let startCheckTimer = null;
   const done = () => {
     if (doneCalled) return;
     doneCalled = true;
     if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+    if (startCheckTimer) { clearTimeout(startCheckTimer); startCheckTimer = null; }
     if (typeof onDone === 'function') {
       try { onDone(); } catch (e) { /* callback must never break speech */ }
     }
@@ -130,7 +132,27 @@ export function speakLine(who, text, onDone) {
     if (voice) u.voice = voice;
     u.onend = done;
     u.onerror = done;
-    safetyTimer = setTimeout(done, Math.max(readingTimeMs(text) * 2, 15000));
+    // The dialogue must move on by itself even if the browser never fires
+    // onend. That happens when a speechSynthesis utterance stalls (a known
+    // browser quirk, often after a cancel or a pause): the voice never
+    // starts, onend never fires, and the old 15-second safety timer left
+    // the player waiting so long they pressed Continue instead. So check
+    // a second after speaking: if nothing is speaking or queued, the voice
+    // never started, so move on. If it is paused, resume it once and move
+    // on if it stays paused. If it did start, onend moves the dialogue on
+    // when the voice finishes, with a long safety timer as a backstop.
+    const words = String(text || '').split(/\s+/).filter(Boolean).length;
+    const speechMs = Math.max(3000, Math.min(15000, words * 500 / (profile.rate || 1) + 2000));
+    safetyTimer = setTimeout(done, speechMs);
+    startCheckTimer = setTimeout(() => {
+      try {
+        if (!synth.speaking && !synth.pending) { done(); return; }
+        if (synth.paused) {
+          synth.resume();
+          setTimeout(() => { try { if (synth.paused) done(); } catch (e) { /* ignore */ } }, 500);
+        }
+      } catch (e) { /* ignore */ }
+    }, 1000);
     synth.resume();
     synth.speak(u);
   } catch (e) { /* speech must never break the game */ done(); }
