@@ -374,19 +374,43 @@ function roundedBox(w, h, d, r, material) {
   m.castShadow = true;
   return m;
 }
-// A stuffed cushion: a rounded-rectangle profile extruded with a DEEP
-// bevel, so the top and the front edge are fully round and the cushion
-// bulges like a real stuffed sofa cushion instead of reading as a flat
-// slab with sharp corners. The old roundedBox caps its bevel at 0.025,
-// which is invisible at play distance; this one rounds the edges with
-// a radius near half the cushion thickness. The final size is w x h x d,
-// and the top stays flat across the middle, so the phone and the sit
-// spot do not move. Returns a mesh with castShadow on.
+// A stuffed cushion that BULGES like a real one: the front bows out,
+// the top domes, the sides puff slightly, and the edges are rounded.
+// The old version extruded a rounded rectangle, so the front face and
+// the top were flat in the middle and the cushion still read as a flat
+// slab at play distance. This one starts from a sphere, maps it onto a
+// superellipsoid (exponent 6) so the edges round, then pushes each
+// face out by a pillow profile that peaks at the face centre and
+// falls to zero at the edges. The construction box is shrunk by the
+// bulge amounts first, so the finished cushion is still exactly
+// w x h x d and its top stays at +h/2. The r parameter is kept so the
+// call sites do not change; the roundness now comes from the
+// superellipsoid. Returns a mesh with castShadow on.
 function plumpCushion(w, h, d, r, material) {
-  const b = Math.min(0.08, r * 0.55, h * 0.3, d * 0.3);
-  const dep = Math.max(0.01, d - 2 * b);
-  const geo = new THREE.ExtrudeGeometry(roundedRectShape(Math.max(0.02, w - 2 * b), Math.max(0.02, h - 2 * b), Math.max(0.005, r - b)), { depth: dep, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 5, curveSegments: 12 });
-  geo.translate(0, 0, -dep / 2);
+  const frontBulge = Math.min(0.045, 0.12 * Math.min(w, h));
+  const topDome = Math.min(0.03, 0.08 * Math.min(w, d));
+  const sideBulge = Math.min(0.015, 0.03 * Math.min(h, d));
+  const hx = (w - 2 * sideBulge) / 2;
+  const hy = (h - topDome) / 2;
+  const hz = (d - frontBulge) / 2;
+  const cy = -topDome / 2;
+  const cz = -frontBulge / 2;
+  const n = 6;
+  const geo = new THREE.SphereGeometry(1, 64, 48);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const nx = pos.getX(i), ny = pos.getY(i), nz = pos.getZ(i);
+    const s = Math.pow(Math.pow(Math.abs(nx), n) + Math.pow(Math.abs(ny), n) + Math.pow(Math.abs(nz), n), 1 / n);
+    const u = nx / s, v = ny / s, t = nz / s;
+    let x = u * hx;
+    let y = v * hy + cy;
+    let z = t * hz + cz;
+    x += sideBulge * Math.sign(u) * (1 - v * v) * (1 - t * t);
+    if (v > 0) y += topDome * v * (1 - u * u) * (1 - t * t);
+    if (t > 0) z += frontBulge * t * (1 - u * u) * (1 - v * v);
+    pos.setXYZ(i, x, y, z);
+  }
+  geo.computeVertexNormals();
   const m = new THREE.Mesh(geo, material);
   m.castShadow = true;
   return m;
@@ -820,9 +844,9 @@ function addSofa(scene, x, z, w, color, name, ry) {
   // continuous top under the phone, which lies across the seam.
   for (let i = 0; i < n; i++) {
     const cx = -w / 2 + (i + 0.5) * (w / n);
-    // Seat cushion: thick and stuffed, radius near half its thickness,
-    // so the top edge is a full round and the front edge bulges. The
-    // top stays at 0.77, so the sit spot and the phone do not move.
+    // Seat cushion: a real stuffed cushion, its front bows out and
+    // its top domes, so it reads as plump at play distance. The top
+    // stays at 0.77, so the sit spot and the phone do not move.
     const c = plumpCushion(cw, 0.32, 0.95, 0.15, mat(0xd8cfc0, { roughness: 0.95 }));
     c.position.set(cx, 0.61, 0.02); g.add(c);
     // Back cushion: thicker and taller than before, leaning back,
