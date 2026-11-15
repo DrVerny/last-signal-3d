@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { canvas, renderer, disposeScene } from './core.js';
 import { getBalance, moneyFmt, grantPayout } from './economy.js';
-import { makeCrowd, updatePedestrian } from './action.js';
+import { makeCrowd, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar } from './player.js';
 import { readingTimeMs } from './speak.js';
@@ -59,6 +59,19 @@ window.__lsHomeActive = false;
 let homePrologue = false, homeCallDone = false, prologueOnBoardTrain = null;
 let ringing = false, ringInterval = 0, ringCtx = null;
 let phoneGlow = null;
+// Prologue bed-to-couch sequence: the player wakes in bed, stands up,
+// walks to the couch, sits down, and answers the phone on the couch.
+// prologueInBed: lying in bed (movement paused, "Stand up" shown).
+// prologueSeated: sitting on the couch (movement paused, "Stand up" shown).
+// callActive: the call is in progress (guards answerPhone against a double tap/swipe).
+let prologueInBed = false, prologueSeated = false, callActive = false;
+// Phone swipe: a press that starts on the phone (tap or swipe) answers it.
+let phoneDown = false;
+// Phone booth (wind tunnel lab): throttle for the walk-up briefing.
+let boothBriefAt = -100;
+// The couch: where the player sits, and where the phone lies beside him.
+const COUCH_SIT = { x: 0.6, z: -0.2 };
+const COUCH_PHONE = { x: -0.2, z: -0.2 };
 let terminalPedestrians = [];
 let callLines = [], callIdx = 0;
 
@@ -111,6 +124,7 @@ let callToken = 0; // invalidates a pending auto-advance when the call is skippe
 function endCall() {
   if (callTimer) { clearTimeout(callTimer); callTimer = null; }
   callToken++;
+  callActive = false;
   if (callEl) callEl.style.display = 'none';
   homeCallDone = true;
   showHomeBar(homeKind); // the "Go to the Train Terminal" button appears
@@ -154,7 +168,9 @@ function ensureCallOverlay() {
   return callEl;
 }
 function answerPhone() {
-  if (homeCallDone) return;
+  // Guard against a double tap/swipe answering twice: the call is already in progress.
+  if (homeCallDone || callActive) return;
+  callActive = true;
   stopRinging();
   callLines = [
     'Jade here. The 4 train is losing power - the whole line is going dark and the passengers are stuck.',
@@ -163,12 +179,130 @@ function answerPhone() {
   ];
   callIdx = 0;
   const el = ensureCallOverlay();
-  if (!el) { homeCallDone = true; showHomeBar(homeKind); return; }
+  if (!el) { callActive = false; homeCallDone = true; showHomeBar(homeKind); return; }
   showCallLine(); // first line shows, then advances by itself
   el.style.display = 'flex';
 }
+// Prologue sequence: stand up from the bed, or from the couch. The
+// player is placed standing at eye height next to where he was, and
+// normal walking takes over from there. The call stays answerable on
+// the phone itself whether he is standing or sitting.
+function standUp() {
+  const wasInBed = prologueInBed, wasSeated = prologueSeated;
+  if (!wasInBed && !wasSeated) return;
+  prologueInBed = false; prologueSeated = false;
+  try { const a = getAvatar(); setAvatarPose('stand'); detachAvatar(); } catch (e) { /* ignore */ }
+  if (homeCamera) {
+    if (wasInBed) { homeCamera.position.set(-4.5, 1.7, -1.0); homeYaw = Math.PI; homePitch = 0; }
+    else { homeCamera.position.set(COUCH_SIT.x, 1.7, COUCH_SIT.z + 1.0); homeYaw = 0; homePitch = 0; }
+  }
+  showHomeToast(wasInBed ? 'You stand up. Walk to the couch - the phone is ringing.' : 'You stand up.');
+  showHomeBar(homeKind);
+}
+// Prologue sequence: sit down on the couch, next to the phone. Only
+// works near the couch (the button is only shown there, and clicking
+// the sofa only fires near it), and only before the call.
+function sitOnCouch() {
+  if (prologueSeated || homeCallDone) return;
+  if (!homeActive || homeKind !== 'mansion' || !homeCamera) return;
+  const dx = homeCamera.position.x - COUCH_SIT.x, dz = homeCamera.position.z - COUCH_SIT.z;
+  if (dx * dx + dz * dz > 2.2 * 2.2) { showHomeToast('Walk to the couch first.'); return; }
+  prologueSeated = true;
+  showHomeToast('You sit on the couch. The phone is beside you - tap its green button to answer.');
+  showHomeBar(homeKind);
+}
+// Show or hide the prologue Stand up / Sit on the couch buttons. The
+// Stand button shows while lying in bed or sitting on the couch. The
+// Sit button shows only when standing near the couch before the call.
+function updatePrologueButtons() {
+  try {
+    const stand = document.getElementById('homeStandBtn');
+    const sit = document.getElementById('homeSitBtn');
+    if (!stand || !sit) return;
+    stand.style.display = (prologueInBed || prologueSeated) ? '' : 'none';
+    let nearCouch = false;
+    if (homeActive && homePrologue && homeKind === 'mansion' && !homeCallDone && !prologueInBed && !prologueSeated && homeCamera) {
+      const dx = homeCamera.position.x - COUCH_SIT.x, dz = homeCamera.position.z - COUCH_SIT.z;
+      nearCouch = dx * dx + dz * dz < 1.8 * 1.8;
+    }
+    sit.style.display = nearCouch ? '' : 'none';
+  } catch (e) { /* ignore */ }
+}
 
 function mat(color, opts) { return new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.9, metalness: 0.02 }, opts || {})); }
+// Draw the Zama logo (the dark Z on a gold rounded square, the same
+// artwork as ZAMA_LOGO_SVG in economy.js) on a 2D canvas at (x, y)
+// with the given size (the square's side). The Z path is the SVG path
+// "M6 6.5H18V9l-6.1 6H18v2.5H6V15l6.1-6H6z" in a 24x24 viewBox.
+function drawZamaLogo(ctx, x, y, size) {
+  const s = size / 24;
+  const r = 6 * s;
+  ctx.fillStyle = '#ffd166';
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + size - r, y);
+  ctx.arcTo(x + size, y, x + size, y + r, r);
+  ctx.lineTo(x + size, y + size - r);
+  ctx.arcTo(x + size, y + size, x + size - r, y + size, r);
+  ctx.lineTo(x + r, y + size);
+  ctx.arcTo(x, y + size, x, y + size - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.moveTo(x + 6 * s, y + 6.5 * s);
+  ctx.lineTo(x + 18 * s, y + 6.5 * s);
+  ctx.lineTo(x + 18 * s, y + 9 * s);
+  ctx.lineTo(x + 11.9 * s, y + 15 * s);
+  ctx.lineTo(x + 18 * s, y + 15 * s);
+  ctx.lineTo(x + 18 * s, y + 17.5 * s);
+  ctx.lineTo(x + 6 * s, y + 17.5 * s);
+  ctx.lineTo(x + 6 * s, y + 15 * s);
+  ctx.lineTo(x + 12.1 * s, y + 9 * s);
+  ctx.lineTo(x + 6 * s, y + 9 * s);
+  ctx.closePath();
+  ctx.fill();
+}
+// A canvas texture of just the Zama logo, for planes on a phone back or a booth.
+function zamaLogoTexture(size) {
+  const px = size || 128;
+  const c = document.createElement('canvas'); c.width = px; c.height = px;
+  const ctx = c.getContext('2d');
+  drawZamaLogo(ctx, 0, 0, px);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// Draw a phone handset glyph (a curved receiver) on a 2D canvas, centred
+// at (cx, cy) with radius r. rot turns it: 0 is the pick-up handset,
+// Math.PI * 0.75 is the hang-up handset.
+function drawHandset(ctx, cx, cy, r, color, rot) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rot || 0);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = r * 0.34;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(0, 0, r, Math.PI * 0.2, Math.PI * 1.1, false);
+  ctx.stroke();
+  ctx.restore();
+}
+// A rounded-rectangle shape, for a phone body and screen (sculpted, not a box).
+function roundedRectShape(w, h, r) {
+  const s = new THREE.Shape();
+  s.moveTo(-w / 2 + r, -h / 2);
+  s.lineTo(w / 2 - r, -h / 2);
+  s.absarc(w / 2 - r, -h / 2 + r, r, -Math.PI / 2, 0, false);
+  s.lineTo(w / 2, h / 2 - r);
+  s.absarc(w / 2 - r, h / 2 - r, r, 0, Math.PI / 2, false);
+  s.lineTo(-w / 2 + r, h / 2);
+  s.absarc(-w / 2 + r, h / 2 - r, r, Math.PI / 2, Math.PI, false);
+  s.lineTo(-w / 2, -h / 2 + r);
+  s.absarc(-w / 2 + r, -h / 2 + r, r, Math.PI, Math.PI * 1.5, false);
+  return s;
+}
 function hbox(scene, w, h, d, color, x, y, z, name, opts) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, opts));
   m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
@@ -357,6 +491,8 @@ function buildHomeBar() {
   bar.id = 'homeBar';
   bar.className = 'hidden';
   bar.innerHTML = '<span id="homeBarTitle"></span><span id="homeBarInfo"></span>'
+    + '<button id="homeStandBtn" type="button">Stand up</button>'
+    + '<button id="homeSitBtn" type="button">Sit on the couch</button>'
     + '<button id="homePickupBtn" type="button">Pick up the phone</button>'
     + '<button id="homeTerminalBtn" type="button">Go to the Train Terminal</button>'
     + '<button id="homeBoardBtn" type="button">Board the train</button>'
@@ -364,6 +500,8 @@ function buildHomeBar() {
     + '<button id="homeSaveBtn" type="button">Save game</button>'
     + '<button id="homeLeaveBtn" type="button">Leave</button>';
   document.body.appendChild(bar);
+  document.getElementById('homeStandBtn').onclick = () => standUp();
+  document.getElementById('homeSitBtn').onclick = () => sitOnCouch();
   document.getElementById('homePickupBtn').onclick = () => answerPhone();
   document.getElementById('homeTerminalBtn').onclick = () => goToTerminal();
   document.getElementById('homeBoardBtn').onclick = () => boardTrain();
@@ -403,7 +541,7 @@ function showHomeBar(kind) {
     symposium: 'SYMPOSIUM HALL - NEW YORK'
   };
   const infos = {
-    mansion: homePrologue && !homeCallDone ? 'Your phone is ringing - click the phone or Pick up. Drag to look, WASD to walk.' : homePrologue ? 'Jade called. Go to the Train Terminal and board the 4 train.' : 'Drag to look around - WASD to walk - click the bed to sleep.',
+    mansion: homePrologue && !homeCallDone ? (prologueInBed ? 'You are in bed. The phone is ringing - stand up.' : prologueSeated ? 'You are on the couch. The phone is beside you - tap its green button.' : 'The phone is ringing. Walk to the couch, sit down and answer it.') : homePrologue ? 'Jade called. Go to the Train Terminal and board the 4 train.' : 'Drag to look around - WASD to walk - click the bed to sleep.',
     safehouse: 'Drag to look around - WASD to walk - click the bed or table to save.',
     hospital: 'Drag to look around - WASD to walk - look around, then head back.',
     industry: 'Drag to look around - WASD to walk - look around, then head back.',
@@ -411,22 +549,26 @@ function showHomeBar(kind) {
     hotel: 'Drag to look around - WASD to walk - click the bed to sleep.',
     airport: 'Drag to look around - WASD to walk - look around, then head back.',
     carpark: 'Drag to look around - WASD to walk - rows of parked cars. Look around, then head back.',
-    windtunnel: 'Drag to look around - WASD to walk - run the wind tunnel at the control panel.',
+    windtunnel: 'Drag to look around - WASD to walk - run the wind tunnel at the control panel. The phone booth on the wall gives the next mission.',
     symposium: 'Drag to look around - WASD to walk - take the NYC podium on the stage.'
   };
   document.getElementById('homeBarTitle').textContent = titles[kind] || kind;
   document.getElementById('homeBarInfo').textContent = infos[kind] || '';
   document.getElementById('homeSleepBtn').style.display = (kind === 'mansion' || kind === 'hotel') && !homePrologue ? '' : 'none';
   document.getElementById('homeSaveBtn').style.display = kind === 'safehouse' && !homePrologue ? '' : 'none';
-  // Prologue buttons: Pick up (before the call), Go to the Terminal
-  // (after the call, in the room), Board the train (in the terminal).
-  document.getElementById('homePickupBtn').style.display = homePrologue && kind === 'mansion' && !homeCallDone ? '' : 'none';
+  // Prologue buttons: Go to the Terminal (after the call, in the room),
+  // Board the train (in the terminal). The phone is answered on the
+  // phone itself (tap or swipe its green button), not from a HUD button,
+  // so Pick up stays hidden. Stand up / Sit on the couch are handled
+  // by updatePrologueButtons.
+  document.getElementById('homePickupBtn').style.display = 'none';
   document.getElementById('homeTerminalBtn').style.display = homePrologue && kind === 'mansion' && homeCallDone ? '' : 'none';
   document.getElementById('homeBoardBtn').style.display = homePrologue && kind === 'terminal' ? '' : 'none';
   // In the prologue there is nowhere else to go: Leave is hidden until
   // the player is back in the acts (the map, or after boarding).
   document.getElementById('homeLeaveBtn').style.display = homePrologue ? 'none' : '';
   document.getElementById('homeBar').classList.remove('hidden');
+  updatePrologueButtons();
 }
 
 // ---------- Room builders ----------
@@ -854,6 +996,200 @@ function addBathroomSink(scene, x, z, ry) {
   return g;
 }
 
+// Remap a ShapeGeometry's UVs to 0-1 across the shape, so a canvas texture covers it.
+function shapeUV01(geo) {
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+  for (let i = 0; i < pos.count; i++) {
+    minX = Math.min(minX, pos.getX(i)); maxX = Math.max(maxX, pos.getX(i));
+    minY = Math.min(minY, pos.getY(i)); maxY = Math.max(maxY, pos.getY(i));
+  }
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, (pos.getX(i) - minX) / (maxX - minX), (pos.getY(i) - minY) / (maxY - minY));
+  }
+  uv.needsUpdate = true;
+  return geo;
+}
+// The phone's incoming-call screen: dark, the Zama logo at the top,
+// Jade's name, and Answer / Decline labels under the two 3D buttons.
+function phoneScreenTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 512;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 0, 512);
+  g.addColorStop(0, '#1a2a3a'); g.addColorStop(1, '#0a0d10');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 256, 512);
+  drawZamaLogo(ctx, 98, 30, 60);
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 28px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('Jade Morales', 128, 140);
+  ctx.fillStyle = '#9fb3c8'; ctx.font = '20px sans-serif';
+  ctx.fillText('Incoming call', 128, 172);
+  ctx.fillStyle = '#ffffff'; ctx.font = '16px sans-serif';
+  ctx.fillText('Answer', 64, 480);
+  ctx.fillText('Decline', 192, 480);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// A transparent canvas with just a white handset glyph, for a button top.
+function handsetGlyphTexture(rot) {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d');
+  drawHandset(ctx, 32, 32, 20, '#ffffff', rot || 0);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// A realistic smartphone (not a box): a rounded, bevelled body, a glass
+// screen with the incoming-call display, an earpiece slot, a front
+// camera, side buttons, a raised green pick-up button and a red decline
+// button, and the Zama logo on its back. It lies flat, screen up, at
+// (x, y, z) with its top pointing by ry. The pick-up button is the
+// raycast target (homeAction 'phone'); tapping or swiping it answers.
+function buildRealPhone(scene, x, y, z, ry) {
+  const phone = new THREE.Group();
+  phone.position.set(x, y, z);
+  phone.rotation.y = ry || 0;
+  const flat = new THREE.Group();
+  flat.rotation.x = -Math.PI / 2;
+  phone.add(flat);
+  const bodyGeo = new THREE.ExtrudeGeometry(roundedRectShape(0.09, 0.18, 0.015), { depth: 0.012, bevelEnabled: true, bevelThickness: 0.002, bevelSize: 0.002, bevelSegments: 2, curveSegments: 12 });
+  bodyGeo.translate(0, 0, -0.006);
+  const body = new THREE.Mesh(bodyGeo, mat(0x1a1a1a, { roughness: 0.35, metalness: 0.6 }));
+  body.castShadow = true; body.userData.homeAction = 'phone'; homeTargets.push(body);
+  flat.add(body);
+  const screenGeo = shapeUV01(new THREE.ShapeGeometry(roundedRectShape(0.082, 0.172, 0.012), 12));
+  const screen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: phoneScreenTexture() }));
+  screen.position.z = 0.0085; screen.userData.homeAction = 'phone'; homeTargets.push(screen);
+  flat.add(screen);
+  // Earpiece slot and front camera, at the top of the screen.
+  const ear = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.004, 0.002), mat(0x050505, { roughness: 0.4 }));
+  ear.position.set(0, 0.078, 0.0085); flat.add(ear);
+  const cam = new THREE.Mesh(new THREE.CircleGeometry(0.003, 12), new THREE.MeshBasicMaterial({ color: 0x0a1a2a }));
+  cam.position.set(0.028, 0.078, 0.0086); flat.add(cam);
+  // Side buttons: power on the right, volume on the left.
+  const pwr = new THREE.Mesh(new THREE.BoxGeometry(0.002, 0.03, 0.004), mat(0x333333, { roughness: 0.4, metalness: 0.6 }));
+  pwr.position.set(0.0465, 0.02, 0); flat.add(pwr);
+  const volU = new THREE.Mesh(new THREE.BoxGeometry(0.002, 0.02, 0.004), mat(0x333333, { roughness: 0.4, metalness: 0.6 }));
+  volU.position.set(-0.0465, 0.04, 0); flat.add(volU);
+  const volD = new THREE.Mesh(new THREE.BoxGeometry(0.002, 0.02, 0.004), mat(0x333333, { roughness: 0.4, metalness: 0.6 }));
+  volD.position.set(-0.0465, 0.0, 0); flat.add(volD);
+  // Green pick-up button (left) and red decline button (right): raised
+  // discs on the screen, with a white handset glyph on top of each.
+  const pick = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.003, 24), mat(0x22c55e, { roughness: 0.4 }));
+  pick.rotation.x = Math.PI / 2; pick.position.set(-0.0205, -0.055, 0.010); pick.userData.homeAction = 'phone'; homeTargets.push(pick);
+  flat.add(pick);
+  const pickGlyph = new THREE.Mesh(new THREE.CircleGeometry(0.016, 24), new THREE.MeshBasicMaterial({ map: handsetGlyphTexture(0), transparent: true }));
+  pickGlyph.position.set(-0.0205, -0.055, 0.0118); flat.add(pickGlyph);
+  const decl = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.003, 24), mat(0xef4444, { roughness: 0.4 }));
+  decl.rotation.x = Math.PI / 2; decl.position.set(0.0205, -0.055, 0.010); decl.userData.homeAction = 'phone'; homeTargets.push(decl);
+  flat.add(decl);
+  const declGlyph = new THREE.Mesh(new THREE.CircleGeometry(0.016, 24), new THREE.MeshBasicMaterial({ map: handsetGlyphTexture(Math.PI * 0.75), transparent: true }));
+  declGlyph.position.set(0.0205, -0.055, 0.0118); flat.add(declGlyph);
+  // The Zama logo on the phone's back, so it reads as a Zama phone.
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.05), new THREE.MeshBasicMaterial({ map: zamaLogoTexture(128), transparent: true }));
+  back.rotation.y = Math.PI; back.position.z = -0.0085; flat.add(back);
+  scene.add(phone);
+  // A generous invisible target over the phone, so it is easy to tap on a phone screen.
+  hitBox(scene, 0.4, 0.3, 0.4, x, y + 0.05, z, 'phone');
+  return phone;
+}
+// A wall-mounted phone booth in the wind tunnel lab (the Factory): a
+// frame on the north wall, a keypad, a shelf, a realistic handset with
+// a curved handle and a coiled cord, a PHONE sign with the Zama logo,
+// and the Zama logo on the handset. Clicking it (or walking up to it)
+// shows the briefing for the next mission. It pays no ZAMA.
+function buildPhoneBooth(scene) {
+  const bx = -7.2, bz = -5.5;
+  const frame = mat(0x2a3a4a, { roughness: 0.6, metalness: 0.2 });
+  const dark = mat(0x1a1a1a, { roughness: 0.4, metalness: 0.3 });
+  // Back panel, side posts and top hood, on the north wall.
+  const back = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2.1, 0.08), frame);
+  back.position.set(bx, 1.05, -5.88); back.castShadow = true; scene.add(back);
+  for (const sx of [-0.65, 0.65]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.1, 0.28), frame);
+    post.position.set(bx + sx, 1.05, -5.74); post.castShadow = true; scene.add(post);
+  }
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.06, 0.45), frame);
+  hood.position.set(bx, 2.15, -5.68); hood.rotation.x = -0.15; hood.castShadow = true; scene.add(hood);
+  const shelf = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.05, 0.3), frame);
+  shelf.position.set(bx, 0.95, -5.7); shelf.castShadow = true; scene.add(shelf);
+  // Keypad panel with a 3x4 grid of buttons, on the left of the back panel.
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.65, 0.04), dark);
+  pad.position.set(bx - 0.15, 1.35, -5.82); scene.add(pad);
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 3; col++) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.02, 12), mat(0x444444, { roughness: 0.4, metalness: 0.4 }));
+      b.rotation.x = Math.PI / 2;
+      b.position.set(bx - 0.15 + (col - 1) * 0.14, 1.35 + (1.5 - row) * 0.13, -5.79);
+      scene.add(b);
+    }
+  }
+  // The handset: a curved handle, an earpiece and a mouthpiece, hanging
+  // on the right side of the booth, with the Zama logo on its earpiece.
+  const hand = new THREE.Group();
+  hand.position.set(bx + 0.55, 1.45, -5.72);
+  hand.rotation.z = 0.08;
+  const curve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0.12, 0),
+    new THREE.Vector3(0.02, 0.06, 0.03),
+    new THREE.Vector3(0.02, 0, 0.04),
+    new THREE.Vector3(0.02, -0.06, 0.03),
+    new THREE.Vector3(0, -0.12, 0)
+  ]);
+  const handle = new THREE.Mesh(new THREE.TubeGeometry(curve, 16, 0.022, 8, false), dark);
+  handle.castShadow = true; hand.add(handle);
+  const ear = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.03, 16), dark);
+  ear.position.set(0, 0.13, 0); hand.add(ear);
+  const earRim = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.01, 16), dark);
+  earRim.position.set(0, 0.15, 0); hand.add(earRim);
+  const mouth = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.03, 16), dark);
+  mouth.position.set(0, -0.13, 0); hand.add(mouth);
+  const mouthRim = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.01, 16), dark);
+  mouthRim.position.set(0, -0.15, 0); hand.add(mouthRim);
+  // The Zama logo on the earpiece, facing the room.
+  const logo = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.05), new THREE.MeshBasicMaterial({ map: zamaLogoTexture(128), transparent: true }));
+  logo.position.set(0, 0.13, 0.052); hand.add(logo);
+  scene.add(hand);
+  // A coiled cord from the handset down to the shelf.
+  const cordPts = [];
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40, a = t * Math.PI * 2 * 5;
+    cordPts.push(new THREE.Vector3(bx + 0.55 + 0.035 * Math.cos(a), 1.3 - t * 0.35, -5.72 + 0.035 * Math.sin(a)));
+  }
+  const cord = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(cordPts), 80, 0.008, 6, false), dark);
+  scene.add(cord);
+  // PHONE sign with the Zama logo, on top of the booth.
+  const sc = document.createElement('canvas'); sc.width = 512; sc.height = 128;
+  const sctx = sc.getContext('2d');
+  sctx.fillStyle = '#1a1a1a'; sctx.fillRect(0, 0, 512, 128);
+  drawZamaLogo(sctx, 14, 14, 100);
+  sctx.fillStyle = '#ffd166'; sctx.font = 'bold 64px sans-serif'; sctx.textAlign = 'left'; sctx.textBaseline = 'middle';
+  sctx.fillText('PHONE', 140, 66);
+  const signTex = new THREE.CanvasTexture(sc); signTex.colorSpace = THREE.SRGBColorSpace;
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.22), new THREE.MeshBasicMaterial({ map: signTex }));
+  sign.position.set(bx, 2.45, -5.68); scene.add(sign);
+  // A generous invisible target over the booth, so it is easy to tap.
+  hitBox(scene, 1.6, 2.4, 0.7, bx, 1.2, -5.6, 'phoneBooth');
+}
+// The next story mission, in order, from the save state. The phone booth
+// in the wind tunnel lab points the player at it; it never invents a
+// mission and never pays ZAMA.
+function nextMissionInfo() {
+  const has = (k) => { try { return !!localStorage.getItem(k); } catch (e) { return false; } };
+  const mission = Number((() => { try { return localStorage.getItem('lastSignalAct2Mission') || '0'; } catch (e) { return '0'; } })()) || 0;
+  const paid = (() => { try { return JSON.parse(localStorage.getItem('lastSignalPaid') || '[]'); } catch (e) { return []; } })();
+  if (!has('lastSignalAct1')) return { title: 'Next mission - Act I, The 4 Train', calledBy: 'Jade Morales', problem: 'The 4 train is losing power and the passengers are stuck. Board the train and fix the relay.', stakes: 'Go to the Train Terminal, Grand Central, and board the 4 train. That is where the story starts.' };
+  if (!has('lastSignalAct2')) {
+    if (mission < 2) return { title: 'Next mission - Act II, Mission 1', calledBy: 'Jade Morales', problem: 'The water pressure is failing at the Reservoir. Find the valve room and hold the lines steady.', stakes: 'Go to the Reservoir, upstate North. The valve puzzle is there.' };
+    if (mission === 2) return { title: 'Next mission - Act II, Mission 2', calledBy: 'Jade Morales', problem: 'The substation in Long Island City is dark. Get past the guards, find the key card, and reroute the power.', stakes: 'Go to the Substation, Long Island City. The guards are on patrol.' };
+    return { title: 'Next mission - Act II, Mission 3', calledBy: 'Jade Morales', problem: 'Derrick Shaw is on the catwalk. Climb up, face him, and take the bridge.', stakes: 'Go to the Bridge, Verrazzano. The catwalk is the way across.' };
+  }
+  if (!has('lastSignalAct3')) return { title: 'Next mission - Act III, The Human Signal', calledBy: 'Jade Morales', problem: 'The final choice is yours. The court is waiting, and the city is watching.', stakes: 'Go to the Court, Foley Square, near Zama HQ in SoHo. That is where Act III ends.' };
+  if (paid.indexOf('symposium') === -1) return { title: 'Next mission - Symposium Hall', calledBy: 'New York Symposium', problem: 'The hall is full and the podium is yours. Take it and speak.', stakes: 'Go to the Symposium Hall, Astoria, Queens. Walk to the NYC podium.' };
+  return { title: 'The story is complete', calledBy: 'Jade Morales', problem: 'Every mission is done. The last step is the proof: seal and reveal your choices on Sepolia, then submit.', stakes: 'Open the Act III end card, press Reveal sealed choices on Sepolia, and submit the game to Zama. The deadline is Dec 14.' };
+}
+function showNextMissionBriefing() {
+  showBriefing(nextMissionInfo(), null);
+}
+
 function buildMansion(scene) {
   // A large furnished home, 14 wide, 10 deep, laid out room by room
   // like the reference: a bedroom in the north-west, a living room in
@@ -913,20 +1249,18 @@ function buildMansion(scene) {
   lamp(scene, 0, 2.5, 0, 0xffe0b0, 0.5, 14);
   const sign = textSprite('THE MANSION', '#2a2118', '#ffd166', 'Home - sleep here');
   sign.scale.set(3.4, 0.85, 1); sign.position.set(0, 2.9, -4.8); scene.add(sign);
-  // The ringing phone (prologue only): on a side table by the bed, with
-  // a pulsing gold glow and a "PHONE RINGING" sign, so a first-time
-  // player cannot miss it. Clicking it (or Pick up) starts the call.
+  // The ringing phone (prologue only): a real smartphone lying on the
+  // couch cushion beside where the player sits, screen up, with the
+  // Zama logo and Jade's name on the screen and a green pick-up button.
+  // The player stands up from bed, walks over, sits down, and answers
+  // it by tapping or swiping the green button on the phone itself.
+  // A pulsing gold glow and a "PHONE RINGING" sign mark it.
   if (homePrologue && !homeCallDone) {
-    const side = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.6, 0.5), mat(0x4a3220, { roughness: 0.7 }));
-    side.position.set(-3.0, 0.3, -3.2); side.castShadow = true; scene.add(side);
-    const phone = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.03, 0.32), mat(0x111111, { roughness: 0.3, metalness: 0.5 }));
-    phone.position.set(-3.0, 0.62, -3.2); phone.name = 'phone'; phone.userData.homeAction = 'phone'; homeTargets.push(phone); scene.add(phone);
-    const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.26), new THREE.MeshBasicMaterial({ color: 0x7ac74f }));
-    scr.rotation.x = -Math.PI / 2; scr.position.set(-3.0, 0.64, -3.2); scene.add(scr);
+    buildRealPhone(scene, COUCH_PHONE.x, 0.78, COUCH_PHONE.z, Math.PI / 2);
     phoneGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffd166, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
-    phoneGlow.scale.set(1.6, 1.6, 1); phoneGlow.position.set(-3.0, 0.9, -3.2); scene.add(phoneGlow);
-    const ring = textSprite('PHONE RINGING', '#2a2118', '#ffd166', 'Click the phone or Pick up');
-    ring.scale.set(3.0, 0.75, 1); ring.position.set(-3.0, 1.6, -3.2); scene.add(ring);
+    phoneGlow.scale.set(1.6, 1.6, 1); phoneGlow.position.set(COUCH_PHONE.x, 1.1, COUCH_PHONE.z); scene.add(phoneGlow);
+    const ring = textSprite('PHONE RINGING', '#2a2118', '#ffd166', 'Answer it on the couch');
+    ring.scale.set(3.0, 0.75, 1); ring.position.set(COUCH_PHONE.x, 1.9, COUCH_PHONE.z); scene.add(ring);
     startRinging();
   }
   // The front door: a real, visible, walkable exit on the north wall.
@@ -1504,6 +1838,9 @@ function buildWindtunnel(scene) {
   lamp(scene, 0, 3.0, 0, 0xffe0b0, 1.0, 16);
   lamp(scene, -6, 3.0, 2, 0xffe0b0, 0.7, 10);
   lamp(scene, 6, 3.0, 2, 0xffe0b0, 0.7, 10);
+  // The phone booth on the north wall: walk up to it (or click it) and it
+  // tells you the briefing for the next mission. It pays no ZAMA.
+  buildPhoneBooth(scene);
   const sign = textSprite('WIND TUNNEL LAB', '#2a2118', '#ffd166', 'Engineering lab - run the tunnel');
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.0, -5.8); scene.add(sign);
   // The lab door: a real, visible, walkable exit on the south wall.
@@ -1661,7 +1998,7 @@ export function enterPlace(kind, onLeave, options) {
   if (homeActive) leavePlace();
   const opts = options || {};
   homePrologue = !!opts.prologue;
-  if (homePrologue && kind === 'mansion') homeCallDone = false; // a fresh prologue: the phone has not been answered yet
+  if (homePrologue && kind === 'mansion') { homeCallDone = false; prologueInBed = true; prologueSeated = false; } // a fresh prologue: the player wakes in bed, the phone has not been answered yet
   if (opts.onBoardTrain) prologueOnBoardTrain = opts.onBoardTrain;
   homeKind = kind; homeOnLeave = onLeave || null;
   homeScene = new THREE.Scene();
@@ -1672,6 +2009,7 @@ export function enterPlace(kind, onLeave, options) {
   tunnelFan = null; tunnelGaugeNeedle = null; tunnelGaugeCanvas = null; tunnelGaugeTex = null;
   tunnelRunning = false; tunnelRunT = 0; tunnelDone = false;
   symposiumAudience = []; symposiumAudienceBuilt = false; podiumDone = false;
+  callActive = false; phoneDown = false; boothBriefAt = -100;
   currentBedPos = null;
   sleeping = false; sleepT = 0; sleepRestDone = false;
   try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
@@ -1682,7 +2020,7 @@ export function enterPlace(kind, onLeave, options) {
     homeScene.fog = new THREE.FogExp2(0x0a0d10, 0.02);
   }
   baseLights(homeScene, !isRoom);
-  if (kind === 'mansion') { buildMansion(homeScene); homeBounds = { x: [-6.4, 6.4], z: [-4.4, 4.4] }; homeStart = { x: 0, y: 1.7, z: 4, yaw: 0 }; }
+  if (kind === 'mansion') { buildMansion(homeScene); homeBounds = { x: [-6.4, 6.4], z: [-4.4, 4.4] }; homeStart = homePrologue ? { x: -4.5, y: 1.7, z: -1.0, yaw: Math.PI } : { x: 0, y: 1.7, z: 4, yaw: 0 }; }
   else if (kind === 'safehouse') { buildSafehouse(homeScene); homeBounds = { x: [-3.4, 3.4], z: [-2.4, 2.4] }; homeStart = { x: 0, y: 1.7, z: 2, yaw: 0 }; }
   else if (kind === 'hospital') { buildHospital(homeScene); homeBounds = { x: [-16, 16], z: [-14, 18] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
   else if (kind === 'industry') { buildIndustry(homeScene); homeBounds = { x: [-16, 16], z: [-12, 16] }; homeStart = { x: 0, y: 1.7, z: 12, yaw: 0 }; }
@@ -1703,7 +2041,7 @@ export function enterPlace(kind, onLeave, options) {
   homeActive = true;
   window.__lsHomeActive = true;
   const welcomes = {
-    mansion: homePrologue ? 'Your phone is ringing. Pick it up - Jade is calling.' : 'The Mansion - home. The couch, the big TV, your bed. Click the bed to sleep.',
+    mansion: homePrologue ? 'You wake up in bed. The phone is ringing - stand up, then sit on the couch and answer it.' : 'The Mansion - home. The couch, the big TV, your bed. Click the bed to sleep.',
     safehouse: 'Safe House Apartment - nobody knows this place. Click the bed or the table to save.',
     hospital: 'City Hospital - the tall white tower. Look around, then head back to the map.',
     industry: 'Industrial Area - the water treatment plant. Look around, then head back to the map.',
@@ -1711,7 +2049,7 @@ export function enterPlace(kind, onLeave, options) {
     hotel: 'Hotel - your suite. Click the bed to sleep.',
     airport: 'Airport - JFK Terminal 4. Look around, then head back to the map.',
     carpark: 'Car Park - rows of parked cars. Look around, then head back to the map.',
-    windtunnel: 'Wind Tunnel Lab - the long wooden tunnel. Run it at the control panel by the test section.',
+    windtunnel: 'Wind Tunnel Lab - the long wooden tunnel. Run it at the control panel by the test section. The phone booth on the wall gives the next mission.',
     symposium: 'Symposium Hall - a full house. Take the NYC podium on the stage.'
   };
   showHomeToast(welcomes[kind] || kind);
@@ -1740,6 +2078,7 @@ export function leavePlace() {
   tunnelRunning = false; tunnelRunT = 0; tunnelDone = false;
   symposiumAudience = []; symposiumAudienceBuilt = false; podiumDone = false;
   sleeping = false; sleepT = 0; sleepRestDone = false;
+  prologueInBed = false; prologueSeated = false; callActive = false; phoneDown = false; boothBriefAt = -100;
   try { const a = getAvatar(); setAvatarPose('stand'); detachAvatar(); } catch (e) { /* ignore */ }
   try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
   phoneGlow = null; terminalPedestrians = [];
@@ -1776,6 +2115,43 @@ function homeAnimate() {
       showHomeToast('You slept. Rested. Game saved. (Wake up when ready)');
     }
     renderer.render(homeScene, homeCamera);
+    return;
+  }
+  // Prologue: lying in bed. The avatar lies on the bed and the camera
+  // watches from the bedside, so the player sees himself waking up.
+  // Movement is paused; "Stand up" is the way out.
+  if (prologueInBed && homeKind === 'mansion' && currentBedPos && homeCamera) {
+    try {
+      const a = getAvatar();
+      if (a.parent !== homeScene) { try { homeScene.add(a); } catch (e) { /* ignore */ } }
+      a.visible = true;
+      setAvatarPose('lie');
+      a.position.set(currentBedPos.x, 0.62, currentBedPos.z - 0.4);
+      a.rotation.set(0, 0, 0);
+    } catch (e) { /* ignore */ }
+    const bx = currentBedPos.x, bz = currentBedPos.z;
+    homeCamera.position.set(bx + 2.2, 1.6, bz + 2.6);
+    homeCamera.lookAt(bx, 0.7, bz);
+    renderer.render(homeScene, homeCamera);
+    updatePrologueButtons();
+    return;
+  }
+  // Prologue: sitting on the couch. The avatar sits on the couch and the
+  // camera watches from in front, so the phone beside him is in view.
+  // Movement is paused; "Stand up" is the way out, the phone is the way in.
+  if (prologueSeated && homeKind === 'mansion' && homeCamera) {
+    try {
+      const a = getAvatar();
+      if (a.parent !== homeScene) { try { homeScene.add(a); } catch (e) { /* ignore */ } }
+      a.visible = true;
+      setAvatarPose('sit');
+      a.position.set(COUCH_SIT.x, 0, COUCH_SIT.z);
+      a.rotation.set(0, Math.PI, 0);
+    } catch (e) { /* ignore */ }
+    homeCamera.position.set(COUCH_SIT.x, 1.5, COUCH_SIT.z + 2.1);
+    homeCamera.lookAt(0.2, 0.8, COUCH_SIT.z);
+    renderer.render(homeScene, homeCamera);
+    updatePrologueButtons();
     return;
   }
   // In third-person the camera was left behind the avatar last frame;
@@ -1897,6 +2273,18 @@ function homeAnimate() {
     const dx = homeCamera.position.x - 2.5, dz = homeCamera.position.z - 0.8;
     if (dx * dx + dz * dz < 1.6 * 1.6) startTunnelRun();
   }
+  // Phone booth: walking up to it shows the briefing for the next
+  // mission (throttled, so it does not pop up again and again).
+  if (homeKind === 'windtunnel') {
+    const dx = homeCamera.position.x - (-7.2), dz = homeCamera.position.z - (-5.5);
+    if (dx * dx + dz * dz < 1.5 * 1.5 && t - boothBriefAt > 20) {
+      boothBriefAt = t;
+      showNextMissionBriefing();
+    }
+  }
+  // Prologue: the Sit on the couch button appears when the player is
+  // standing near the couch before the call.
+  updatePrologueButtons();
   // Symposium: the seated audience sways gently, and walking up to the
   // stage takes the NYC podium (a missed click is not a dead end).
   if (homeKind === 'symposium') {
@@ -1961,6 +2349,8 @@ function homeHandleTap(clientX, clientY) {
   }
   if (action === 'phone') {
     answerPhone();
+  } else if (action === 'phoneBooth') {
+    showNextMissionBriefing();
   } else if (action === 'boardTrain') {
     boardTrain();
   } else if (action === 'tunnelPanel') {
@@ -1968,33 +2358,68 @@ function homeHandleTap(clientX, clientY) {
   } else if (action === 'podium') {
     takePodium();
   } else if (action === 'bed') {
+    // In the prologue the player is already in bed; the bed is not a
+    // sleep spot then, it is where he wakes up. Stand up instead.
+    if (homePrologue && homeKind === 'mansion' && !homeCallDone) { showHomeToast('You are in bed. Stand up - the phone is ringing.'); return; }
     if (homeKind === 'mansion' || homeKind === 'hotel') doSleep();
     else if (homeKind === 'safehouse') doSave();
     else showHomeToast('A bed. Not yours to sleep in here.');
   } else if (action === 'save') doSave();
   else if (action === 'tv') showHomeToast('The TV is on - the news is all about the grid and the water.');
-  else if (action === 'sofa' || action === 'sofa2') showHomeToast('Soft. You could nap here - but the city needs you.');
+  else if (action === 'sofa' || action === 'sofa2') {
+    // In the prologue, clicking the couch near it sits the player down
+    // next to the phone. Otherwise it is just a couch.
+    if (homePrologue && homeKind === 'mansion' && !homeCallDone && !prologueSeated) sitOnCouch();
+    else showHomeToast('Soft. You could nap here - but the city needs you.');
+  }
   else if (action === 'info') showHomeToast(homeKind === 'hospital' ? 'City Hospital - the tower from the photo. Emergency is open 24 hours.' : 'Water treatment plant - the industrial line feeds this place.');
+}
+// Raycast at a pointer position: true when the ray hits the phone.
+// Used to tell a press that starts on the phone (tap or swipe to answer)
+// from a look-around drag.
+function phoneHitAt(clientX, clientY) {
+  if (!homeActive || !homeCamera || !homeTargets.length) return false;
+  try {
+    const r = renderer.domElement.getBoundingClientRect();
+    const nx = ((clientX - r.left) / r.width) * 2 - 1;
+    const ny = -((clientY - r.top) / r.height) * 2 + 1;
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(new THREE.Vector2(nx, ny), homeCamera);
+    const hits = rc.intersectObjects(homeTargets, false).filter((h) => h.object && h.object.visible !== false);
+    return !!(hits.length && (hits[0].object.userData.homeAction === 'phone' || hits[0].object.name === 'phone'));
+  } catch (e) { return false; }
 }
 // Input: registered once, guarded by homeActive so the acts never fight it.
 canvas.addEventListener('pointerdown', (e) => {
   if (!homeActive) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   homeDragging = true; homeDragMoved = 0; homeLx = e.clientX; homeLy = e.clientY;
+  // A press that starts on the phone is a tap or a swipe on the phone,
+  // to answer it, not a look-around drag.
+  phoneDown = phoneHitAt(e.clientX, e.clientY);
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* fallback */ }
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!homeActive || !homeDragging) return;
   const dx = e.clientX - homeLx, dy = e.clientY - homeLy;
   homeDragMoved += Math.abs(dx) + Math.abs(dy);
+  // A press that starts on the phone is a swipe on the phone (to answer
+  // it), so the camera stays put.
+  if (phoneDown) { homeLx = e.clientX; homeLy = e.clientY; return; }
   homeYaw -= dx * 0.0012; homePitch -= dy * 0.0012;
   if (homeYaw > Math.PI) homeYaw -= Math.PI * 2;
   if (homeYaw < -Math.PI) homeYaw += Math.PI * 2;
   homePitch = Math.max(-1.5, Math.min(1.5, homePitch));
   homeLx = e.clientX; homeLy = e.clientY;
 });
-function homeEndDrag() { homeDragging = false; }
-canvas.addEventListener('pointerup', homeEndDrag);
+function homeEndDrag() { homeDragging = false; phoneDown = false; }
+canvas.addEventListener('pointerup', (e) => {
+  const wasPhoneDown = phoneDown;
+  homeEndDrag();
+  // Releasing a press that started on the phone answers the call, so a
+  // swipe across the phone's green button works as well as a tap.
+  if (wasPhoneDown) answerPhone();
+});
 canvas.addEventListener('pointercancel', homeEndDrag);
 addEventListener('pointerup', homeEndDrag);
 addEventListener('blur', homeEndDrag);
