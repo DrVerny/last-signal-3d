@@ -165,13 +165,112 @@ function makeTextSprite(text, color) {
   const tex = signTexture(text, 'rgba(0,0,0,0)', color || '#ffd166', '');
   return new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
 }
-function gaugeTexture(label) {
+function pressureDialTexture(label) {
+  // Round cream dial face for a real pressure gauge: tick marks and
+  // numbers from 0 to 100 PSI, a red zone at 80-100, and the line name
+  // at the bottom. 0 sits at 7:30 and 100 at 4:30 (270 degrees of sweep),
+  // matching the needle angle in updatePressureGauges.
   return canvasTexture(256, 256, (ctx, w, h) => {
-    ctx.fillStyle = '#10141a'; ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(128, 140, 90, Math.PI * 0.85, Math.PI * 2.15); ctx.stroke();
-    ctx.fillStyle = '#ffd166'; ctx.font = 'bold 24px Arial'; ctx.textAlign = 'center'; ctx.fillText(label, 128, 220);
-    ctx.textAlign = 'left';
+    const cx = 128, cy = 128;
+    const rad = d => d * Math.PI / 180;
+    const tickAngle = p => rad(-135 + (p / 100) * 270); // clockwise from 12 o clock
+    const arcAngle = p => tickAngle(p) - Math.PI / 2; // canvas arc is from +x
+    ctx.fillStyle = '#1a1a1a'; ctx.beginPath(); ctx.arc(cx, cy, 128, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#f2ead8'; ctx.beginPath(); ctx.arc(cx, cy, 118, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#c02020'; ctx.lineWidth = 10;
+    ctx.beginPath(); ctx.arc(cx, cy, 100, arcAngle(80), arcAngle(100)); ctx.stroke();
+    ctx.fillStyle = '#1a1a1a'; ctx.strokeStyle = '#1a1a1a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (let p = 0; p <= 100; p += 5) {
+      const a = tickAngle(p), major = p % 25 === 0;
+      const r1 = major ? 88 : 96, r2 = 104;
+      ctx.lineWidth = major ? 4 : 2;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.sin(a) * r1, cy - Math.cos(a) * r1);
+      ctx.lineTo(cx + Math.sin(a) * r2, cy - Math.cos(a) * r2);
+      ctx.stroke();
+      if (major) {
+        ctx.font = 'bold 26px Arial';
+        ctx.fillText(String(p), cx + Math.sin(a) * 70, cy - Math.cos(a) * 70);
+      }
+    }
+    ctx.font = 'bold 20px Arial'; ctx.fillText('PSI', cx, cy + 42);
+    ctx.font = 'bold 22px Arial'; ctx.fillText(label, cx, cy + 68);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   });
+}
+// Live 3D pressure gauges (one per valve line). The needle and the water
+// flow follow pressures[key] every frame, so the panel always shows the
+// live pressure: the needle eases toward it, and the sight-glass flow
+// runs fast and bright at full pressure and slow and dim when a line
+// drifts down. Built once per line in buildMission1.
+const pressureGauges = {};
+function buildPressureGauge(v) {
+  // Round gauge on the back wall, above its valve wheel: steel drum body,
+  // brass rim, glass face, numbered dial, and a red needle.
+  const g = new THREE.Group();
+  g.position.set(v.x, 2.3, -5.8);
+  mission1.add(g);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.44, 0.1, 32), stdMat({ color: 0x3a3f44, metalness: 0.7, roughness: 0.4 }));
+  body.rotation.x = Math.PI / 2; body.position.z = -0.03; g.add(body);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.045, 12, 40), new THREE.MeshStandardMaterial({ color: 0xb08d3e, metalness: 0.9, roughness: 0.3 }));
+  rim.position.z = 0.04; g.add(rim);
+  const dial = new THREE.Mesh(new THREE.CircleGeometry(0.40, 40), new THREE.MeshStandardMaterial({ map: pressureDialTexture(v.label), roughness: 0.6 }));
+  dial.position.z = 0.02; g.add(dial);
+  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.40, 40), new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.13, roughness: 0.05, metalness: 0.1 }));
+  glass.position.z = 0.06; g.add(glass);
+  const needle = new THREE.Group(); needle.position.z = 0.05; g.add(needle);
+  const pointer = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.34, 0.012), new THREE.MeshStandardMaterial({ color: 0xc02020, roughness: 0.4 }));
+  pointer.position.y = 0.13; needle.add(pointer);
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.03, 16), stdMat({ color: 0x2a2a2a, metalness: 0.7, roughness: 0.4 }));
+  hub.rotation.x = Math.PI / 2; hub.position.z = 0.05; g.add(hub);
+  // Vertical copper pipe from the gauge down to the valve, with a glass
+  // sight tube in the middle so the water inside is visible.
+  const copper = new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.85, roughness: 0.35 });
+  const lowerPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.5, 12), copper);
+  lowerPipe.position.set(v.x, 0.8, -5.78); mission1.add(lowerPipe);
+  const sight = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.10, 0.8, 12), new THREE.MeshStandardMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.22, roughness: 0.05, metalness: 0.1 }));
+  sight.position.set(v.x, 1.45, -5.78); mission1.add(sight);
+  const upperPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.12, 12), copper);
+  upperPipe.position.set(v.x, 1.9, -5.78); mission1.add(upperPipe);
+  // Water column inside the sight glass, and the moving flow beads.
+  const waterMat = new THREE.MeshBasicMaterial({ color: 0x2f9fe8, transparent: true, opacity: 0.5 });
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.78, 10), waterMat);
+  column.position.set(v.x, 1.45, -5.78); mission1.add(column);
+  const flowMat = new THREE.MeshBasicMaterial({ color: 0x7ac7f0, transparent: true, opacity: 0.6 });
+  const flow = [];
+  for (let i = 0; i < 5; i++) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 10), flowMat);
+    s.position.set(v.x, 1.1, -5.78); mission1.add(s); flow.push(s);
+  }
+  return { needle, shown: 60, last: 60, spin: 0, angle: 0, wheel: null, spokes: [], flow, flowMat, waterMat };
+}
+function updatePressureGauges(dt, t) {
+  for (const k of Object.keys(pressureGauges)) {
+    const rec = pressureGauges[k];
+    if (!rec || !rec.needle) continue;
+    const target = pressures[k];
+    // The needle eases toward the live pressure instead of snapping.
+    rec.shown += (target - rec.shown) * Math.min(1, dt * 4);
+    rec.needle.rotation.z = (135 - (rec.shown / 100) * 270) * Math.PI / 180;
+    // The wheel turns when its valve is turned (pressure changes either
+    // way: up by the player, down by the sabotage overcorrection).
+    if (target !== rec.last) rec.spin += (target - rec.last) * 0.12;
+    rec.last = target;
+    rec.spin *= Math.pow(0.4, dt);
+    rec.angle += rec.spin * dt;
+    if (rec.wheel) rec.wheel.rotation.z = rec.angle;
+    for (let i = 0; i < rec.spokes.length; i++) rec.spokes[i].rotation.z = i * Math.PI / 3 + rec.angle;
+    // Water flow in the sight glass: fast and bright at full pressure,
+    // slow and dim when the line drifts down.
+    const speed = 0.12 + (rec.shown / 100) * 0.5; // cycles per second
+    if (rec.flowMat) rec.flowMat.opacity = 0.3 + (rec.shown / 100) * 0.7;
+    if (rec.waterMat) rec.waterMat.opacity = 0.25 + (rec.shown / 100) * 0.55;
+    for (let i = 0; i < rec.flow.length; i++) {
+      const s = rec.flow[i];
+      const ph = (i / rec.flow.length + t * speed) % 1;
+      s.position.y = 1.08 + ph * 0.74;
+    }
+  }
 }
 
 // ---------- Renderer / scene ----------
@@ -513,12 +612,21 @@ function buildMission1() {
     const hit = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.6, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     hit.position.set(v.x, 1.4, -5.7); hit.name = wheel.name; hit.userData.clickable = true; mission1.add(hit);
     window._valveMeshes[v.key + 'Hit'] = hit;
+    const spokes = [];
     for (let s = 0; s < 3; s++) {
       const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.8, 0.05), stdMat({ color: v.color, roughness: 0.5 }));
-      spoke.position.copy(wheel.position); spoke.rotation.z = s * Math.PI / 3; mission1.add(spoke);
+      spoke.position.copy(wheel.position); spoke.rotation.z = s * Math.PI / 3; mission1.add(spoke); spokes.push(spoke);
     }
-    const gauge = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshStandardMaterial({ map: gaugeTexture(v.label), roughness: 0.6 }));
-    gauge.position.set(v.x, 2.3, -5.85); mission1.add(gauge);
+    // Real 3D pressure gauge above the valve: brass rim, glass face,
+    // numbered dial and a needle that follows the live pressure, with a
+    // copper pipe and a glass sight tube carrying visible water flow.
+    const rec = buildPressureGauge(v);
+    rec.wheel = wheel; rec.spokes = spokes;
+    pressureGauges[v.key] = rec;
+    // Clicking the gauge opens the pressure controls, same as its valve.
+    const gaugeHit = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.5), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+    gaugeHit.position.set(v.x, 2.3, -5.8); gaugeHit.name = wheel.name; gaugeHit.userData.clickable = true; mission1.add(gaugeHit);
+    window._valveMeshes[v.key + 'GaugeHit'] = gaugeHit;
     const lbl = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture(v.label, '#111111', '#e8e8e8', ''), transparent: true, depthWrite: false }));
     lbl.scale.set(2.2, 0.55, 1); lbl.position.set(v.x, 2.9, -5.7); mission1.add(lbl);
   }
@@ -2847,6 +2955,7 @@ function animate() {
     const mv2 = moveDelta(keys, state.yaw, 1);
     applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: state.mission === 3 ? 1.9 : 1.7 });
   }
+  updatePressureGauges(dt, t); // valve-room gauges: needles ease to the live pressure, sight-glass water flows
   renderer.render(scene, camera);
 }
 animate();
