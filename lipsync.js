@@ -146,6 +146,10 @@ function addJawMorphToMesh(mesh, mouthWorld, forwardWorld) {
     const s = (Math.abs(scale.x) + Math.abs(scale.y) + Math.abs(scale.z)) / 3 || 1;
     const pos = geo.attributes.position;
     const count = pos.count;
+    // A jaw morph is a small patch of one face: a mesh with an absurd
+    // vertex count is not a face, so skip it rather than spend the boot
+    // iterating it. The game's models are all far below this cap.
+    if (count > 200000) return -1;
     let top = -Infinity;
     for (let i = 0; i < count; i++) {
       const y = pos.getY(i);

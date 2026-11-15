@@ -830,6 +830,10 @@ function startIntro() {
   if (introStarted) return;
   introStarted = true;
   document.getElementById('loading').classList.add('hidden');
+  // Build the jaw morphs now that the game is on screen, not during the
+  // load: mouth estimation must never be able to hold the loading overlay
+  // up. The morphs are ready before the first line needs them.
+  try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
   showDialogue([
     { who: 'Jade Morales', text: 'Southbound 4 train, rush hour. I designed the signal system for this line - before they fired me.' },
     { who: 'Caleb Bishop', text: 'Everybody stay calm! NYPD! We are going to get you out of here!' },
@@ -952,7 +956,6 @@ async function loadHumans() {
   });
   await Promise.all(jobs);
   registerHumans(humans); // speaking gestures use the loaded models
-  registerLipSyncHumans(humans); // jaw morph lip-sync uses the same loaded models
   if (failures.length) {
     loadingError.classList.remove('hidden');
     loadingError.textContent = 'Could not load: ' + failures.join(' ; ') + '. The game can still start without them.';

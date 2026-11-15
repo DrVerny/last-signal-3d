@@ -7,7 +7,23 @@
 import * as THREE from 'three';
 
 export const canvas = document.getElementById('scene');
-export const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+// The renderer is created up front, and a browser with no WebGL throws
+// here. That used to fail the whole app silently: the loading overlay
+// stayed on "Loading characters..." forever with no error at all. Show
+// the reason on the overlay instead, so the player knows it is the
+// browser, not the game.
+export let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+} catch (e) {
+  try {
+    const t = document.getElementById('loadingText');
+    if (t) t.textContent = 'This browser cannot run 3D (WebGL is not available). Try Chrome or Edge.';
+    const er = document.getElementById('loadingError');
+    if (er) { er.classList.remove('hidden'); er.textContent = 'WebGL unavailable.'; }
+  } catch (e2) { /* ignore */ }
+  throw e;
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;

@@ -23,7 +23,7 @@ const ACTS = {
 // reload, and a stale act module can hang the boot on "Loading
 // characters..." forever. Appending ?v= forces a fresh fetch. Bump this
 // on every push that changes an act module.
-const BUILD_VERSION = '4bf4b7c-2';
+const BUILD_VERSION = 'bootfix-1';
 const CUR_KEY = 'lastSignalCurrentAct';
 let currentAct = 0;
 const actModules = {};

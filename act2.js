@@ -294,9 +294,18 @@ async function loadHumans() {
   const loadingContinue = document.getElementById('loadingContinue');
   const loader = new GLTFLoader();
   const failures = [];
+  // Each model load races a 30 s timeout, as in Act I: a network request
+  // that hangs (never resolves, never rejects) would otherwise stall this
+  // await forever and leave the game stuck on "Loading characters..." with
+  // no way forward. A timed out model is treated as a failed load, so the
+  // game can still start and offer "Continue without the missing characters".
+  const loadWithTimeout = (file) => Promise.race([
+    loader.loadAsync(file),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('load timed out after 30s')), 30000))
+  ]);
   try {
     loadingText.textContent = 'Loading characters... Jade';
-    const jade = await loader.loadAsync('models/jade.glb');
+    const jade = await loadWithTimeout('models/jade.glb');
     const jg = jade.scene; jg.name = 'jade';
     const jb = new THREE.Box3().setFromObject(jg); const js = new THREE.Vector3(); jb.getSize(js);
     const jscale = 1.70 / js.y; jg.scale.setScalar(jscale);
@@ -306,7 +315,7 @@ async function loadHumans() {
   let calebBase = null;
   try {
     loadingText.textContent = 'Loading characters... Caleb';
-    const caleb = await loader.loadAsync('models/caleb.glb');
+    const caleb = await loadWithTimeout('models/caleb.glb');
     const cg = caleb.scene; cg.name = 'caleb';
     const cb = new THREE.Box3().setFromObject(cg); const cs = new THREE.Vector3(); cb.getSize(cs);
     const cscale = 1.88 / cs.y; cg.scale.setScalar(cscale);
@@ -355,7 +364,6 @@ async function loadHumans() {
     }
   }
   registerHumans(humans); // speaking gestures use the loaded models
-  registerLipSyncHumans(humans); // jaw morph lip-sync uses the same loaded models
   if (failures.length) {
     loadingError.classList.remove('hidden');
     loadingError.textContent = 'Could not load: ' + failures.join(', ') + '. The game can still start without them.';
@@ -613,6 +621,10 @@ function moralChoiceWater() {
   ], () => { setObjectives(OBJ1, 4); toast('Click the small green circuit board on the station wall - it is outside, so leave the valve room first if you are still in it.'); });
 }
 function startMission1() {
+  // Build the jaw morphs now that the game is on screen, not during the
+  // load: mouth estimation must never be able to hold the loading overlay
+  // up. The morphs are ready before the first line needs them.
+  try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
   resetView();
   setTimeOfDay('day'); // Mission 1 (aqueduct) is bright day.
   currentPlaceKey = 'reservoir';
