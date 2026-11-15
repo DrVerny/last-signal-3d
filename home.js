@@ -13,7 +13,7 @@ import { canvas, renderer, disposeScene } from './core.js';
 import { getBalance, moneyFmt, grantPayout } from './economy.js';
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson } from './player.js';
 import { readingTimeMs } from './speak.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
@@ -765,9 +765,16 @@ function buildPrologueDriveScene() {
     try { if (driver.parent) driver.parent.remove(driver); } catch (e) { /* ignore */ }
     setAvatarPose('sit');
     driver.visible = true;
+    // Driver's seat, left side, sitting in the cabin. He is scaled to
+    // 0.62, not 0.72: at 0.72 his head sat at about 1.28 m, right at the
+    // cabin roof, so from the chase camera he read as sitting ON TOP of
+    // the car. At 0.62 his head is at about 1.10 m, the same height as
+    // the in-car camera (headPos), well under the roof, so he reads as
+    // sitting INSIDE the cabin, seen through the glass. His feet stay
+    // at y 0.02 on the car floor, so nothing clips below the car.
     driver.position.set(-0.38, 0.02, 0.35);
     driver.rotation.set(0, 0, 0);
-    driver.scale.set(0.72, 0.72, 0.72);
+    driver.scale.set(0.62, 0.62, 0.62);
     plDriveCar.add(driver);
   } catch (e) { plDriveCar = null; }
   homeCamera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 500);
@@ -2920,6 +2927,9 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'navybarracks') { buildNavyBarracks(homeScene); homeBounds = { x: [-9.4, 9.4], z: [-5.4, 5.4] }; homeStart = { x: 0, y: 1.7, z: 4.5, yaw: 0 }; }
   else if (kind === 'sensorvault') { buildSensorVault(homeScene); homeBounds = { x: [-5.4, 5.4], z: [-3.4, 3.4] }; homeStart = { x: 0, y: 1.7, z: 1.0, yaw: 0 }; }
   else return;
+  // Third person on entering any place, so the player sees himself
+  // in every room and exterior, not just in the missions.
+  try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   // Hide any room key the player already owns (a replay), so it cannot
   // be picked up twice.
   syncRoomKeys();

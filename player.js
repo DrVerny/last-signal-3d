@@ -250,6 +250,12 @@ async function loadPlayerRig() {
     tint(['Skin', 'Face'], PLAYER_SKIN);
     tint(['Shirt'], outfitColor().getHex());
     rig.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    // The Casual Male model has an oversized head: its Hair is wider than
+    // its shoulders and its Face is far wider than a real face, so from
+    // behind it reads as a wide flat brown disc about twice normal width.
+    // Shrink the head bone before the height is normalised, so the
+    // normalisation measures the corrected head.
+    rig.traverse(o => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
     // Normalise height to the player's height, then re-ground the feet.
     // The scale lives on the INNER rig group, never on the outer avatar
     // group: the drive code sets the outer group's scale to 0.72 to seat
@@ -283,14 +289,13 @@ async function loadPlayerRig() {
     // A soft blob shadow under the feet, like the fallback had.
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.42, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; shadow.userData.keepAlive = true; rig.add(shadow);
-    // Cap, if the cap accessory is equipped: on top of the head,
-    // measured from the hair so it sits on the head, not above it.
+    // Cap, if the cap accessory is equipped: on top of the head.
+    // headTop stays PLAYER_HEIGHT: the hair bounding box is measured
+    // from the bind-pose geometry and does not account for the head
+    // bone scale, so it would overestimate the head top and the cap
+    // would float above the head. The top of the normalised model is
+    // the hair top, so PLAYER_HEIGHT is the head top.
     let headTop = PLAYER_HEIGHT;
-    try {
-      const hairBox = new THREE.Box3();
-      rig.traverse(o => { if (o.isMesh && o.material && o.material.name === 'Hair') hairBox.expandByObject(o); });
-      if (!hairBox.isEmpty()) headTop = hairBox.max.y;
-    } catch (e) { /* use PLAYER_HEIGHT */ }
     if (hasCapEquipped()) {
       try {
         const cap = new THREE.Group();
@@ -526,8 +531,17 @@ export function applyPlayerPresence(o) {
   // above it. Forward is (-sin yaw, -cos yaw), so behind is the opposite.
   const dist = zoomDist;
   const bx = Math.sin(o.yaw), bz = Math.cos(o.yaw);
-  const camX = o.x + bx * dist;
-  const camZ = o.z + bz * dist;
+  let camX = o.x + bx * dist;
+  let camZ = o.z + bz * dist;
+  // Keep the camera inside the room: in a small room like the valve
+  // chamber the fixed 4 m distance would push the camera through the
+  // wall when the player stands near it facing it. Clamp to the bounds
+  // the caller passes (the same bounds the player walks in), inset a
+  // little so the camera never sits exactly on the wall.
+  if (o.camBounds && o.camBounds.x && o.camBounds.z) {
+    camX = Math.max(o.camBounds.x[0] + 0.2, Math.min(o.camBounds.x[1] - 0.2, camX));
+    camZ = Math.max(o.camBounds.z[0] + 0.2, Math.min(o.camBounds.z[1] - 0.2, camZ));
+  }
   const camY = (o.eyeY || 1.7) + dist * 0.28;
   o.camera.position.set(camX, camY, camZ);
   o.camera.rotation.order = 'YXZ';

@@ -19,10 +19,10 @@ import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 // different deltas to end up symmetric. Angles measured in Node from
 // the model files; see makeSeatedPerson.
 const CROWD_DEFS = [
-  { file: 'models/rigged/caleb-alt-civilian.glb', sex: 'm', height: 1.82 },
+  { file: 'models/rigged/caleb-alt-civilian.glb', sex: 'm', height: 1.75 },
   { file: 'models/rigged/jade-rigged.glb', sex: 'f', height: 1.68, sitThighL: 70, sitThighR: 130, sitShinL: -70, sitShinR: -90, sitShoulder: 45, sitHipsY: 0.47 },
   { file: 'models/rigged/nurse-rigged.glb', sex: 'f', height: 1.66 },
-  { file: 'models/rigged/walter-rigged.glb', sex: 'm', height: 1.78 }
+  { file: 'models/rigged/walter-rigged.glb', sex: 'm', height: 1.75 }
 ];
 let crowdModels = null; // [{ scene, animations, height, sex }]
 let crowdReadyFlag = false;
@@ -35,6 +35,15 @@ function loadOne(def) {
     loader.loadAsync(def.file),
     new Promise((_, reject) => setTimeout(() => reject(new Error('crowd model timed out: ' + def.file)), 30000))
   ]).then(gltf => {
+    // Jade (Casual Female) has an oversized head: its Hair is wider than
+    // its shoulders, so it reads as a wide flat disc about twice normal
+    // width. Shrink the head bone before the model is used, so the
+    // height and the clones (via cloneSkinned) use the corrected head.
+    // Only models with separate Face/Hair materials need this; the
+    // Atlas models (Matt, Lis, Sam) are fine and are left alone.
+    let hasFaceHair = false;
+    gltf.scene.traverse(o => { if (o.isMesh && o.material && (o.material.name === 'Face' || o.material.name === 'Hair')) hasFaceHair = true; });
+    if (hasFaceHair) gltf.scene.traverse(o => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
     // Capture the Atlas texture image: per-person recolouring repaints
     // the measured palette cells of this image (see ATLAS_CELLS below).
     // The image is read again lazily when a look is applied, so a slow

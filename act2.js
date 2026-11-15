@@ -9,7 +9,7 @@ import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
 import { grantPayout, openStore, getEquippedCarDef } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
 // no long verbatim copying): 1. The Delaware Line (Rondout Reservoir),
@@ -350,7 +350,7 @@ const mission2 = new THREE.Group(); scene.add(mission2); mission2.visible = fals
 const mission3 = new THREE.Group(); scene.add(mission3); mission3.visible = false;
 // Camera bounds per mission (x/z clamp + default view).
 const VIEWS = {
-  1: { pos: [0, 1.7, 8], yaw: 0, x: [-8, 8], z: [-6, 14] },
+  1: { pos: [0, 1.7, 8], yaw: 0, x: [-8, 11.5], z: [-6, 14] },
   2: { pos: [0, 1.7, 9], yaw: 0, x: [-9, 9], z: [-6, 12] },
   3: { pos: [0, 2.2, 10], yaw: 0, x: [-1.2, 1.2], z: [-14, 12] }
 };
@@ -367,6 +367,404 @@ let mission1Started = false; // true once startMission1 has run
 // DAM_X/DAM_Z is the roar source point for the distance level.
 const DAM_X = -14, DAM_Z = 0, DAM_WATER_Y = 7.6;
 let lastDamLevel = -1; // last roar level sent to setAmbientLevel
+// ---------- Parking: a marked bay at each mission, where the player's car sits ----------
+// The player drives to a destination and the car pulls into a real parking
+// space there, it does not stop on the highway and vanish. Each mission
+// has one marked lot (paved pad, white bay lines, a P sign, a curb): the
+// lot in front of the skyscraper lobby (Mission 1), the lot in the
+// substation yard forecourt (Mission 2), and the lot by a small garden
+// beside the bridge approach (Mission 3). The player's equipped car is
+// parked in the lot whenever the mission is active, on drive arrival and
+// on any other entry, so the scene is consistent. No rooftop ramp: there
+// is no drivable ramp to a roof, so front-of-building and garden cover
+// the brief.
+// PARKING[mission]: cx/cz is the lot centre, carX/carZ is the player's
+// bay (one of the two bays), carRotY faces the car at the building (-z is
+// north, toward the lobby / control room / bridge), driveSpawn is where
+// the player stands after getting out on a drive arrival (null means the
+// normal mission spawn is used).
+const PARKING = {
+  1: { cx: 8.3, cz: 4.25, carX: 6.9, carZ: 4.25, carRotY: Math.PI, driveSpawn: { x: 8.3, z: 3.9, yaw: 0 } },
+  2: { cx: -5.7, cz: 9.0, carX: -4.3, carZ: 9.0, carRotY: Math.PI, driveSpawn: { x: -1.8, z: 9.0, yaw: 0 } },
+  3: { cx: 6.0, cz: 11.85, carX: 4.6, carZ: 11.85, carRotY: Math.PI, driveSpawn: null }
+};
+let arrivedByDrive = false; // true while the mission start that follows a drive runs
+const parkedCars = {}; // mission number -> parked car group in that mission's scene
+function disposeCarGroup(g) {
+  if (!g) return;
+  try { if (g.parent) g.parent.remove(g); } catch (e) { /* ignore */ }
+  try {
+    g.traverse(m => {
+      try { if (m.geometry) m.geometry.dispose(); } catch (e) { /* ignore */ }
+      try {
+        const mats = Array.isArray(m.material) ? m.material : (m.material ? [m.material] : []);
+        for (const mm of mats) { try { mm.dispose(); } catch (e) { /* ignore */ } }
+      } catch (e) { /* ignore */ }
+    });
+  } catch (e) { /* ignore */ }
+}
+// A two-bay lot: paved pad, white bay lines, a low curb along the back,
+// and a P sign on a post at the head of the player's bay. The bays run
+// north-south and the cars face north (-z), at the building. carX is the
+// centre of the player's bay. signRotY faces the sign at the player:
+// south (0) for Missions 1 and 2, west (-PI/2) for Mission 3, where the
+// player stands on the deck to the west of the lot.
+function buildParkingLot(parent, cx, cz, carX, signRotY) {
+  const asphalt = stdMat({ color: 0x3a3d40, roughness: 0.95 });
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.06, 5.7), asphalt);
+  pad.position.set(cx, 0.03, cz); pad.receiveShadow = true; parent.add(pad);
+  // White bay lines: west edge, centre divider, east edge, all running
+  // north-south, so the two bays read as marked spaces.
+  const lineMat = new THREE.MeshBasicMaterial({ color: 0xf2f2f2 });
+  for (const lx of [cx - 2.8, cx, cx + 2.8]) {
+    const line = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, 5.7), lineMat);
+    line.position.set(lx, 0.07, cz); parent.add(line);
+  }
+  // Low concrete curb along the back (north) edge of the lot.
+  const curb = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.16, 0.3), stdMat({ color: 0x8a8a86, roughness: 0.95 }));
+  curb.position.set(cx, 0.08, cz - 2.7); curb.castShadow = true; parent.add(curb);
+  // P sign on a post at the head of the player's bay, facing south.
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 8), stdMat({ color: 0x6a747a, metalness: 0.7, roughness: 0.4 }));
+  post.position.set(carX, 1.1, cz - 2.55); post.castShadow = true; parent.add(post);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.3), new THREE.MeshBasicMaterial({ map: signTexture('P', '#1a4a8a', '#ffffff', 'PARKING') }));
+  sign.position.set(carX, 2.45, cz - 2.55); sign.rotation.y = signRotY || 0; parent.add(sign);
+}
+// A small garden beside the Mission 3 lot: an approach apron under the
+// lot and garden (the bridge has no ground plane, only the deck, so the
+// lot would float without it), a lawn, a hedge, two trees, a bench and
+// bushes, so the bridge approach reads as a planted place, not bare deck.
+function buildBridgeGarden(parent) {
+  const apron = new THREE.Mesh(new THREE.BoxGeometry(12, 0.4, 10), stdMat({ color: 0x5a5e60, roughness: 0.95 }));
+  apron.position.set(8, -0.2, 11.75); apron.receiveShadow = true; parent.add(apron);
+  const lawn = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 6.8), stdMat({ color: 0x4a6a34, roughness: 1 }));
+  lawn.rotation.x = -Math.PI / 2; lawn.position.set(11.1, 0.02, 11.75); lawn.receiveShadow = true; parent.add(lawn);
+  const hedge = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.7, 6.8), stdMat({ color: 0x2e5a2a, roughness: 1 }));
+  hedge.position.set(13.0, 0.35, 11.75); hedge.castShadow = true; parent.add(hedge);
+  for (const [tx, tz] of [[10.2, 9.5], [12.2, 14.0]]) {
+    try {
+      const tree = makeStreetTree();
+      tree.position.set(tx, 0, tz); parent.add(tree);
+    } catch (e) { /* tree is decoration */ }
+  }
+  const benchSeat = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.45), stdMat({ color: 0x6a4a30, roughness: 0.9 }));
+  benchSeat.position.set(10.5, 0.5, 12.8); parent.add(benchSeat);
+  const benchBack = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.45, 0.08), stdMat({ color: 0x6a4a30, roughness: 0.9 }));
+  benchBack.position.set(10.5, 0.75, 13.0); parent.add(benchBack);
+  for (const [bx, bz] of [[9.6, 14.2], [12.4, 9.0]]) {
+    const bush = new THREE.Mesh(new THREE.SphereGeometry(0.45, 10, 8), stdMat({ color: 0x3a6a2e, roughness: 1 }));
+    bush.position.set(bx, 0.4, bz); bush.castShadow = true; parent.add(bush);
+  }
+}
+// Park the player's equipped car in a mission's lot. Rebuilds it each
+// time the mission starts, so a car bought since the last visit shows up
+// and the colour and model are always the equipped ones. The parked car
+// lives in the mission's group, so it stays visible while the mission
+// runs and hides with the group when another mission starts. It is a
+// separate car from the drive car in travelGroup, which the drive
+// disposes on its own.
+function parkPlayerCar(mission) {
+  const p = PARKING[mission];
+  if (!p) return;
+  const group = mission === 1 ? mission1 : mission === 2 ? mission2 : mission3;
+  try { disposeCarGroup(parkedCars[mission]); } catch (e) { /* ignore */ }
+  parkedCars[mission] = null;
+  let car = null;
+  try { car = buildPlayerCar(); } catch (e) { car = null; }
+  if (!car) return;
+  car.rotation.y = p.carRotY;
+  car.position.set(p.carX, 0, p.carZ);
+  group.add(car);
+  parkedCars[mission] = car;
+}
+// After a drive arrival, stand the player beside the parked car instead
+// of at the default mission spawn, so he has just got out of the car.
+// Only Mission 2 has a drive spawn: Mission 1 is reached by train and
+// Mission 3 on foot or by a drive the deck bounds cannot hold (the deck
+// is 2.4 m wide), so they keep their normal spawn and the car is simply
+// parked in the lot. Consumes the arrivedByDrive flag.
+function applyDriveSpawn(mission) {
+  const p = PARKING[mission];
+  if (!arrivedByDrive || !p || !p.driveSpawn) { arrivedByDrive = false; return; }
+  arrivedByDrive = false;
+  camera.position.set(p.driveSpawn.x, VIEWS[mission].pos[1], p.driveSpawn.z);
+  state.yaw = p.driveSpawn.yaw; state.pitch = 0; camBounds = VIEWS[mission];
+}
+// ---------- Open the car door and step outside ----------
+// When the player drives to a destination and the car is parked, he does
+// not teleport beside it: he starts seated in the parked car with the
+// door closed, and steps out by opening the driver's door. The door is a
+// real door on the car (a panel with a window and a handle, hinged at its
+// front edge, swinging outward), clickable in 3D, and there is also an
+// on-screen Get out button while he is seated, so he can never get stuck
+// in the car. The door stays open after he steps out.
+// parkedSeat is null when the player is on foot; while he is seated in a
+// parked car it holds the car, the door, the place he ends up standing,
+// and the callback to run once he is out (for an arrival beat, the
+// destination action; for a mission, null - the mission just continues).
+let parkedSeat = null;
+let parkedSeatActive = false;
+let doorSwing = null; // { group, t } while a car door is swinging open
+let getOutBtnEl = null;
+function showGetOutButton() {
+  if (!getOutBtnEl) {
+    getOutBtnEl = document.createElement('div');
+    getOutBtnEl.id = 'getOutBtn';
+    getOutBtnEl.innerHTML = '<button type="button" id="getOutBtnInner" style="padding:14px 26px;font-size:17px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:10px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.5);">Get out of the car</button>';
+    getOutBtnEl.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);z-index:56;text-align:center;pointer-events:auto;';
+    document.body.appendChild(getOutBtnEl);
+    document.getElementById('getOutBtnInner').onclick = () => { getOutOfParkedCar(); };
+  }
+  getOutBtnEl.style.display = 'block';
+}
+function hideGetOutButton() { if (getOutBtnEl) getOutBtnEl.style.display = 'none'; }
+// A real driver's door on a parked car: a body-coloured panel with a
+// window strip and a chrome handle, hinged at its front edge so it
+// swings outward, on the driver's side (local -x, where the driver
+// sits). The door is sized from the car's own bounding box and the
+// driver's seat (headPos), so it fits the sedan, the coupe, the X5 and
+// the real M4 model alike. Returns the hinge group, the panel and a
+// generous invisible hit box around the door for easy tapping.
+function buildCarDoor(car) {
+  // Local bounding box: reset the transform, measure, restore. The car
+  // is positioned and rotated by parkPlayerCar before this runs.
+  const savedPos = car.position.clone(), savedRotY = car.rotation.y;
+  car.position.set(0, 0, 0); car.rotation.y = 0; car.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(car);
+  car.position.copy(savedPos); car.rotation.y = savedRotY; car.updateMatrixWorld(true);
+  const seatZ = (car.userData && car.userData.headPos) ? car.userData.headPos.z : 0.35;
+  let paint = 0x9aa5ad;
+  try { const def = getEquippedCarDef(); if (def && def.color) paint = new THREE.Color(def.color).getHex(); } catch (e) { /* default paint */ }
+  const doorX = box.min.x - 0.01;
+  const hingeZ = seatZ + 0.55;
+  const doorLen = 1.1;
+  const doorBottom = 0.32;
+  const doorTop = Math.min(1.25, box.max.y - 0.08);
+  const doorH = Math.max(0.6, doorTop - doorBottom);
+  const doorMidY = (doorTop + doorBottom) / 2;
+  const hinge = new THREE.Group();
+  hinge.position.set(doorX, 0, hingeZ);
+  hinge.name = 'carDoorHinge';
+  const panelMat = new THREE.MeshStandardMaterial({ color: paint, roughness: 0.5, metalness: 0.4 });
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, doorH, doorLen), panelMat);
+  panel.position.set(0, doorMidY, -doorLen / 2);
+  panel.castShadow = true;
+  panel.name = 'carDoor'; panel.userData.clickable = true;
+  hinge.add(panel);
+  // Window strip on the upper half of the door, so it reads as a car
+  // door with glass, not a plain panel.
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x10181f, roughness: 0.15, metalness: 0.7, transparent: true, opacity: 0.55 });
+  const win = new THREE.Mesh(new THREE.BoxGeometry(0.02, doorH * 0.32, doorLen * 0.78), glassMat);
+  win.position.set(-0.03, doorTop - doorH * 0.2, -doorLen / 2);
+  hinge.add(win);
+  // Chrome handle near the rear edge (the edge that swings out), at
+  // hand height, on the outer face.
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 0.22), new THREE.MeshStandardMaterial({ color: 0xc8ccd0, roughness: 0.25, metalness: 0.9 }));
+  handle.position.set(-0.045, 1.0, -doorLen + 0.15);
+  hinge.add(handle);
+  // Generous invisible hit box around the whole door, so a tap on the
+  // door (or just beside it) opens it instead of missing.
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.7, doorLen + 0.4), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  hit.position.set(0, 0.95, -doorLen / 2);
+  hit.name = 'carDoor'; hit.userData.clickable = true;
+  hinge.add(hit);
+  car.add(hinge);
+  return { group: hinge, panel, hit };
+}
+// Seat the player in a parked car, door closed, ready to step out.
+// car is the parked car group (already placed in its lot). getOutPos is
+// { x, z, yaw } where he ends up standing. onGetOut runs once he is out
+// (the destination action for an arrival beat, null for a mission).
+function seatPlayerInParkedCar(car, getOutPos, onGetOut) {
+  if (!car || !getOutPos) return false;
+  const door = buildCarDoor(car);
+  const driver = getAvatar();
+  try { if (driver.parent) driver.parent.remove(driver); } catch (e) { /* ignore */ }
+  setAvatarPose('sit');
+  driver.visible = true;
+  // Driver's seat, left side, sitting in the cabin at the same 0.62
+  // scale as the drive, so his head stays under the cabin roof.
+  driver.position.set(-0.38, 0.02, 0.35);
+  driver.rotation.set(0, 0, 0);
+  driver.scale.set(0.62, 0.62, 0.62);
+  car.add(driver);
+  parkedSeat = { car, door: door.group, doorHit: door.hit, getOutPos, onGetOut: onGetOut || null, doorOpen: false };
+  parkedSeatActive = true;
+  try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
+  showGetOutButton();
+  toast('You are parked. Click the car door, or Get out, to step outside.');
+  return true;
+}
+// Open the driver's door and step outside. The door swings open and
+// stays open; the player ends up standing beside the car, at full size,
+// in third person. Always works while he is seated: the Get out button
+// is always visible, and clicking the door does the same thing.
+function getOutOfParkedCar() {
+  if (!parkedSeatActive || !parkedSeat) return;
+  const seat = parkedSeat;
+  parkedSeat = null;
+  parkedSeatActive = false;
+  hideGetOutButton();
+  // Swing the door open (animated in the animate loop) and leave it open.
+  doorSwing = { group: seat.door, t: 0 };
+  // Step out: out of the car, on his feet, at full size, standing at
+  // the get-out spot beside the driver's door, facing the building.
+  try {
+    const driver = getAvatar();
+    if (driver.parent === seat.car) { try { seat.car.remove(driver); } catch (e) { /* ignore */ } }
+    setAvatarPose('stand');
+    driver.scale.set(1, 1, 1);
+    driver.rotation.set(0, 0, 0);
+    driver.visible = true;
+    detachAvatar();
+  } catch (e) { /* ignore */ }
+  // Place him on foot at the get-out spot and sync the player presence
+  // (this also resets the stored ground position, so the next frame does
+  // not snap the camera back to where he was before the drive).
+  try {
+    camera.position.set(seat.getOutPos.x, 1.7, seat.getOutPos.z);
+    state.yaw = seat.getOutPos.yaw || 0; state.pitch = 0;
+    applyPlayerPresence({ scene, camera, x: seat.getOutPos.x, z: seat.getOutPos.z, yaw: state.yaw, pitch: state.pitch, moving: false, moveDx: 0, moveDz: 0, dt: 0.016, t: Date.now() / 1000, eyeY: 1.7 });
+  } catch (e) { /* presence is best effort */ }
+  const cb = seat.onGetOut;
+  if (cb) { try { cb(); } catch (e) { /* destination action is best effort */ } }
+}
+// Chase camera while the player is seated in a parked car: behind and
+// to the driver's side, so he sees himself in the car and the door he
+// can click. The drive's chase view is the same idea.
+function updateParkedSeatView() {
+  if (!parkedSeat || !parkedSeat.car) return;
+  const car = parkedSeat.car;
+  const pos = new THREE.Vector3();
+  car.getWorldPosition(pos);
+  const q = new THREE.Quaternion();
+  car.getWorldQuaternion(q);
+  const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+  const side = new THREE.Vector3(-1, 0, 0).applyQuaternion(q);
+  camera.position.set(pos.x - fwd.x * 4.2 + side.x * 2.2, 2.0, pos.z - fwd.z * 4.2 + side.z * 2.2);
+  camera.rotation.order = 'YXZ';
+  camera.lookAt(pos.x, 1.0, pos.z);
+}
+// Advance an opening car door: swings from closed to about 66 degrees
+// over half a second, then stays open.
+function updateDoorSwing(dt) {
+  if (!doorSwing || !doorSwing.group) { doorSwing = null; return; }
+  doorSwing.t = Math.min(1, doorSwing.t + dt / 0.6);
+  const e = 1 - (1 - doorSwing.t) * (1 - doorSwing.t);
+  try { doorSwing.group.rotation.y = 1.15 * e; } catch (err) { /* ignore */ }
+  if (doorSwing.t >= 1) doorSwing = null;
+}
+// On a drive arrival, seat the player in the mission's parked car
+// instead of standing him beside it. Returns true when he was seated
+// (the mission start should not also move him to the drive spawn).
+// On any other entry the car is just parked and he spawns normally.
+// The flag is only consumed when seating succeeds, so the caller can
+// fall back to applyDriveSpawn when the car is missing.
+function seatIfDrove(mission, onGetOut) {
+  if (!arrivedByDrive) return false;
+  const p = PARKING[mission];
+  const car = parkedCars[mission];
+  if (!p || !p.driveSpawn || !car) return false;
+  arrivedByDrive = false;
+  return seatPlayerInParkedCar(car, p.driveSpawn, onGetOut || null);
+}
+// ---------- Parking at every destination: the arrival lot ----------
+// The three missions have their own lots. For every other destination
+// (a store, a home or visit, a landmark) the drive used to open the
+// store UI or the interior at once, and the car vanished. Now a drive
+// arrival first shows a small exterior beat: the car parked in a marked
+// bay in front of the destination building, with a P sign and the
+// building's name over the door. The player starts seated in the car,
+// opens the door and steps out, and only then does the store open or the
+// interior load. A Skip (no drive) goes straight to the destination, as
+// before, and missions keep their own lots.
+let arrivalGroup = null;
+let arrivalCar = null;
+let arrivalSignSprite = null;
+let arrivalSavedMissionVis = null;
+let arrivalPendingAction = null;
+// The name over the arrival lot building: a fresh text sprite each time,
+// so the building is named for the destination just driven to.
+function setArrivalSign(name) {
+  if (!arrivalGroup) return;
+  if (arrivalSignSprite) { try { arrivalGroup.remove(arrivalSignSprite); } catch (e) { /* ignore */ } arrivalSignSprite = null; }
+  const sprite = makeTextSprite((name || 'DESTINATION').toUpperCase(), '#ffd166');
+  sprite.scale.set(7, 1.75, 1);
+  sprite.position.set(0, 5.0, -6.9);
+  arrivalGroup.add(sprite);
+  arrivalSignSprite = sprite;
+}
+// One shared exterior for every non-mission drive arrival: a ground
+// plane, a building facade at the north with the destination name over
+// the entrance, a marked two-bay lot (reusing buildParkingLot) with the
+// car in the west bay facing the building, a street lamp and a tree.
+function buildArrivalLot() {
+  arrivalGroup = new THREE.Group();
+  arrivalGroup.name = 'arrivalLot';
+  arrivalGroup.visible = false;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ color: 0x3a3d40, roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+  arrivalGroup.add(ground);
+  // The destination building: a facade at the north, an entrance door
+  // and lit windows, so the lot reads as the front of a building.
+  const facade = new THREE.Mesh(new THREE.BoxGeometry(16, 6, 2), stdMat({ color: 0x8a7a68, roughness: 0.9 }));
+  facade.position.set(0, 3, -8); facade.castShadow = true; facade.receiveShadow = true;
+  arrivalGroup.add(facade);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.6, 0.12), stdMat({ color: 0x2a3a4a, roughness: 0.6 }));
+  door.position.set(0, 1.3, -6.95);
+  arrivalGroup.add(door);
+  const winMat = new THREE.MeshStandardMaterial({ color: 0xffd88a, emissive: 0xffc860, emissiveIntensity: 0.5, roughness: 0.4 });
+  for (const wx of [-5.5, -3.5, 3.5, 5.5]) {
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), winMat);
+    win.position.set(wx, 3.6, -6.95);
+    arrivalGroup.add(win);
+  }
+  // The marked lot: the car parks in the west bay, facing the building.
+  buildParkingLot(arrivalGroup, 0, 2, -1.4);
+  // A street lamp over the lot and a tree beside it, for life.
+  try { const lamp = makeStreetLight(0, 0); lamp.position.set(4.5, 0, 0.5); arrivalGroup.add(lamp); } catch (e) { /* lamp is decoration */ }
+  try { const tree = makeStreetTree(); tree.position.set(-4.5, 0, 0.5); arrivalGroup.add(tree); } catch (e) { /* tree is decoration */ }
+  scene.add(arrivalGroup);
+}
+// Show the arrival beat for a destination just driven to. The mission
+// scene hides while the beat runs; the car parks in the lot; the player
+// starts seated in it. On get-out the lot hides, the mission scene
+// comes back, the view resets, and the destination action runs (the
+// store opens, the interior loads, or the landmark card shows).
+function showArrivalBeat(name, onGetOut) {
+  if (!arrivalGroup) buildArrivalLot();
+  arrivalSavedMissionVis = [mission1.visible, mission2.visible, mission3.visible];
+  mission1.visible = false; mission2.visible = false; mission3.visible = false;
+  if (travelGroup) travelGroup.visible = false;
+  if (trekGroup) trekGroup.visible = false;
+  setArrivalSign(name);
+  try { disposeCarGroup(arrivalCar); } catch (e) { /* ignore */ }
+  arrivalCar = null;
+  const car = buildPlayerCar();
+  car.position.set(-1.4, 0, 2);
+  car.rotation.y = Math.PI; // facing north, toward the building
+  arrivalGroup.add(car);
+  arrivalCar = car;
+  arrivalGroup.visible = true;
+  arrivalPendingAction = onGetOut || null;
+  const seated = seatPlayerInParkedCar(car, { x: 0.1, z: 2, yaw: 0 }, () => {
+    hideArrivalBeat();
+    try { resetView(); } catch (e) { /* view is best effort */ }
+    if (arrivalPendingAction) { const cb = arrivalPendingAction; arrivalPendingAction = null; try { cb(); } catch (err) { /* destination action is best effort */ } }
+  });
+  if (!seated) {
+    hideArrivalBeat();
+    if (onGetOut) { try { onGetOut(); } catch (e) { /* ignore */ } }
+  }
+}
+function hideArrivalBeat() {
+  if (arrivalGroup) arrivalGroup.visible = false;
+  if (arrivalSavedMissionVis) {
+    mission1.visible = arrivalSavedMissionVis[0];
+    mission2.visible = arrivalSavedMissionVis[1];
+    mission3.visible = arrivalSavedMissionVis[2];
+    arrivalSavedMissionVis = null;
+  }
+}
 // The valve room inside the control station: the player enters through
 // the station door and walks to the valves. A separate bounds box, so
 // WASD stays inside the room while he is in there.
@@ -481,7 +879,7 @@ async function loadHumans() {
     const caleb = await loadWithTimeout('models/caleb.glb');
     const cg = caleb.scene; cg.name = 'caleb';
     const cb = new THREE.Box3().setFromObject(cg); const cs = new THREE.Vector3(); cb.getSize(cs);
-    const cscale = 1.88 / cs.y; cg.scale.setScalar(cscale);
+    const cscale = 1.75 / cs.y; cg.scale.setScalar(cscale);
     const cb2 = new THREE.Box3().setFromObject(cg); cg.position.y = -cb2.min.y;
     // Navy recolour + cap + badge, as in Act I.
     const navy = new THREE.MeshStandardMaterial({ color: 0x1a3a5a, roughness: 0.85, metalness: 0.02 });
@@ -593,8 +991,14 @@ function buildValveRoom() {
   // Exposed pipes run along the ceiling from the entrance wall to the
   // back wall, then drop down to feed the three valves: the water comes
   // straight from the dam, through the tower, down into this chamber.
+  // The drops sit 0.8 m WEST of each valve (x -3.8, -0.8, 2.2), not
+  // on the valve's own x: a drop on the valve's x ran straight down
+  // in front of its gauge and wheel and hid them. Off to the side,
+  // each drop lands on the west end of its valve's horizontal pipe
+  // and the gauge, the wheel, the sight tube and the PSI readout are
+  // all clear of it and clickable.
   const chamberPipeMat = stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 });
-  for (const px of [-3, 0, 3]) {
+  for (const px of [-3.8, -0.8, 2.2]) {
     const run = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 4.7, 12), chamberPipeMat);
     run.rotation.x = Math.PI / 2; run.position.set(px, 2.95, -3.35); run.castShadow = true; room.add(run);
     const drop = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.4, 12), chamberPipeMat);
@@ -617,6 +1021,8 @@ function buildValveRoom() {
 function enterValveRoom() {
   if (inValveRoom) return;
   inValveRoom = true;
+  // Third person in the valve room, so the player sees himself at the valves.
+  try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   camera.position.set(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[1], VALVE_ROOM_BOUNDS.pos[2]);
   state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
   setObjectives(OBJ1, 2);
@@ -823,6 +1229,9 @@ function buildMission1() {
   buildWaterTower();
   // Rondout station at the south end: the train he arrived on.
   buildRondoutStation();
+  // Parking lot in front of the skyscraper lobby, east of the dirt
+  // track, so the player's car has a marked space at the facility.
+  buildParkingLot(mission1, PARKING[1].cx, PARKING[1].cz, PARKING[1].carX);
   window._stationDoor = box(mission1, 1.2, 2.2, 0.15, 0x2a2118, 0, 1.1, -0.68, 'stationDoor');
   // The station door gets a real handle and panels, so it reads as a
   // door and not a flat black box. Brass lever handle on both faces, at
@@ -1032,11 +1441,16 @@ function startArrival() {
   updateHUD();
   camera.position.set(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[1], ARRIVAL_VIEW.pos[2]);
   state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = VIEWS[1];
+  // The player's car is already parked in the lot in front of the
+  // tower, so he sees it as he walks up from the platform.
+  parkPlayerCar(1);
   toast('Rondout station, 6 AM. You step off the train.');
 }
 function startMission1() {
   if (mission1Started) return; // the arrival trigger fires exactly once
   mission1Started = true;
+  // Third person on entering the mission, so the player sees himself.
+  try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   // Build the jaw morphs now that the game is on screen, not during the
   // load: mouth estimation must never be able to hold the loading overlay
   // up. The morphs are ready before the first line needs them.
@@ -1044,6 +1458,12 @@ function startMission1() {
   resetView();
   setTimeOfDay('day'); // Mission 1 (aqueduct) is bright day.
   currentPlaceKey = 'reservoir';
+  // The car stays parked in the lot in front of the tower (already
+  // parked on arrival; rebuilt here if this start came another way).
+  parkPlayerCar(1);
+  // A drive arrival seats him in the parked car so he can open the door
+  // and step out; any other entry just stands him beside it.
+  if (!seatIfDrove(1)) applyDriveSpawn(1);
   // If the player already has the station key (a replay), the key
   // mesh beside the door is hidden so it cannot be picked up twice.
   try {
@@ -1148,6 +1568,9 @@ function buildMission2() {
   window._keycardHit = keycardHit;
   blobShadow(mission2, -3.5, 2, 0.9, 0.9, 0.55);
   blobShadow(mission2, 3.5, 2, 0.9, 0.9, 0.55);
+  // Parking lot in the yard forecourt, west of the spawn, in front of
+  // the control room: the player's car pulls in here off the road.
+  buildParkingLot(mission2, PARKING[2].cx, PARKING[2].cz, PARKING[2].carX);
   // The living city around the yard: the substation sits in Long Island
   // City, so beyond the north fence there is a road with moving cars,
   // houses, an elevated train track with a passing train, and the
@@ -2422,8 +2845,14 @@ function arriveAt(key) {
     // Zama HQ and the NYC Court are landmarks on the live map: driving
     // there shows a card about the place, then back to the map. The
     // court is where Act III takes you; Zama HQ is where the sealed
-    // choices in this game are encrypted.
-    return () => { currentPlaceKey = key; showLandmarkCard(key); };
+    // choices in this game are encrypted. A drive arrival parks in front
+    // of the landmark first; the card shows after he steps out of the
+    // car. A Skip goes straight to the card, as before.
+    return () => {
+      currentPlaceKey = key;
+      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, () => showLandmarkCard(key)); }
+      else showLandmarkCard(key);
+    };
   }
   if (p.type === 'mission') {
     if (pendingMission && pendingMission.key === key) {
@@ -2433,12 +2862,23 @@ function arriveAt(key) {
     return () => restoreMissionScene();
   }
   if (p.type === 'store') {
-    return () => { currentPlaceKey = key; openStore(p.tab, () => openCityMap(key)); };
-  }
-  if (p.type === 'home' || p.type === 'visit') {
+    // A drive arrival parks in front of the shop first; the store opens
+    // after he steps out of the car. A Skip goes straight to the store.
     return () => {
       currentPlaceKey = key;
-      if (window.__lsActManager && typeof window.__lsActManager.enterHome === 'function') window.__lsActManager.enterHome(p.kind, 'map');
+      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, () => openStore(p.tab, () => openCityMap(key))); }
+      else openStore(p.tab, () => openCityMap(key));
+    };
+  }
+  if (p.type === 'home' || p.type === 'visit') {
+    // A drive arrival parks in front of the building first; the
+    // interior loads after he steps out of the car. A Skip goes
+    // straight inside, as before.
+    return () => {
+      currentPlaceKey = key;
+      const go = () => { if (window.__lsActManager && typeof window.__lsActManager.enterHome === 'function') window.__lsActManager.enterHome(p.kind, 'map'); };
+      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, go); }
+      else go();
     };
   }
   return () => restoreMissionScene();
@@ -2576,12 +3016,16 @@ function startTravelDrive(toKey, onArrive) {
     setAvatarPose('sit');
     driver.visible = true;
     // Driver's seat, left side, sitting in the cabin. The driver is
-    // scaled to 0.72 so his head fits under the cabin roof, and the
-    // cabin glass is semi-transparent (see buildCar) so he is visible
-    // from the chase camera. He faces the car's forward (+z local).
+    // scaled to 0.62, not 0.72: at 0.72 his head sat at about 1.28 m,
+    // right at the cabin roof, so from the chase camera he read as
+    // sitting ON TOP of the car. At 0.62 his head is at about 1.10 m,
+    // the same height as the in-car camera (headPos), well under the
+    // roof, so he reads as sitting INSIDE the cabin, seen through the
+    // glass. His feet stay at y 0.02 on the car floor, so nothing
+    // clips below the car. He faces the car's forward (+z local).
     driver.position.set(-0.38, 0.02, 0.35);
     driver.rotation.set(0, 0, 0);
-    driver.scale.set(0.72, 0.72, 0.72);
+    driver.scale.set(0.62, 0.62, 0.62);
     driveCar.add(driver);
   } catch (e) { driveCar = null; }
   camera.position.set(0, 1.7, 4);
@@ -2644,9 +3088,18 @@ function endTravelDrive() {
     driver.visible = false;
     detachAvatar();
   } catch (e) { /* ignore */ }
+  // Third person after every drive, so the player sees himself at the
+  // destination instead of arriving in first person with no avatar.
+  try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   if (travelToKey) currentPlaceKey = travelToKey;
   const cb = travelOnArrive; travelOnArrive = null; travelToKey = null;
+  // The arrival that follows knows the player drove in, so a mission
+  // start can stand him beside the parked car. The flag is consumed by
+  // the mission start (applyDriveSpawn) and cleared here either way, so
+  // a store, home or landmark arrival never leaves it set for later.
+  arrivedByDrive = true;
   if (cb) cb();
+  arrivedByDrive = false;
 }
 function updateTravelDrive(dt, t) {
   if (!travelActive) return;
@@ -2861,6 +3314,13 @@ function reparentCast(name, group, x, z, yaw) {
 function startMission2() {
   mission1.visible = false; mission2.visible = true; mission3.visible = false;
   state.mission = 2; resetView();
+  // Third person on entering the mission, so the player sees himself.
+  try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
+  // The car pulls into the lot in the yard forecourt. On a drive
+  // arrival he starts seated in the parked car and opens the door to
+  // step out; any other entry just stands him beside it.
+  parkPlayerCar(2);
+  if (!seatIfDrove(2)) applyDriveSpawn(2);
   setTimeOfDay('dusk'); // Mission 2 (substation) is dusk/evening.
   currentPlaceKey = 'substation';
   try { localStorage.setItem('lastSignalAct2Mission', '2'); } catch (e) { /* private mode */ }
@@ -3094,10 +3554,20 @@ function buildMission3() {
     mission3.add(spool);
     chaseSpools.push({ mesh: spool, z: lane, phase, speed });
   }
+  // Parking lot by a small garden beside the bridge approach, east of
+  // the deck: the player's car has a marked space at the bridge. The P
+  // sign faces west, at the player standing on the deck.
+  buildParkingLot(mission3, PARKING[3].cx, PARKING[3].cz, PARKING[3].carX, -Math.PI / 2);
+  buildBridgeGarden(mission3);
 }
 function startMission3() {
   mission1.visible = false; mission2.visible = false; mission3.visible = true;
   state.mission = 3; state.climbStep = 0; resetView();
+  // Third person on entering the mission, so the player sees himself.
+  try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
+  // The car is parked in the lot by the garden at the bridge approach.
+  parkPlayerCar(3);
+  applyDriveSpawn(3);
   setTimeOfDay('night'); // Mission 3 (bridge) is night.
   currentPlaceKey = 'bridge';
   try { localStorage.setItem('lastSignalAct2Mission', '3'); } catch (e) { /* private mode */ }
@@ -3340,13 +3810,21 @@ window.__ls2 = { state, interact, openValveModal, openScadaModal, openCityMap };
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
 let lastTapAt = 0;
 function handleTap(clientX, clientY) {
+  mouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  // The parked car door is always clickable, even while a briefing or a
+  // dialogue is open: the player is seated in the car and the door is
+  // how he gets out. A tap on the door opens it; anything else is
+  // ignored while reading, as before.
+  if (parkedSeatActive && parkedSeat && parkedSeat.doorHit) {
+    const doorHits = ray.intersectObject(parkedSeat.doorHit, false);
+    if (doorHits.length) { interact('carDoor'); return; }
+  }
   // While a dialogue or a modal is open the player is reading or choosing:
   // canvas taps must not re-trigger an interaction and reset the queue.
   if (!document.getElementById('dialogue').classList.contains('hidden')) return;
   if (!document.getElementById('valveModal').classList.contains('hidden')) return;
   if (!document.getElementById('scadaModal').classList.contains('hidden')) return;
-  mouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
-  ray.setFromCamera(mouse, camera);
   const targets = [];
   if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, window._stationDoor, window._stationDoorHit, window._stationKey, window._stationKeyLabel);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
@@ -3386,6 +3864,9 @@ canvas.addEventListener('pointerup', e => {
 });
 function interact(name) {
   if (!name) return;
+  // The parked car door: open it and step outside. This is how the
+  // player gets out of the car at any destination he drove to.
+  if (name === 'carDoor') { getOutOfParkedCar(); return; }
   if (name === 'valveHospital' || name === 'valveResidential' || name === 'valveIndustrial') {
     // The valves are inside the valve room: the puzzle only opens once the
     // player has walked in through the station door to reach them.
@@ -3499,6 +3980,20 @@ function animate() {
     renderer.render(scene, camera);
     return;
   }
+  // While the player is seated in a parked car, the seat owns the
+  // camera: a chase view from behind the car so he sees himself in the
+  // driver's seat and the door he can click. Movement and the normal
+  // presence hook are skipped, so the avatar is not forced to stand and
+  // the camera does not snap back to the pre-drive position.
+  if (parkedSeatActive) {
+    updateParkedSeatView();
+    updateDoorSwing(dt);
+    renderer.render(scene, camera);
+    return;
+  }
+  // A car door that was opened keeps swinging even after the player is
+  // on foot, so it finishes opening and stays open.
+  updateDoorSwing(dt);
   // Valve room: walking up to a valve wheel opens the pressure controls,
   // so the puzzle opens when the player reaches the valves.
   if (state.mission === 1 && inValveRoom && !valveOpen && !state.waterStable
@@ -3682,7 +4177,7 @@ function animate() {
   // Third-person: show the player avatar and put the camera behind it.
   {
     const mv2 = moveDelta(keys, state.yaw, 1);
-    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: state.mission === 3 ? 1.9 : 1.7 });
+    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: state.mission === 3 ? 1.9 : 1.7, camBounds });
   }
   updatePressureGauges(dt, t); // valve-room gauges: needles ease to the live pressure, sight-glass water flows
   renderer.render(scene, camera);

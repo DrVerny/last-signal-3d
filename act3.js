@@ -358,7 +358,7 @@ async function loadHumans() {
     const caleb = await loadWithTimeout('models/caleb.glb');
     const cg = caleb.scene; cg.name = 'caleb';
     const cb = new THREE.Box3().setFromObject(cg); const cs = new THREE.Vector3(); cb.getSize(cs);
-    const cscale = 1.88 / cs.y; cg.scale.setScalar(cscale);
+    const cscale = 1.75 / cs.y; cg.scale.setScalar(cscale);
     const navy = new THREE.MeshStandardMaterial({ color: 0x1a3a5a, roughness: 0.85, metalness: 0.02 });
     cg.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = navy; });
     const capMat = new THREE.MeshStandardMaterial({ color: 0x16283f, roughness: 0.7 });

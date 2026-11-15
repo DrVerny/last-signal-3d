@@ -821,7 +821,7 @@ const humanGroups = []; // THREE.Group per loaded character, for raycast clickin
 const modelGroups = {}; // key -> {group}
 const MODEL_DEFS = [
   { key: 'jade', file: 'models/rigged/jade-rigged.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.70 },
-  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.88, recolourNavy: true },
+  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.75, recolourNavy: true },
   { key: 'nurse', file: 'models/rigged/nurse-rigged.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.68 },
   { key: 'walter', file: 'models/walter.glb', name: 'walter', x: -1.18, z: 4.5, faceYaw: 0.6, targetHeight: null, hideBench: true }
 ];
@@ -899,6 +899,16 @@ async function loadHumans() {
         badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.22, -0.38); group.add(badge);
       }
       group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      // Jade (Casual Female) has the same oversized head as the player
+      // model: its Hair is wider than its shoulders, so it reads as a
+      // wide flat disc about twice normal width. Shrink the head bone
+      // before the height is normalised, so the normalisation measures
+      // the corrected head. Only models with separate Face/Hair
+      // materials need this; the Atlas models (Caleb, Nurse, Walter)
+      // are fine and are left alone.
+      let hasFaceHair = false;
+      group.traverse((o) => { if (o.isMesh && o.material && (o.material.name === 'Face' || o.material.name === 'Hair')) hasFaceHair = true; });
+      if (hasFaceHair) group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
       // Normalise height to the character's target height, then re-ground feet at y=0.
       let s = 1;
       const box = new THREE.Box3().setFromObject(group);
