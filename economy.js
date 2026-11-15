@@ -31,7 +31,7 @@ export const STORE_ITEMS = {
     { id: 'chain', name: 'Gold Chain', price: 3000, color: '#ffd166', desc: 'A gold chain' }
   ]
 };
-const ITEM_BY_ID = {};
+export const ITEM_BY_ID = {};
 for (const tab of Object.values(STORE_ITEMS)) for (const it of tab) ITEM_BY_ID[it.id] = it;
 
 const MONEY_KEY = 'lastSignalMoney';
