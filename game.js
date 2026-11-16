@@ -820,9 +820,9 @@ const humans = []; // {group, name, baseScale, phase, seated, mixer, rootBone, r
 const humanGroups = []; // THREE.Group per loaded character, for raycast clicking
 const modelGroups = {}; // key -> {group}
 const MODEL_DEFS = [
-  { key: 'jade', file: 'models/rigged/jade-rigged.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.24 },
-  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.24, recolourNavy: true },
-  { key: 'nurse', file: 'models/rigged/nurse-rigged.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.24 },
+  { key: 'jade', file: 'models/rigged/jade-rigged.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.68 },
+  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.68, recolourNavy: true },
+  { key: 'nurse', file: 'models/rigged/nurse-rigged.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.68 },
   { key: 'walter', file: 'models/walter.glb', name: 'walter', x: -1.18, z: 4.5, faceYaw: 0.6, targetHeight: null, hideBench: true }
 ];
 let introStarted = false;

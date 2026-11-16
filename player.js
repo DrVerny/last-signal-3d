@@ -88,7 +88,7 @@ export function isTouchDevice() {
 // file's Skin is near-black and its Face near-white (the pack's
 // placeholder colours), so both are recoloured on load.
 const PLAYER_MODEL = 'models/rigged/player-rigged.glb';
-const PLAYER_HEIGHT = 1.24; // target standing height in metres (4 feet 1 inch)
+const PLAYER_HEIGHT = 1.68; // target standing height in metres (5 feet 6 inches)
 const PLAYER_SKIN = 0x6b4a2f; // warm medium-dark brown skin
 let avatar = null;
 let avatarParts = null; // procedural fallback parts (null once rigged)
@@ -225,9 +225,9 @@ function buildFallbackAvatar() {
   const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.42, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; g.add(shadow);
   g.traverse(o => { o.userData.keepAlive = true; });
-  // Scale the whole fallback to the player's height (1.24 m, 4 feet 1
-  // inch). As built it is about 1.95 m tall (hair top), so a uniform
-  // scale brings the head down to 1.24 m and the feet stay on the
+  // Scale the whole fallback to the player's height (1.68 m, 5 feet 6
+  // inches). As built it is about 1.95 m tall (hair top), so a uniform
+  // scale brings the head down to 1.68 m and the feet stay on the
   // ground. Poses still work: they only rotate the pivots.
   g.scale.setScalar(PLAYER_HEIGHT / 1.95);
   return { group: g, parts: { legL, legR, armL, armR, headGroup, torso, capMesh, jacketMat, pantsMat, shoeMat } };
@@ -676,11 +676,11 @@ export function applyPlayerPresence(o) {
   o.camera.position.set(camX, camY, camZ);
   o.camera.rotation.order = 'YXZ';
   // Look at the avatar's chest, slightly ahead so the view leads
-  // forward. At 1.0 m the 1.24 m player is framed head to feet; the
+  // forward. At 1.35 m the 1.68 m player is framed head to feet; the
   // old 1.45 m aim was tuned for a 1.75 m player and put the feet at
   // the bottom edge of the frame.
   const fx = -Math.sin(o.yaw), fz = -Math.cos(o.yaw);
-  o.camera.lookAt(o.x + fx * 1.2, 1.0, o.z + fz * 1.2);
+  o.camera.lookAt(o.x + fx * 1.2, 1.35, o.z + fz * 1.2);
   return true;
 }
 

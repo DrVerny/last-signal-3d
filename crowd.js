@@ -23,7 +23,7 @@ import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 // denominator when normalising the crowd to the target height. Do not
 // set these to the target height: a smaller denominator makes the
 // crowd taller. Measured: caleb-alt 1.34, jade 1.89, nurse 1.53,
-// walter 1.36. The crowd is normalised to 1.24 m in makePerson.
+// walter 1.36. The crowd is normalised to 1.68 m in makePerson.
 const CROWD_DEFS = [
   { file: 'models/rigged/caleb-alt-civilian.glb', sex: 'm', height: 1.34 },
   { file: 'models/rigged/jade-rigged.glb', sex: 'f', height: 1.89, sitThighL: 70, sitThighR: 130, sitShinL: -70, sitShinR: -90, sitShoulder: 45, sitHipsY: 0.47 },
@@ -160,8 +160,8 @@ export const SKIN_TONES = [0x2e1a0e, 0x5a3a22, 0x8a5a3a, 0xa06a42, 0xe8c8a8]; //
 export const HAIR_COLOURS = [0x141414, 0x3a2418, 0x6a4a2a, 0xc8a848, 0x8a8a8a, 0x6a2a1a];
 export const SHIRT_COLOURS = [0x1a1a1a, 0x222f45, 0x5a3a22, 0x8a2a22, 0x2a4a6a, 0x3a5a3a, 0xc8b89a, 0x555555, 0x3a2a4a, 0x2a6a4a];
 export const PANTS_COLOURS = [0x2a4a6a, 0x1a1a1a, 0x3a2a1a, 0x555555, 0x333333, 0x4a3a2a];
-// Body types: height is a multiplier on the normalised 1.24 m person
-// (nobody above 1.24 m; short about 1.08 m); width is a multiplier on
+// Body types: height is a multiplier on the normalised 1.68 m person
+// (nobody above 1.68 m; short about 1.48 m); width is a multiplier on
 // the body width (fat about 28% wider, thin about 14% slimmer). The
 // spread is deliberate, not subtle: a fat person and a thin person
 // standing next to each other read as different body types at a glance.
@@ -382,7 +382,7 @@ export function makeRiggedPerson(opts) {
     // (slightly shorter in the 40s and 50s) rides on the same scale.
     // The Walk clip is bone-relative, so the walk cycle is unaffected
     // by the scale.
-    const s = (o.scale !== undefined ? o.scale : 1) * (1.24 / model.height) * body.height * traits.height;
+    const s = (o.scale !== undefined ? o.scale : 1) * (1.68 / model.height) * body.height * traits.height;
     const sj = 0.98 + Math.random() * 0.04;
     group.scale.set(s * body.width, s * sj, s * body.width);
     group.traverse(m => { m.castShadow = true; });
@@ -555,7 +555,7 @@ export function makeSeatedPerson(opts) {
     if (!o.look && Math.random() < traits.grey) look.hair = 0x8a8a8a;
     const body = o.body || pickBodyType();
     applyLook(group, model, look);
-    const s = (o.scale !== undefined ? o.scale : 1) * (1.24 / model.height) * body.height * traits.height;
+    const s = (o.scale !== undefined ? o.scale : 1) * (1.68 / model.height) * body.height * traits.height;
     const sj = 0.98 + Math.random() * 0.04;
     group.scale.set(s * body.width, s * sj, s * body.width);
     group.traverse(m => { m.castShadow = true; });

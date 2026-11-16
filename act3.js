@@ -350,7 +350,7 @@ async function loadHumans() {
     const jade = await loadWithTimeout('models/jade.glb');
     const jg = jade.scene; jg.name = 'jade';
     const jb = new THREE.Box3().setFromObject(jg); const js = new THREE.Vector3(); jb.getSize(js);
-    const jscale = 1.24 / js.y; jg.scale.setScalar(jscale);
+    const jscale = 1.68 / js.y; jg.scale.setScalar(jscale);
     gControl.add(jg); placeHuman(jg, 'jade', -1.4, 4.5, Math.PI, jscale);
   } catch (e) { failures.push('jade'); }
   try {
@@ -358,7 +358,7 @@ async function loadHumans() {
     const caleb = await loadWithTimeout('models/caleb.glb');
     const cg = caleb.scene; cg.name = 'caleb';
     const cb = new THREE.Box3().setFromObject(cg); const cs = new THREE.Vector3(); cb.getSize(cs);
-    const cscale = 1.24 / cs.y; cg.scale.setScalar(cscale);
+    const cscale = 1.68 / cs.y; cg.scale.setScalar(cscale);
     const navy = new THREE.MeshStandardMaterial({ color: 0x1a3a5a, roughness: 0.85, metalness: 0.02 });
     cg.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = navy; });
     const capMat = new THREE.MeshStandardMaterial({ color: 0x16283f, roughness: 0.7 });
@@ -376,7 +376,7 @@ async function loadHumans() {
     const nurse = await loadWithTimeout('models/adeyemi.glb');
     const ng = nurse.scene; ng.name = 'nurse';
     const nb = new THREE.Box3().setFromObject(ng); const ns = new THREE.Vector3(); nb.getSize(ns);
-    const nscale = 1.24 / ns.y; ng.scale.setScalar(nscale);
+    const nscale = 1.68 / ns.y; ng.scale.setScalar(nscale);
     gCourt.add(ng); placeHuman(ng, 'nurse', -4.5, 2, 0.5, nscale);
   } catch (e) { failures.push('nurse'); }
   if (calebBase) {
