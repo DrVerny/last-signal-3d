@@ -863,14 +863,28 @@ const FACE_LAYOUTS = {
   caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.37, browZ: 0.23 },
   nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.43, browZ: 0.30 }
 };
-function addFaceFeatures(headBone, totalScale, layout) {
+function addFaceFeatures(headBone, totalScale, layout, fitScale) {
   if (!headBone || !totalScale || totalScale <= 0 || !layout) return;
   try {
     const w = (worldSize) => worldSize / totalScale;
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.7 });
+    // The Head bone sits under the __fit node, so a Head child's true
+    // world scale is totalScale times fitScale (0.591 for Casual
+    // models, 0.89 for Atlas). The eyes keep the plain w() converter:
+    // at that scale they already read clearly live, and the designed
+    // 0.045 m eyeballs would overlap at the measured eye spacing. The
+    // nose, mouth and eyebrows use the corrected wf() converter so
+    // they render at their true world size instead of 0.59-0.89 of it.
+    const wf = (worldSize) => worldSize / (totalScale * (fitScale || 1));
+    // Eyes are unchanged: white MeshBasicMaterial eyeballs with dark
+    // pupils, already verified readable live. The nose, mouth and
+    // eyebrows were too small and too dark to read at the 4 m camera
+    // distance, so they are doubled in size and use bright unlit
+    // materials so they read in the dim mansion.
     const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const darkMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
-    const mouthMat = new THREE.MeshStandardMaterial({ color: 0x5a2a22, roughness: 0.7 });
+    const noseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
+    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
+    const browMat = new THREE.MeshBasicMaterial({ color: 0x3a2010 });
     const grp = new THREE.Group();
     for (const sx of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
@@ -881,16 +895,16 @@ function addFaceFeatures(headBone, totalScale, layout) {
       pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02));
       pupil.userData.keepAlive = true;
       grp.add(pupil);
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.012), w(0.012)), darkMat);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(0.10), wf(0.024), wf(0.02)), browMat);
       brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ);
       brow.userData.keepAlive = true;
       grp.add(brow);
     }
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.045), w(0.04)), skinMat);
-    nose.position.set(layout.cx, layout.noseY, layout.noseZ);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(wf(0.06), wf(0.09), wf(0.08)), noseMat);
+    nose.position.set(layout.cx, layout.noseY, layout.noseZ + wf(0.01));
     nose.userData.keepAlive = true;
     grp.add(nose);
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(w(0.06), w(0.015), w(0.012)), mouthMat);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(0.12), wf(0.03), wf(0.02)), mouthMat);
     mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ);
     mouth.userData.keepAlive = true;
     grp.add(mouth);
@@ -1005,7 +1019,9 @@ async function loadHumans() {
           let headBone = null;
           group.traverse((o) => { if (!headBone && o.isBone && o.name === 'Head') headBone = o; });
           const headScale = hasFaceHair ? 0.3 : 0.6;
-          addFaceFeatures(headBone, headScale * s, layout);
+          let fitScale = 1;
+          group.traverse((o) => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
+          addFaceFeatures(headBone, headScale * s, layout, fitScale);
         }
       }
       scene.add(group);

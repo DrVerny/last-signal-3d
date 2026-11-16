@@ -120,8 +120,17 @@ let avatarShirtMat = null; // the rig's shirt material, for re-tinting
 // pose is mid-stride), so a bone-local offset put the old shoes inside
 // the leg or underground. Each frame the shoe follows its foot bone by
 // the bone's movement since the Idle pose (see updateSneakers).
+// ROOT CAUSE of the invisible shoes, measured in Node: the avatar
+// stands at y 0 but every roomShell floor is a 0.1 thick box with its
+// top at world y 0.10, so the old bind y 0.032 put the whole shoe
+// (world y -0.030 to 0.098) UNDER the floor, and the feet with it.
+// The shoe was white, in the scene and correctly placed, just buried.
+// The bind y 0.12 lifts the shoe so its bottom sits near the outdoor
+// ground (roads at y 0.02) and 0.086 m of white shoe shows above the
+// indoor floor. The feet themselves stay buried under room floors;
+// that is a separate avatar ground-level issue, not a shoe issue.
 const SNEAKER_IDLE_BONE = { FootL: [0.205, 0.016, -0.180], FootR: [-0.108, 0.016, -0.180] };
-const SNEAKER_BIND_POS = { FootL: [0.207, 0.032, -0.129], FootR: [-0.110, 0.032, -0.129] };
+const SNEAKER_BIND_POS = { FootL: [0.207, 0.12, -0.129], FootR: [-0.110, 0.12, -0.129] };
 let avatarSneakers = null; // [{ bone, group, bindBone, bindPos }] once rigged
 let lastShoeStatus = 0; // TEMP DIAGNOSTIC: last time the shoe status line was refreshed
 function outfitColor() {
@@ -254,14 +263,28 @@ export function buildPlayerAvatar() {
 // Casual face is centred at X 0, Y 0.463, front Z 0.505). Sizes are given
 // in world metres and divided by totalScale (Head bone scale x rig
 // scale) because a Head-bone child is shrunk by both.
-function addFaceFeatures(headBone, totalScale, layout) {
+function addFaceFeatures(headBone, totalScale, layout, fitScale) {
   if (!headBone || !totalScale || totalScale <= 0) return;
   try {
     const w = (worldSize) => worldSize / totalScale;
-    const skinMat = new THREE.MeshStandardMaterial({ color: PLAYER_SKIN, roughness: 0.7 });
+    // The Head bone sits under the __fit node, so a Head child's true
+    // world scale is totalScale times fitScale (0.591 for Casual
+    // models, 0.89 for Atlas). The eyes keep the plain w() converter:
+    // at that scale they already read clearly live, and the designed
+    // 0.045 m eyeballs would overlap at the measured eye spacing. The
+    // nose, mouth and eyebrows use the corrected wf() converter so
+    // they render at their true world size instead of 0.59-0.89 of it.
+    const wf = (worldSize) => worldSize / (totalScale * (fitScale || 1));
+    // Eyes are unchanged: white MeshBasicMaterial eyeballs with dark
+    // pupils, already verified readable live. The nose, mouth and
+    // eyebrows were too small and too dark to read at the 4 m camera
+    // distance, so they are doubled in size and use bright unlit
+    // materials so they read in the dim mansion.
     const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const darkMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
-    const mouthMat = new THREE.MeshStandardMaterial({ color: 0x5a2a22, roughness: 0.7 });
+    const noseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
+    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
+    const browMat = new THREE.MeshBasicMaterial({ color: 0x3a2010 });
     const grp = new THREE.Group();
     for (const sx of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
@@ -272,16 +295,16 @@ function addFaceFeatures(headBone, totalScale, layout) {
       pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02));
       pupil.userData.keepAlive = true;
       grp.add(pupil);
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.012), w(0.012)), darkMat);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(0.10), wf(0.024), wf(0.02)), browMat);
       brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ);
       brow.userData.keepAlive = true;
       grp.add(brow);
     }
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.045), w(0.04)), skinMat);
-    nose.position.set(layout.cx, layout.noseY, layout.noseZ);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(wf(0.06), wf(0.09), wf(0.08)), noseMat);
+    nose.position.set(layout.cx, layout.noseY, layout.noseZ + wf(0.01));
     nose.userData.keepAlive = true;
     grp.add(nose);
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(w(0.06), w(0.015), w(0.012)), mouthMat);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(0.12), wf(0.03), wf(0.02)), mouthMat);
     mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ);
     mouth.userData.keepAlive = true;
     grp.add(mouth);
@@ -291,28 +314,36 @@ function addFaceFeatures(headBone, totalScale, layout) {
 }
 
 // Fingers on a rigged hand. The model's hands are solid mitten blocks
-// (part of the Skin mesh, no finger bones). These thin skin-tone boxes
+// (part of the Skin mesh, no finger bones). These light skin-tone boxes
 // extend past the fist so the hand reads as fingers, not a mitten. They
 // are children of the Fist bone so they move with the arm. Positions are
 // in Fist-bone local space, measured from the fist block with invBind
-// (the fist spans Y -0.042 to 0.348, X -0.113 to 0.128). Sizes are in
-// world metres divided by rigScale (the Fist bone has no extra scale).
-// thumbSign is +1 when the thumb sits on the Fist local +X side.
-function addFingers(fistBone, rigScale, thumbSign) {
-  if (!fistBone || !rigScale || rigScale <= 0) return;
+// (the fist spans Y -0.042 to 0.348, X -0.113 to 0.128, centre X 0.0075).
+// Sizes are in world metres divided by boneScale: the Fist bone sits
+// under the __fit node (scale 0.591), so a Fist child's world size is
+// its local size times 0.591 times the rig scale s, NOT times s alone.
+// Dividing by s alone made the last fingers 0.021 m wide and 0.095 m
+// long with 4 mm gaps, so they vanished into the fist and the hands
+// still read as mittens. The fingers are MeshBasicMaterial in a light
+// skin tone so they stay bright in the dim mansion, and they protrude
+// 0.09 m past the fist tip. Four 0.03 m fingers is the widest that fits
+// the 0.122 m hand with clear gaps; 0.05 m fingers would overlap into
+// a solid slab. thumbSign is +1 when the thumb sits on the Fist local
+// +X side.
+function addFingers(fistBone, boneScale, thumbSign) {
+  if (!fistBone || !boneScale || boneScale <= 0) return;
   try {
-    const w = (worldSize) => worldSize / rigScale;
-    const skinMat = new THREE.MeshStandardMaterial({ color: PLAYER_SKIN, roughness: 0.7 });
+    const w = (worldSize) => worldSize / boneScale;
+    const fingerMat = new THREE.MeshBasicMaterial({ color: 0xd9a986 });
     const grp = new THREE.Group();
-    const fingerX = [-0.075, -0.025, 0.025, 0.075];
-    for (const fx of fingerX) {
-      const finger = new THREE.Mesh(new THREE.BoxGeometry(w(0.035), w(0.16), w(0.035)), skinMat);
-      finger.position.set(fx, 0.31, 0.05);
+    for (let i = 0; i < 4; i++) {
+      const finger = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.22), w(0.03)), fingerMat);
+      finger.position.set(0.0075 + (i - 1.5) * w(0.04), 0.31, 0.05);
       finger.userData.keepAlive = true;
       grp.add(finger);
     }
-    const thumb = new THREE.Mesh(new THREE.BoxGeometry(w(0.035), w(0.14), w(0.035)), skinMat);
-    thumb.position.set(thumbSign * 0.13, 0.20, 0.08);
+    const thumb = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.16), w(0.05)), fingerMat);
+    thumb.position.set(thumbSign * 0.14, 0.18, 0.08);
     thumb.rotation.z = -thumbSign * 0.5;
     thumb.userData.keepAlive = true;
     grp.add(thumb);
@@ -417,15 +448,19 @@ async function loadPlayerRig() {
     // hands. The Face texture does not read from the front, so the face
     // looks blank, and the hands are solid mitten blocks. Layout is in
     // Head-bone local space, measured from the Face mesh (see
-    // addFaceFeatures). The Head bone scale is 0.3, so the total scale
-    // for a Head child is 0.3 times the rig scale s.
+    // addFaceFeatures). The Head and Fist bones sit under the __fit
+    // node (scale 0.591), so a bone child's world scale is 0.591 times
+    // the rig scale s. Pass that to the face and finger helpers, not s
+    // alone, or the features render at 0.591 of their designed size.
+    let fitScale = 1;
+    rig.traverse(o => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
     {
       const headBone = bones.get('Head');
       const faceLayout = { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47 };
-      addFaceFeatures(headBone, 0.3 * s, faceLayout);
+      addFaceFeatures(headBone, 0.3 * s, faceLayout, fitScale);
     }
-    addFingers(bones.get('FistL'), s, 1);
-    addFingers(bones.get('FistR'), s, -1);
+    addFingers(bones.get('FistL'), fitScale * s, 1);
+    addFingers(bones.get('FistR'), fitScale * s, -1);
     // A soft blob shadow under the feet, like the fallback had.
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.42, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; shadow.userData.keepAlive = true; rig.add(shadow);
@@ -488,11 +523,15 @@ async function loadPlayerRig() {
       const foot = bones.get(boneName);
       if (!foot) continue;
       const group = new THREE.Group();
-      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.15, 0.50), shoeMat);
+      // Bigger and taller so the shoe unmistakably sticks out around the
+      // foot and above the indoor floor. The width stays 0.30: the
+      // ankles are only 0.271 m apart, so a 0.36 wide shoe would make
+      // the pair intersect into one white slab instead of two shoes.
+      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.18, 0.56), shoeMat);
       shoe.castShadow = true; shoe.receiveShadow = true;
       group.add(shoe);
-      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.03, 0.50), soleMat);
-      sole.position.y = -0.06;
+      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.03, 0.56), soleMat);
+      sole.position.y = -0.075;
       sole.castShadow = true;
       group.add(sole);
       const bindPos = SNEAKER_BIND_POS[boneName];
