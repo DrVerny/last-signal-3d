@@ -401,11 +401,11 @@ async function loadPlayerRig() {
       const foot = bones.get(boneName);
       if (!foot) continue;
       const group = new THREE.Group();
-      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.10, 0.36), shoeMat);
+      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.15, 0.50), shoeMat);
       shoe.castShadow = true; shoe.receiveShadow = true;
       group.add(shoe);
-      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.02, 0.36), soleMat);
-      sole.position.y = -0.04;
+      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.03, 0.50), soleMat);
+      sole.position.y = -0.06;
       sole.castShadow = true;
       group.add(sole);
       const bindPos = SNEAKER_BIND_POS[boneName];
@@ -675,9 +675,12 @@ export function applyPlayerPresence(o) {
   const camY = (o.eyeY || 1.7) + dist * 0.28;
   o.camera.position.set(camX, camY, camZ);
   o.camera.rotation.order = 'YXZ';
-  // Look at the avatar's head, slightly ahead so the view leads forward.
+  // Look at the avatar's chest, slightly ahead so the view leads
+  // forward. At 1.0 m the 1.24 m player is framed head to feet; the
+  // old 1.45 m aim was tuned for a 1.75 m player and put the feet at
+  // the bottom edge of the frame.
   const fx = -Math.sin(o.yaw), fz = -Math.cos(o.yaw);
-  o.camera.lookAt(o.x + fx * 1.2, 1.45, o.z + fz * 1.2);
+  o.camera.lookAt(o.x + fx * 1.2, 1.0, o.z + fz * 1.2);
   return true;
 }
 
