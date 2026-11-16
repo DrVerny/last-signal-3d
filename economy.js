@@ -19,7 +19,8 @@ export const STORE_ITEMS = {
     { id: 'hoodie', name: 'Street Hoodie', price: 25000, color: '#c0392b', desc: 'Red hoodie, street style' },
     { id: 'vest', name: 'Tactical Vest', price: 50000, color: '#4a7c59', desc: 'Green tactical vest' },
     { id: 'leather', name: 'Leather Jacket', price: 65000, color: '#6b4226', desc: 'Brown leather jacket' },
-    { id: 'suit', name: 'Sharp Suit', price: 80000, color: '#1a1a1a', desc: 'Black sharp suit' }
+    { id: 'suit', name: 'Sharp Suit', price: 80000, color: '#1a1a1a', desc: 'Black sharp suit' },
+    { id: 'designer', name: 'Designer Suit', price: 120000, color: '#111111', pants: '#111111', shoes: '#f2f2f2', desc: 'Sharp black designer suit with clean white sneakers' }
   ],
   cars: [
     { id: 'sedan', name: 'City Sedan', price: 0, color: '#9aa5ad', desc: 'Reliable city sedan' },
@@ -206,10 +207,10 @@ function drawLook(cv) {
   // Ground shadow.
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.beginPath(); ctx.ellipse(cx, H - 18, 52, 8, 0, 0, Math.PI * 2); ctx.fill();
-  // Legs (dark trousers) and shoes.
-  ctx.fillStyle = '#2a2f33';
+  // Legs (trousers) and shoes, in the outfit's colours when it sets them.
+  ctx.fillStyle = outfit.pants || '#2a2f33';
   ctx.fillRect(cx - 26, 196, 22, 88); ctx.fillRect(cx + 4, 196, 22, 88);
-  ctx.fillStyle = '#111111';
+  ctx.fillStyle = outfit.shoes || '#111111';
   rr(ctx, cx - 30, 282, 28, 12, 4); rr(ctx, cx + 2, 282, 28, 12, 4);
   // Arms (sleeves in the outfit colour, hands skin).
   ctx.fillStyle = outfit.color;
@@ -226,7 +227,7 @@ function drawLook(cv) {
   ctx.fillStyle = outfit.color;
   rr(ctx, cx - 38, 88, 76, 112, 12);
   // Suit: a white shirt V and a tie. Hoodie: a hood bump. Vest: straps.
-  if (eq.clothes === 'suit') {
+  if (eq.clothes === 'suit' || eq.clothes === 'designer') {
     ctx.fillStyle = '#f2f2f2';
     ctx.beginPath(); ctx.moveTo(cx - 12, 88); ctx.lineTo(cx + 12, 88); ctx.lineTo(cx, 118); ctx.closePath(); ctx.fill();
     ctx.fillStyle = '#8a1a1a'; ctx.fillRect(cx - 4, 112, 8, 34);

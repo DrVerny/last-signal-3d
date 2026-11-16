@@ -88,7 +88,7 @@ export function isTouchDevice() {
 // file's Skin is near-black and its Face near-white (the pack's
 // placeholder colours), so both are recoloured on load.
 const PLAYER_MODEL = 'models/rigged/player-rigged.glb';
-const PLAYER_HEIGHT = 1.75; // target standing height in metres
+const PLAYER_HEIGHT = 1.24; // target standing height in metres (4 feet 1 inch)
 const PLAYER_SKIN = 0x6b4a2f; // warm medium-dark brown skin
 let avatar = null;
 let avatarParts = null; // procedural fallback parts (null once rigged)
@@ -122,25 +122,31 @@ function hasCapEquipped() {
 function avMat(color, roughness) {
   return new THREE.MeshStandardMaterial({ color, roughness: roughness === undefined ? 0.85 : roughness });
 }
-// Re-tint the player's shirt with the currently equipped clothes
+// Re-tint the player's outfit with the currently equipped clothes
 // colour (call after buying or equipping in the store). The rig's
-// Shirt material is tinted; the fallback's jacket material is tinted.
+// Shirt material is tinted; the fallback's jacket, trousers and shoes
+// are tinted. The designer outfit also carries a trouser and shoe
+// colour on its store item; other outfits keep the defaults.
 export function refreshPlayerOutfit() {
   try {
     const col = outfitColor();
     if (avatarRigged && avatarShirtMat) { avatarShirtMat.color.copy(col); return; }
     if (avatarParts && avatarParts.jacketMat) avatarParts.jacketMat.color.copy(col);
+    let item = null;
+    try { const eq = getEquipped(); if (eq && eq.clothes) item = ITEM_BY_ID[eq.clothes] || null; } catch (e) { item = null; }
+    if (avatarParts && avatarParts.pantsMat) avatarParts.pantsMat.color.setHex(item && item.pants ? parseInt(item.pants.slice(1), 16) : 0x2a2f38);
+    if (avatarParts && avatarParts.shoeMat) avatarParts.shoeMat.color.setHex(item && item.shoes ? parseInt(item.shoes.slice(1), 16) : 0xf2f2f2);
   } catch (e) { /* ignore */ }
 }
 // The procedural fallback figure (the old boxy avatar), used only until
 // the rigged model loads, or permanently if it never does. Same size and
 // same poses as before, so nothing that uses the avatar can tell.
 function buildFallbackAvatar() {
-  const skin = 0xc9a186, hairC = 0x2a2018, pants = 0x2a2f38, shoe = 0x1a1a1a;
+  const skin = 0xc9a186, hairC = 0x2a2018, pants = 0x2a2f38, shoe = 0xf2f2f2, sole = 0x1a1a1a;
   const jacket = outfitColor();
   const g = new THREE.Group();
   g.userData.keepAlive = true;
-  const skinMat = avMat(skin, 0.8), hairMat = avMat(hairC, 0.95), pantsMat = avMat(pants, 0.9), shoeMat = avMat(shoe, 0.6);
+  const skinMat = avMat(skin, 0.8), hairMat = avMat(hairC, 0.95), pantsMat = avMat(pants, 0.9), shoeMat = avMat(shoe, 0.7), soleMat = avMat(sole, 0.6);
   const jacketMat = new THREE.MeshStandardMaterial({ color: jacket, roughness: 0.85 });
   // Legs: hip pivot at y 0.95, thigh then shin (knee pivot) then shoe.
   function makeLeg(side) {
@@ -151,8 +157,13 @@ function buildFallbackAvatar() {
     const knee = new THREE.Group(); knee.position.set(0, -0.45, 0); hip.add(knee);
     const shin = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.42, 0.14), pantsMat);
     shin.position.y = -0.21; shin.castShadow = true; knee.add(shin);
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.28), shoeMat);
-    foot.position.set(0, -0.45, 0.05); foot.castShadow = true; knee.add(foot);
+    // Shoes: clean white sneakers with a dark sole, big enough to read
+    // clearly from behind and in third person. Both parts hang off the
+    // knee group like the old foot did, so the walk still moves them.
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.08, 0.32), shoeMat);
+    shoe.position.set(0, -0.43, 0.05); shoe.castShadow = true; knee.add(shoe);
+    const sole = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, 0.32), soleMat);
+    sole.position.set(0, -0.48, 0.05); sole.castShadow = true; knee.add(sole);
     g.add(hip);
     return { hip, knee };
   }
@@ -198,7 +209,12 @@ function buildFallbackAvatar() {
   const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.42, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; g.add(shadow);
   g.traverse(o => { o.userData.keepAlive = true; });
-  return { group: g, parts: { legL, legR, armL, armR, headGroup, torso, capMesh, jacketMat } };
+  // Scale the whole fallback to the player's height (1.24 m, 4 feet 1
+  // inch). As built it is about 1.95 m tall (hair top), so a uniform
+  // scale brings the head down to 1.24 m and the feet stay on the
+  // ground. Poses still work: they only rotate the pivots.
+  g.scale.setScalar(PLAYER_HEIGHT / 1.95);
+  return { group: g, parts: { legL, legR, armL, armR, headGroup, torso, capMesh, jacketMat, pantsMat, shoeMat } };
 }
 
 export function buildPlayerAvatar() {
@@ -267,13 +283,28 @@ async function loadPlayerRig() {
     // group: the drive code sets the outer group's scale to 0.72 to seat
     // the driver in the car and back to 1 after, and that must keep
     // working exactly as before.
+    // Measure the height from the raw geometry, NOT from
+    // Box3.setFromObject: for a skinned mesh that measures the skinned
+    // bounds, which collapse to 0.74 at load time while the bones are
+    // unposed, while the real geometry is 3.33 tall. Using the 0.74
+    // made the scale 1.24 / 0.74 = 1.68, so the model rendered about
+    // 5.6 m tall with its head through the ceiling. The raw geometry
+    // bounds are stable and give the true height.
+    rig.updateMatrixWorld(true);
+    let minY = Infinity, maxY = -Infinity;
+    const _gb = new THREE.Box3();
+    rig.traverse(o => {
+      if (!o.isMesh || !o.geometry || !o.geometry.attributes || !o.geometry.attributes.position) return;
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      _gb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+      if (_gb.min.y < minY) minY = _gb.min.y;
+      if (_gb.max.y > maxY) maxY = _gb.max.y;
+    });
     let s = 1;
-    const box = new THREE.Box3().setFromObject(rig);
-    const size = new THREE.Vector3(); box.getSize(size);
-    if (size.y > 0) s = PLAYER_HEIGHT / size.y;
+    const geomH = (maxY > minY) ? (maxY - minY) : 0;
+    if (geomH > 0) s = PLAYER_HEIGHT / geomH;
     rig.scale.setScalar(s);
-    const box2 = new THREE.Box3().setFromObject(rig);
-    rig.position.y = -box2.min.y;
+    rig.position.y = -minY * s;
     // Bones, mixer and clips. The root bone's rest position is kept so
     // the Walk clip's root motion cannot slide the avatar across the
     // floor (the clip moves the root forward as it walks).
@@ -343,7 +374,7 @@ async function loadPlayerRig() {
     avatarParts = null;
     // Re-apply the current pose on the rig (it may be lying or sitting).
     setAvatarPose(avatarPose);
-  } catch (e) { /* keep the fallback; the game never hangs on the avatar */ }
+  } catch (e) { try { console.error('Player rig failed to load, keeping the fallback:', e && e.message ? e.message : e); } catch (e2) { /* ignore */ } /* keep the fallback; the game never hangs on the avatar */ }
 }
 
 // Restore every rig bone to its rest rotation.

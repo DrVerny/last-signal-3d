@@ -869,7 +869,7 @@ async function loadHumans() {
     const jade = await loadWithTimeout('models/jade.glb');
     const jg = jade.scene; jg.name = 'jade';
     const jb = new THREE.Box3().setFromObject(jg); const js = new THREE.Vector3(); jb.getSize(js);
-    const jscale = 1.70 / js.y; jg.scale.setScalar(jscale);
+    const jscale = 1.24 / js.y; jg.scale.setScalar(jscale);
     const jb2 = new THREE.Box3().setFromObject(jg); jg.position.y = -jb2.min.y;
     mission1.add(jg); placeHuman(jg, 'jade', -2.8, 6, Math.PI, jscale);
   } catch (e) { failures.push('jade'); }
@@ -879,7 +879,7 @@ async function loadHumans() {
     const caleb = await loadWithTimeout('models/caleb.glb');
     const cg = caleb.scene; cg.name = 'caleb';
     const cb = new THREE.Box3().setFromObject(cg); const cs = new THREE.Vector3(); cb.getSize(cs);
-    const cscale = 1.75 / cs.y; cg.scale.setScalar(cscale);
+    const cscale = 1.24 / cs.y; cg.scale.setScalar(cscale);
     const cb2 = new THREE.Box3().setFromObject(cg); cg.position.y = -cb2.min.y;
     // Navy recolour + cap + badge, as in Act I.
     const navy = new THREE.MeshStandardMaterial({ color: 0x1a3a5a, roughness: 0.85, metalness: 0.02 });

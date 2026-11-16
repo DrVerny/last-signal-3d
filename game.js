@@ -820,9 +820,9 @@ const humans = []; // {group, name, baseScale, phase, seated, mixer, rootBone, r
 const humanGroups = []; // THREE.Group per loaded character, for raycast clicking
 const modelGroups = {}; // key -> {group}
 const MODEL_DEFS = [
-  { key: 'jade', file: 'models/rigged/jade-rigged.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.70 },
-  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.75, recolourNavy: true },
-  { key: 'nurse', file: 'models/rigged/nurse-rigged.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.68 },
+  { key: 'jade', file: 'models/rigged/jade-rigged.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.24 },
+  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.24, recolourNavy: true },
+  { key: 'nurse', file: 'models/rigged/nurse-rigged.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.24 },
   { key: 'walter', file: 'models/walter.glb', name: 'walter', x: -1.18, z: 4.5, faceYaw: 0.6, targetHeight: null, hideBench: true }
 ];
 let introStarted = false;
@@ -923,13 +923,25 @@ async function loadHumans() {
         clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale');
       }
       // Normalise height to the character's target height, then re-ground feet at y=0.
+      // Measure the height from the raw geometry, not Box3.setFromObject:
+      // for a skinned mesh that measures the skinned bounds, which
+      // collapse while the bones are unposed at load time, so the scale
+      // came out far too big and the character stood metres tall.
+      group.updateMatrixWorld(true);
+      let minY = Infinity, maxY = -Infinity;
+      const _gb = new THREE.Box3();
+      group.traverse(o => {
+        if (!o.isMesh || !o.geometry || !o.geometry.attributes || !o.geometry.attributes.position) return;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        _gb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+        if (_gb.min.y < minY) minY = _gb.min.y;
+        if (_gb.max.y > maxY) maxY = _gb.max.y;
+      });
       let s = 1;
-      const box = new THREE.Box3().setFromObject(group);
-      const size = new THREE.Vector3(); box.getSize(size);
-      if (def.targetHeight && size.y > 0) s = def.targetHeight / size.y;
+      const geomH = (maxY > minY) ? (maxY - minY) : 0;
+      if (def.targetHeight && geomH > 0) s = def.targetHeight / geomH;
       group.scale.setScalar(s);
-      const box2 = new THREE.Box3().setFromObject(group);
-      group.position.set(def.x, -box2.min.y, def.z);
+      group.position.set(def.x, -minY * s, def.z);
       group.rotation.y = def.faceYaw || 0;
       scene.add(group);
       // Walking: the standing characters patrol a short stretch of the aisle so
