@@ -372,9 +372,10 @@ async function loadPlayerRig() {
     avatarBones = bones; avatarRestQuats = restQuats;
     avatarRigged = true;
     avatarParts = null;
+    try { const rs = document.getElementById('rigStatus'); if (rs) rs.textContent = 'Avatar: rigged model loaded'; } catch (e2) { /* ignore */ }
     // Re-apply the current pose on the rig (it may be lying or sitting).
     setAvatarPose(avatarPose);
-  } catch (e) { try { console.error('Player rig failed to load, keeping the fallback:', e && e.message ? e.message : e); } catch (e2) { /* ignore */ } /* keep the fallback; the game never hangs on the avatar */ }
+  } catch (e) { try { console.error('Player rig failed to load, keeping the fallback:', e && e.message ? e.message : e); } catch (e2) { /* ignore */ } try { const rs = document.getElementById('rigStatus'); if (rs) rs.textContent = 'Avatar: FAILED - ' + (e && e.message ? e.message : e); } catch (e2) { /* ignore */ } /* keep the fallback; the game never hangs on the avatar */ }
 }
 
 // Restore every rig bone to its rest rotation.
