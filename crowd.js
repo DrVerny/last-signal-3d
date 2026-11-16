@@ -52,22 +52,21 @@ const CROWD_FACE_LAYOUT_BY_FILE = {
   'models/rigged/nurse-rigged.glb': 'nurse',
   'models/rigged/walter-rigged.glb': 'caleb'
 };
-// Shared face materials (same for everyone); skin materials are cached
-// per skin tone so a crowd of dozens does not create dozens of materials.
+// Shared face and finger materials (same for everyone). The nose,
+// mouth and fingers are MeshBasicMaterial in bright tones so they stay
+// readable in dim light: the old skin-tone standard materials went
+// dark in the mansion and the hands still read as mittens. The nose is
+// a lighter skin tone than any face so it reads as a nose, and the
+// mouth is a bright red so it reads as lips.
 const _crowdFaceWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const _crowdFaceDark = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
-const _crowdFaceMouth = new THREE.MeshStandardMaterial({ color: 0x5a2a22, roughness: 0.7 });
-const _crowdSkinMats = new Map();
-function _crowdSkinMat(hex) {
-  let m = _crowdSkinMats.get(hex);
-  if (!m) { m = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.7 }); _crowdSkinMats.set(hex, m); }
-  return m;
-}
+const _crowdFaceMouth = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
+const _crowdNoseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
+const _crowdFingerMat = new THREE.MeshBasicMaterial({ color: 0xd9a986 });
 function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex) {
   if (!headBone || !totalScale || totalScale <= 0 || !layout) return;
   try {
     const w = (worldSize) => worldSize / totalScale;
-    const skinMat = _crowdSkinMat(skinHex);
     const grp = new THREE.Group();
     for (const sx of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), _crowdFaceWhite);
@@ -78,17 +77,24 @@ function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex) {
       pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02));
       pupil.userData.keepAlive = true;
       grp.add(pupil);
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.012), w(0.012)), _crowdFaceDark);
-      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ);
+      // Eyebrows, twice as thick and wider than before: the old thin
+      // dark lines vanished into the forehead shadow at 4 m.
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(w(0.07), w(0.024), w(0.024)), _crowdFaceDark);
+      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ + w(0.01));
       brow.userData.keepAlive = true;
       grp.add(brow);
     }
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.045), w(0.04)), skinMat);
-    nose.position.set(layout.cx, layout.noseY, layout.noseZ);
+    // Nose, twice the old size in every dimension and pushed 1 cm
+    // further forward, in a lighter skin tone: the old small dark nose
+    // had no visible protrusion at 4 m.
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(w(0.06), w(0.09), w(0.08)), _crowdNoseMat);
+    nose.position.set(layout.cx, layout.noseY, layout.noseZ + w(0.01));
     nose.userData.keepAlive = true;
     grp.add(nose);
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(w(0.06), w(0.015), w(0.012)), _crowdFaceMouth);
-    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ);
+    // Mouth, twice the old size and bright red: the old thin dark line
+    // did not read as a mouth at 4 m.
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(w(0.12), w(0.03), w(0.024)), _crowdFaceMouth);
+    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ + w(0.01));
     mouth.userData.keepAlive = true;
     grp.add(mouth);
     grp.userData.keepAlive = true;
@@ -100,33 +106,41 @@ function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex) {
 // models have finger bones but the hand geometry is one continuous
 // block across the finger region (measured: no gaps in the X histogram
 // of the finger-region vertices), so the finger bones only deform a
-// mitten. These thin skin-tone boxes extend past the hand so it reads
+// mitten. These light skin-tone boxes extend past the hand so it reads
 // as fingers, not a mitten. They are children of the hand bone so they
 // move with the arm and the Walk animation. Positions are in the hand
-// bone's local space; sizes are world metres divided by rigScale.
-// Atlas finger positions are measured from the fingertip bones in
-// LowerArm-local space (wrist Y 0.324, fingertips Y 0.49-0.51); the
-// ring finger is interpolated between pinky and middle, and the hand
-// is mirrored left/right.
-function addCrowdFingers(group, rigScale, skinHex) {
+// bone's local space. Sizes are world metres divided by fitScale x
+// rigScale: a bone child is shrunk by the __fit node (0.591 Casual,
+// 0.890 Atlas) as well as the group scale, so dividing by rigScale
+// alone made the old fingers render at 0.59x on Jade and 0.89x on the
+// Atlas models, and they vanished into the fist. The fingers are
+// MeshBasicMaterial in a light skin tone so they stay bright in dim
+// light, and they protrude about 0.09 m past the hand tip. Four 0.03 m
+// fingers is the widest that fits either hand with clear gaps; 0.05 m
+// fingers would overlap into a solid slab. Atlas finger positions are
+// measured from the fingertip bones in LowerArm-local space (wrist Y
+// 0.324, fingertips Y 0.49-0.51); the ring finger is interpolated
+// between pinky and middle, and the hand is mirrored left/right.
+function addCrowdFingers(group, rigScale, fitScale) {
   if (!group || !rigScale || rigScale <= 0) return;
   try {
-    const w = (worldSize) => worldSize / rigScale;
-    const skinMat = _crowdSkinMat(skinHex);
+    const fs = (fitScale && fitScale > 0) ? fitScale : 1;
+    const w = (worldSize) => worldSize / (fs * rigScale);
+    const fingerMat = _crowdFingerMat;
     for (const side of ['L', 'R']) {
       // Casual (Jade): Fist bones, same layout as the player.
       const fist = findBone(group, ['Fist' + side]);
       if (fist) {
         const thumbSign = side === 'L' ? 1 : -1;
         const grp = new THREE.Group();
-        for (const fx of [-0.075, -0.025, 0.025, 0.075]) {
-          const finger = new THREE.Mesh(new THREE.BoxGeometry(w(0.035), w(0.16), w(0.035)), skinMat);
-          finger.position.set(fx, 0.31, 0.05);
+        for (let i = 0; i < 4; i++) {
+          const finger = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.22), w(0.03)), fingerMat);
+          finger.position.set(0.0075 + (i - 1.5) * w(0.04), 0.31, 0.05);
           finger.userData.keepAlive = true;
           grp.add(finger);
         }
-        const thumb = new THREE.Mesh(new THREE.BoxGeometry(w(0.035), w(0.14), w(0.035)), skinMat);
-        thumb.position.set(thumbSign * 0.13, 0.20, 0.08);
+        const thumb = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.16), w(0.05)), fingerMat);
+        thumb.position.set(thumbSign * 0.14, 0.18, 0.08);
         thumb.rotation.z = -thumbSign * 0.5;
         thumb.userData.keepAlive = true;
         grp.add(thumb);
@@ -143,12 +157,12 @@ function addCrowdFingers(group, rigScale, skinHex) {
       const thumbSign = isLeft ? 1 : -1;
       const grp = new THREE.Group();
       for (const x of fx) {
-        const finger = new THREE.Mesh(new THREE.BoxGeometry(w(0.035), w(0.16), w(0.035)), skinMat);
-        finger.position.set(x, 0.45, fz);
+        const finger = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.22), w(0.03)), fingerMat);
+        finger.position.set(x, 0.49, fz);
         finger.userData.keepAlive = true;
         grp.add(finger);
       }
-      const thumb = new THREE.Mesh(new THREE.BoxGeometry(w(0.035), w(0.14), w(0.035)), skinMat);
+      const thumb = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.16), w(0.05)), fingerMat);
       thumb.position.set(isLeft ? 0.159 : -0.164, isLeft ? 0.361 : 0.331, isLeft ? -0.042 : 0.038);
       thumb.rotation.z = -thumbSign * 0.5;
       thumb.userData.keepAlive = true;
@@ -190,6 +204,33 @@ function loadOne(def) {
     for (const clip of (gltf.animations || [])) {
       clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale');
     }
+    // The __fit scale (0.591 Casual, 0.890 Atlas): a bone child's world
+    // size is its local size times __fit times the group scale, so the
+    // face and finger helpers divide by it (the old code did not, so
+    // Jade's fingers rendered at 0.59x and vanished into the fist).
+    let fitScale = 1;
+    gltf.scene.traverse(o => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
+    // Ground offset: the lowest skinned point of the bind pose, in
+    // scene units. Jade's feet sit at the origin, but the Atlas models'
+    // feet sit about 0.24 m above it, so without this the Atlas crowd
+    // floats about 0.3 m above the floor when scaled. makeRiggedPerson
+    // shifts __fit down by this much so the soles rest exactly on y=0.
+    // Measured from the skinned bounds (what actually renders), not the
+    // raw geometry bounds: Jade 0.0000, Matt 0.2450, Lis 0.2434,
+    // Sam 0.2434.
+    let groundY = Infinity;
+    try {
+      gltf.scene.updateMatrixWorld(true);
+      const gb = new THREE.Box3();
+      gltf.scene.traverse(o => {
+        if (!o.isSkinnedMesh) return;
+        if (o.skeleton) o.skeleton.update();
+        o.computeBoundingBox();
+        gb.copy(o.boundingBox).applyMatrix4(o.matrixWorld);
+        if (gb.min.y < groundY) groundY = gb.min.y;
+      });
+    } catch (e) { groundY = 0; }
+    if (!isFinite(groundY)) groundY = 0;
     // Capture the Atlas texture image: per-person recolouring repaints
     // the measured palette cells of this image (see ATLAS_CELLS below).
     // The image is read again lazily when a look is applied, so a slow
@@ -205,6 +246,8 @@ function loadOne(def) {
       // Head bone scale applied above (0.3 Casual, 0.6 Atlas): the face
       // features divide their world sizes by headScale x rig scale.
       headScale: hasFaceHair ? 0.3 : 0.6,
+      // __fit scale and ground offset, measured above.
+      fitScale, groundY,
     // Seated-pose angles for this model's rig (defaults fit the
     // Matt/Lis/Sam rigs; Jade's rig overrides them above). hipsY is the
     // height the hips sit at: each rig's legs are a different length,
@@ -516,6 +559,15 @@ export function makeRiggedPerson(opts) {
     const s = (o.scale !== undefined ? o.scale : 1) * (1.68 / model.height) * body.height * traits.height;
     const sj = 0.98 + Math.random() * 0.04;
     group.scale.set(s * body.width, s * sj, s * body.width);
+    // Ground the feet (see loadOne): shift the __fit node down by the
+    // model's ground offset so the soles rest exactly on y=0. The shift
+    // lives inside the group, so the per-frame position.set in
+    // action.js cannot overwrite it. Jade's offset is 0, so she is
+    // untouched; the Atlas models drop about 0.3 m to the floor.
+    if (model.groundY) {
+      const fit = group.getObjectByName('__fit');
+      if (fit) fit.position.y = -model.groundY;
+    }
     group.traverse(m => { m.castShadow = true; });
     // Walk clip on its own mixer, with a random phase so the crowd never
     // marches in lockstep. The Walk clip walks in place; the root bone's
@@ -546,7 +598,7 @@ export function makeRiggedPerson(opts) {
       const layout = layoutKey ? CROWD_FACE_LAYOUTS[layoutKey] : null;
       const head = findBone(group, ['Head']);
       if (head && layout) addCrowdFaceFeatures(head, (model.headScale || 0.6) * s, layout, look.skin);
-      addCrowdFingers(group, s, look.skin);
+      addCrowdFingers(group, s, model.fitScale || 1);
     } catch (e) { /* cosmetic; never break the crowd */ }
     // A phone in the right hand for phone users: a small dark box on the
     // fist bone, with the head tilted down. A shopping bag hangs from the
@@ -710,7 +762,7 @@ export function makeSeatedPerson(opts) {
       const layoutKey = CROWD_FACE_LAYOUT_BY_FILE[model.file];
       const layout = layoutKey ? CROWD_FACE_LAYOUTS[layoutKey] : null;
       if (posed.bones.head && layout) addCrowdFaceFeatures(posed.bones.head, (model.headScale || 0.6) * s, layout, look.skin);
-      addCrowdFingers(group, s, look.skin);
+      addCrowdFingers(group, s, model.fitScale || 1);
     } catch (e) { /* cosmetic; never break the crowd */ }
     return {
       group, seated: true, rigged: true, mixer: null,
