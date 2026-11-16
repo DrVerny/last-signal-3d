@@ -18,7 +18,7 @@ let sportsCarReady = false;
 const sportsCarPromise = new Promise((resolve) => {
   try {
     const loader = new GLTFLoader();
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('sports car timed out')), 180000));
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('sports car timed out')), 30000));
     Promise.race([loader.loadAsync('models/vehicles/sports-car.glb'), timeout])
       .then(gltf => { sportsCarScene = gltf.scene; sportsCarReady = true; resolve(true); })
       .catch(() => resolve(false));
@@ -78,7 +78,7 @@ export function isTouchDevice() {
 // The player is a realistic rigged young man (Quaternius "Casual Male",
 // models/rigged/player-rigged.glb, CC0, 23-joint rig with Walk and Idle
 // clips), not the old boxy figure. The model loads asynchronously with
-// a 180-second timeout; until it arrives (or if it fails) a procedural
+// a 30-second timeout; until it arrives (or if it fails) a procedural
 // fallback figure stands in, so the game never hangs and the avatar is
 // never missing. The outer group is stable: getAvatar() returns it
 // immediately, and the rig (or the fallback) lives inside it, so every
@@ -224,7 +224,7 @@ async function loadPlayerRig() {
     const loader = new GLTFLoader();
     const gltf = await Promise.race([
       loader.loadAsync(PLAYER_MODEL),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('player model timed out after 180s')), 180000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('player model timed out after 30s')), 30000))
     ]);
     const rig = gltf.scene;
     rig.userData.keepAlive = true;
