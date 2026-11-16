@@ -859,7 +859,7 @@ function startIntro() {
 // Face mesh (centred X 0, Y 0.463, front Z 0.505); caleb and nurse use
 // the Atlas head bounds (front Z 0.237 and 0.303).
 const FACE_LAYOUTS = {
-  jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47 },
+  jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.007, 0.010], eyePush: 0.008 },
   caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.37, browZ: 0.23 },
   nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.43, browZ: 0.30 }
 };
@@ -875,10 +875,20 @@ function addFaceFeatures(headBone, totalScale, layout, fitScale) {
     // nose, mouth and eyebrows use the corrected wf() converter so
     // they render at their true world size instead of 0.59-0.89 of it.
     const wf = (worldSize) => worldSize / (totalScale * (fitScale || 1));
+    // Feature sizes come from the layout so each model type can fit
+    // its own face: the Casual face is only about 0.11 m wide and
+    // 0.05 m tall in world, so the old nose (0.09 tall) was twice the
+    // face height and the old mouth (0.12 wide) was wider than the
+    // face, and the wide red mouth flanking the huge nose read as two
+    // red blocks at eye level. The small sizes below fit the Casual
+    // face (Jade); Atlas layouts leave them out and use the defaults.
+    const noseS = layout.nose || [0.06, 0.09, 0.08];
+    const mouthS = layout.mouth || [0.12, 0.03, 0.02];
+    const browS = layout.brow || [0.10, 0.024, 0.02];
+    const eyePush = layout.eyePush || 0;
     // Eyes are unchanged: white MeshBasicMaterial eyeballs with dark
     // pupils, already verified readable live. The nose, mouth and
-    // eyebrows were too small and too dark to read at the 4 m camera
-    // distance, so they are doubled in size and use bright unlit
+    // eyebrows are sized to the real face and use bright unlit
     // materials so they read in the dim mansion.
     const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const darkMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
@@ -888,24 +898,24 @@ function addFaceFeatures(headBone, totalScale, layout, fitScale) {
     const grp = new THREE.Group();
     for (const sx of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
-      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ);
+      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(eyePush));
       eye.userData.keepAlive = true;
       grp.add(eye);
       const pupil = new THREE.Mesh(new THREE.SphereGeometry(w(0.011), 10, 8), darkMat);
-      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02));
+      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02 + eyePush));
       pupil.userData.keepAlive = true;
       grp.add(pupil);
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(0.10), wf(0.024), wf(0.02)), browMat);
-      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(browS[0]), wf(browS[1]), wf(browS[2])), browMat);
+      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ + wf(0.006));
       brow.userData.keepAlive = true;
       grp.add(brow);
     }
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(wf(0.06), wf(0.09), wf(0.08)), noseMat);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(wf(noseS[0]), wf(noseS[1]), wf(noseS[2])), noseMat);
     nose.position.set(layout.cx, layout.noseY, layout.noseZ + wf(0.01));
     nose.userData.keepAlive = true;
     grp.add(nose);
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(0.12), wf(0.03), wf(0.02)), mouthMat);
-    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(mouthS[0]), wf(mouthS[1]), wf(mouthS[2])), mouthMat);
+    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ + wf(0.008));
     mouth.userData.keepAlive = true;
     grp.add(mouth);
     grp.userData.keepAlive = true;

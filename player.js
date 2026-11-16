@@ -89,7 +89,7 @@ export function isTouchDevice() {
 // placeholder colours), so both are recoloured on load.
 const PLAYER_MODEL = 'models/rigged/player-rigged.glb';
 const PLAYER_HEIGHT = 1.68; // target standing height in metres (5 feet 6 inches)
-const PLAYER_SKIN = 0x6b4a2f; // warm medium-dark brown skin
+const PLAYER_SKIN = 0x8a5a3a; // normal brown skin (user asked: dark brown to normal brown)
 let avatar = null;
 let avatarParts = null; // procedural fallback parts (null once rigged)
 let avatarPose = 'stand';
@@ -275,37 +275,48 @@ function addFaceFeatures(headBone, totalScale, layout, fitScale) {
     // nose, mouth and eyebrows use the corrected wf() converter so
     // they render at their true world size instead of 0.59-0.89 of it.
     const wf = (worldSize) => worldSize / (totalScale * (fitScale || 1));
+    // Feature sizes come from the layout so each model type can fit
+    // its own face: the Casual face is only about 0.11 m wide and
+    // 0.05 m tall in world, so the old nose (0.09 tall) was twice the
+    // face height and the old mouth (0.12 wide) was wider than the
+    // face, and the wide red mouth flanking the huge nose read as two
+    // red blocks at eye level. The small sizes below fit the Casual
+    // face; Atlas layouts leave them out and use the defaults.
+    const noseS = layout.nose || [0.06, 0.09, 0.08];
+    const mouthS = layout.mouth || [0.12, 0.03, 0.02];
+    const browS = layout.brow || [0.10, 0.024, 0.02];
+    const eyePush = layout.eyePush || 0;
     // Eyes are unchanged: white MeshBasicMaterial eyeballs with dark
     // pupils, already verified readable live. The nose, mouth and
-    // eyebrows were too small and too dark to read at the 4 m camera
-    // distance, so they are doubled in size and use bright unlit
-    // materials so they read in the dim mansion.
+    // eyebrows are sized to the real face and use bright unlit
+    // materials so they read in the dim mansion. The nose and the
+    // fingers use the player's own skin tone so they blend with it.
     const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const darkMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
-    const noseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
+    const noseMat = new THREE.MeshBasicMaterial({ color: PLAYER_SKIN });
     const mouthMat = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
     const browMat = new THREE.MeshBasicMaterial({ color: 0x3a2010 });
     const grp = new THREE.Group();
     for (const sx of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
-      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ);
+      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(eyePush));
       eye.userData.keepAlive = true;
       grp.add(eye);
       const pupil = new THREE.Mesh(new THREE.SphereGeometry(w(0.011), 10, 8), darkMat);
-      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02));
+      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02 + eyePush));
       pupil.userData.keepAlive = true;
       grp.add(pupil);
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(0.10), wf(0.024), wf(0.02)), browMat);
-      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(browS[0]), wf(browS[1]), wf(browS[2])), browMat);
+      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ + wf(0.006));
       brow.userData.keepAlive = true;
       grp.add(brow);
     }
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(wf(0.06), wf(0.09), wf(0.08)), noseMat);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(wf(noseS[0]), wf(noseS[1]), wf(noseS[2])), noseMat);
     nose.position.set(layout.cx, layout.noseY, layout.noseZ + wf(0.01));
     nose.userData.keepAlive = true;
     grp.add(nose);
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(0.12), wf(0.03), wf(0.02)), mouthMat);
-    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(mouthS[0]), wf(mouthS[1]), wf(mouthS[2])), mouthMat);
+    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ + wf(0.008));
     mouth.userData.keepAlive = true;
     grp.add(mouth);
     grp.userData.keepAlive = true;
@@ -314,35 +325,36 @@ function addFaceFeatures(headBone, totalScale, layout, fitScale) {
 }
 
 // Fingers on a rigged hand. The model's hands are solid mitten blocks
-// (part of the Skin mesh, no finger bones). These light skin-tone boxes
-// extend past the fist so the hand reads as fingers, not a mitten. They
-// are children of the Fist bone so they move with the arm. Positions are
-// in Fist-bone local space, measured from the fist block with invBind
-// (the fist spans Y -0.042 to 0.348, X -0.113 to 0.128, centre X 0.0075).
-// Sizes are in world metres divided by boneScale: the Fist bone sits
-// under the __fit node (scale 0.591), so a Fist child's world size is
-// its local size times 0.591 times the rig scale s, NOT times s alone.
-// Dividing by s alone made the last fingers 0.021 m wide and 0.095 m
-// long with 4 mm gaps, so they vanished into the fist and the hands
-// still read as mittens. The fingers are MeshBasicMaterial in a light
-// skin tone so they stay bright in the dim mansion, and they protrude
-// 0.09 m past the fist tip. Four 0.03 m fingers is the widest that fits
-// the 0.122 m hand with clear gaps; 0.05 m fingers would overlap into
-// a solid slab. thumbSign is +1 when the thumb sits on the Fist local
-// +X side.
+// (part of the Skin mesh, no finger bones). These rounded capsules
+// extend past the fist so the hand reads as real fingers, not
+// rectangular strips. They are children of the Fist bone so they move
+// with the arm. Positions are in Fist-bone local space, measured from
+// the fist block with invBind (the fist spans Y -0.042 to 0.348, X
+// -0.113 to 0.128, centre X 0.0075). Sizes are in world metres divided
+// by boneScale: the Fist bone sits under the __fit node (scale 0.591),
+// so a Fist child's world size is its local size times 0.591 times the
+// rig scale s, NOT times s alone. Dividing by s alone made the first
+// fingers 0.021 m wide and 0.095 m long with 4 mm gaps, so they
+// vanished into the fist and the hands still read as mittens. The
+// fingers are MeshBasicMaterial in the player's own skin tone so they
+// blend with the hand while staying bright in the dim mansion, and
+// they protrude 0.09 m past the fist tip. Four 0.03 m fingers is the
+// widest that fits the 0.122 m hand with clear gaps; 0.05 m fingers
+// would overlap into a solid slab. thumbSign is +1 when the thumb
+// sits on the Fist local +X side.
 function addFingers(fistBone, boneScale, thumbSign) {
   if (!fistBone || !boneScale || boneScale <= 0) return;
   try {
     const w = (worldSize) => worldSize / boneScale;
-    const fingerMat = new THREE.MeshBasicMaterial({ color: 0xd9a986 });
+    const fingerMat = new THREE.MeshBasicMaterial({ color: PLAYER_SKIN });
     const grp = new THREE.Group();
     for (let i = 0; i < 4; i++) {
-      const finger = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.22), w(0.03)), fingerMat);
+      const finger = new THREE.Mesh(new THREE.CapsuleGeometry(w(0.015), w(0.19), 4, 10), fingerMat);
       finger.position.set(0.0075 + (i - 1.5) * w(0.04), 0.31, 0.05);
       finger.userData.keepAlive = true;
       grp.add(finger);
     }
-    const thumb = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.16), w(0.05)), fingerMat);
+    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(w(0.015), w(0.13), 4, 10), fingerMat);
     thumb.position.set(thumbSign * 0.14, 0.18, 0.08);
     thumb.rotation.z = -thumbSign * 0.5;
     thumb.userData.keepAlive = true;
@@ -456,7 +468,7 @@ async function loadPlayerRig() {
     rig.traverse(o => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
     {
       const headBone = bones.get('Head');
-      const faceLayout = { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47 };
+      const faceLayout = { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.007, 0.010], eyePush: 0.008 };
       addFaceFeatures(headBone, 0.3 * s, faceLayout, fitScale);
     }
     addFingers(bones.get('FistL'), fitScale * s, 1);
@@ -519,18 +531,40 @@ async function loadPlayerRig() {
     avatarSneakers = [];
     const shoeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const soleMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
+    // Running-shoe upper: an extruded side profile (low tapered toe,
+    // higher heel, dipped ankle opening), not a plain box, so it reads
+    // as a real running shoe. The profile is drawn in XY (X = length,
+    // Y = height) and extruded across the width, then rotated so the
+    // length runs along Z with the toe forward. A small bevel rounds
+    // the edges. The upper sits on the sole, whose bottom stays at
+    // group-local y -0.09 (sole bottom at y 0.032 world, same as
+    // before) so the white still shows above the floor.
+    const shoeProfile = new THREE.Shape();
+    shoeProfile.moveTo(-0.27, 0);
+    shoeProfile.lineTo(-0.27, 0.15);
+    shoeProfile.quadraticCurveTo(-0.26, 0.17, -0.20, 0.165);
+    shoeProfile.lineTo(-0.12, 0.155);
+    shoeProfile.quadraticCurveTo(-0.05, 0.105, 0.03, 0.12);
+    shoeProfile.quadraticCurveTo(0.15, 0.105, 0.23, 0.06);
+    shoeProfile.quadraticCurveTo(0.27, 0.035, 0.27, 0);
+    shoeProfile.lineTo(-0.27, 0);
+    const shoeGeo = new THREE.ExtrudeGeometry(shoeProfile, { depth: 0.28, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.01, bevelSegments: 2, steps: 1 });
+    shoeGeo.rotateY(-Math.PI / 2);
+    shoeGeo.translate(0.14, -0.06, 0);
     for (const boneName of ['FootL', 'FootR']) {
       const foot = bones.get(boneName);
       if (!foot) continue;
       const group = new THREE.Group();
-      // Bigger and taller so the shoe unmistakably sticks out around the
-      // foot and above the indoor floor. The width stays 0.30: the
-      // ankles are only 0.271 m apart, so a 0.36 wide shoe would make
-      // the pair intersect into one white slab instead of two shoes.
-      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.18, 0.56), shoeMat);
+      const shoe = new THREE.Mesh(shoeGeo, shoeMat);
       shoe.castShadow = true; shoe.receiveShadow = true;
       group.add(shoe);
-      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.03, 0.56), soleMat);
+      // Rounded toe cap: a flattened sphere at the front of the shoe.
+      const toeCap = new THREE.Mesh(new THREE.SphereGeometry(0.085, 14, 10), shoeMat);
+      toeCap.scale.set(1, 0.6, 0.9);
+      toeCap.position.set(0, 0.02, 0.22);
+      toeCap.castShadow = true;
+      group.add(toeCap);
+      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.03, 0.58), soleMat);
       sole.position.y = -0.075;
       sole.castShadow = true;
       group.add(sole);
