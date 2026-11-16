@@ -123,6 +123,7 @@ let avatarShirtMat = null; // the rig's shirt material, for re-tinting
 const SNEAKER_IDLE_BONE = { FootL: [0.205, 0.016, -0.180], FootR: [-0.108, 0.016, -0.180] };
 const SNEAKER_BIND_POS = { FootL: [0.207, 0.032, -0.129], FootR: [-0.110, 0.032, -0.129] };
 let avatarSneakers = null; // [{ bone, group, bindBone, bindPos }] once rigged
+let lastShoeStatus = 0; // TEMP DIAGNOSTIC: last time the shoe status line was refreshed
 function outfitColor() {
   try {
     const eq = getEquipped();
@@ -414,6 +415,8 @@ async function loadPlayerRig() {
       const bindBone = SNEAKER_IDLE_BONE[boneName];
       avatarSneakers.push({ bone: foot, group, bindBone: new THREE.Vector3(bindBone[0], bindBone[1], bindBone[2]), bindPos: new THREE.Vector3(bindPos[0], bindPos[1], bindPos[2]) });
     }
+    // TEMP DIAGNOSTIC: report sneaker count and world positions on load.
+    writeShoeStatus();
     // Re-apply the current pose on the rig (it may be lying or sitting).
     setAvatarPose(avatarPose);
   } catch (e) { try { console.error('Player rig failed to load, keeping the fallback:', e && e.message ? e.message : e); } catch (e2) { /* ignore */ } /* keep the fallback; the game never hangs on the avatar */ }
@@ -520,6 +523,22 @@ export function setAvatarPose(pose) {
 // mesh rises only about two-thirds as much as the foot bone during the
 // swing (the foot rotates as it lifts), so following the bone's Y
 // exactly would float the shoe about 1 cm above the foot mid-stride.
+// TEMP DIAGNOSTIC: report the white sneakers' world positions on screen
+// so the live check can see whether they are in the scene at all and
+// where they are. Remove once the shoe visibility issue is solved.
+function writeShoeStatus() {
+  try {
+    const el = document.getElementById('shoeStatus');
+    if (!el) return;
+    const fmt = v => '(' + v.x.toFixed(2) + ',' + v.y.toFixed(2) + ',' + v.z.toFixed(2) + ')';
+    if (!avatarSneakers || !avatarRig) { el.textContent = 'Shoes: none (rig not loaded)'; return; }
+    const v = new THREE.Vector3();
+    const parts = avatarSneakers.map((s, i) => (i === 0 ? 'L=' : 'R=') + fmt(s.group.getWorldPosition(v)));
+    avatarRig.getWorldPosition(v);
+    el.textContent = 'Shoes: N=' + avatarSneakers.length + ' ' + parts.join(' ') + ' rig=' + fmt(v) + ' s=' + avatarRig.scale.x.toFixed(2);
+  } catch (e) { /* diagnostic only, never break the game */ }
+}
+
 function updateSneakers() {
   if (!avatarSneakers || !avatarRig) return;
   const v = new THREE.Vector3();
@@ -562,6 +581,9 @@ export function updateAvatarWalk(moving, dt) {
       }
       // Sneakers follow the feet after the mixer and the root pin.
       updateSneakers();
+      // TEMP DIAGNOSTIC: refresh the shoe positions once a second.
+      const nowMs = performance.now();
+      if (nowMs - lastShoeStatus > 1000) { lastShoeStatus = nowMs; writeShoeStatus(); }
     } catch (e) { /* ignore */ }
     return;
   }
