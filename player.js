@@ -108,6 +108,21 @@ let avatarRootRest = null;
 let avatarBones = null; // Map of bone name -> bone
 let avatarRestQuats = null; // Map of bone -> rest quaternion
 let avatarShirtMat = null; // the rig's shirt material, for re-tinting
+// White sneakers on the rigged model, measured in Node from the model
+// file in the Idle pose (rig-local units). The foot bones sit at the
+// ankles: FootL (0.205, 0.016, -0.180), FootR (-0.108, 0.016, -0.180).
+// The visible foot is a small dark patch centred at (0.207, 0.020,
+// -0.169) on the left and (-0.110, 0.020, -0.169) on the right, with
+// its sole at y -0.008, and the face (and toes) point to +Z. The shoe
+// is centred on the foot, its sole on the ground, its toe forward.
+// The sneakers are children of the rig, NOT of the foot bones: the
+// foot bones' local frames point in different directions (the bind
+// pose is mid-stride), so a bone-local offset put the old shoes inside
+// the leg or underground. Each frame the shoe follows its foot bone by
+// the bone's movement since the Idle pose (see updateSneakers).
+const SNEAKER_IDLE_BONE = { FootL: [0.205, 0.016, -0.180], FootR: [-0.108, 0.016, -0.180] };
+const SNEAKER_BIND_POS = { FootL: [0.207, 0.032, -0.129], FootR: [-0.110, 0.032, -0.129] };
+let avatarSneakers = null; // [{ bone, group, bindBone, bindPos }] once rigged
 function outfitColor() {
   try {
     const eq = getEquipped();
@@ -373,36 +388,32 @@ async function loadPlayerRig() {
     avatarRigged = true;
     avatarParts = null;
     // White sneakers on the rigged model: the model's own shoes are dark,
-    // so from behind the feet read as dark. Attach a clearly visible white
-    // sneaker to each foot bone, sized in rig-local units (it scales with
-    // the rig to the 1.24 m height) and positioned on the foot in that
-    // bone's local space, so it follows the Walk animation. The two foot
-    // bones have different local frames (the bind pose is mid-stride), so
-    // each sneaker gets its own measured offset, and the sole sits on the
-    // ground-facing side of each foot.
-    const addSneaker = (boneName, yOff, soleSign) => {
+    // so from behind the feet read as dark. The sneakers are children of
+    // the rig, NOT of the foot bones (see SNEAKER_IDLE_BONE above for
+    // why). Each sneaker is placed in rig-local space from the measured
+    // Idle-pose foot position, with its sole on the ground and its toe
+    // forward, and it follows its foot bone every frame (updateSneakers).
+    avatarSneakers = [];
+    const shoeMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6 });
+    const soleMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
+    for (const boneName of ['FootL', 'FootR']) {
       const foot = bones.get(boneName);
-      if (!foot) return;
+      if (!foot) continue;
       const group = new THREE.Group();
-      const shoe = new THREE.Mesh(
-        new THREE.BoxGeometry(0.16, 0.08, 0.32),
-        new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6 })
-      );
+      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.08, 0.32), shoeMat);
       shoe.castShadow = true; shoe.receiveShadow = true;
       group.add(shoe);
-      const sole = new THREE.Mesh(
-        new THREE.BoxGeometry(0.16, 0.02, 0.32),
-        new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 })
-      );
-      sole.position.y = 0.05 * soleSign;
+      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, 0.32), soleMat);
+      sole.position.y = -0.03;
       sole.castShadow = true;
       group.add(sole);
-      group.position.set(0, yOff, 0.13);
+      const bindPos = SNEAKER_BIND_POS[boneName];
+      group.position.set(bindPos[0], bindPos[1], bindPos[2]);
       group.userData.keepAlive = true;
-      foot.add(group);
-    };
-    addSneaker('FootL', 0.34, 1);
-    addSneaker('FootR', -0.60, -1);
+      rig.add(group);
+      const bindBone = SNEAKER_IDLE_BONE[boneName];
+      avatarSneakers.push({ bone: foot, group, bindBone: new THREE.Vector3(bindBone[0], bindBone[1], bindBone[2]), bindPos: new THREE.Vector3(bindPos[0], bindPos[1], bindPos[2]) });
+    }
     // Re-apply the current pose on the rig (it may be lying or sitting).
     setAvatarPose(avatarPose);
   } catch (e) { try { console.error('Player rig failed to load, keeping the fallback:', e && e.message ? e.message : e); } catch (e2) { /* ignore */ } /* keep the fallback; the game never hangs on the avatar */ }
@@ -462,6 +473,8 @@ export function setAvatarPose(pose) {
       a.rotation.x = -Math.PI / 2;
     } else if (pose === 'sit') {
       riggedSitPose();
+      // The sit pose moves the feet, so re-seat the sneakers on them.
+      updateSneakers();
     } else {
       // Stand: bones back to rest, then the Idle clip holds a natural
       // standing pose (never the bind T-pose). updateAvatarWalk swaps
@@ -497,6 +510,31 @@ export function setAvatarPose(pose) {
     p.armR.shoulder.rotation.x = -0.75; p.armR.elbow.rotation.x = -0.4;
   }
 }
+// Keep the white sneakers on the feet: each sneaker is a child of the
+// rig, so it does not follow the Walk animation by itself. After the
+// mixer moves the bones, re-position each sneaker from its foot bone's
+// current rig-local position, keeping the same offset it had in the
+// Idle pose. The shoe stays flat (it never takes the bone's rotation),
+// so it reads as a shoe even while the foot swings and lifts.
+// The Y follow is damped to 0.75: measured in Node, the skinned foot
+// mesh rises only about two-thirds as much as the foot bone during the
+// swing (the foot rotates as it lifts), so following the bone's Y
+// exactly would float the shoe about 1 cm above the foot mid-stride.
+function updateSneakers() {
+  if (!avatarSneakers || !avatarRig) return;
+  const v = new THREE.Vector3();
+  for (const s of avatarSneakers) {
+    try {
+      s.bone.getWorldPosition(v);
+      avatarRig.worldToLocal(v);
+      s.group.position.set(
+        s.bindPos.x + (v.x - s.bindBone.x),
+        s.bindPos.y + (v.y - s.bindBone.y) * 0.75,
+        s.bindPos.z + (v.z - s.bindBone.z)
+      );
+    } catch (e) { /* ignore */ }
+  }
+}
 // Walk: the rigged model plays its embedded Walk clip (feet stepping,
 // not gliding) and Idle when still; the procedural fallback swings its
 // limbs. Only runs while the avatar is standing/walking.
@@ -522,6 +560,8 @@ export function updateAvatarWalk(moving, dt) {
         avatarRootBone.position.x = avatarRootRest.x;
         avatarRootBone.position.z = avatarRootRest.z;
       }
+      // Sneakers follow the feet after the mixer and the root pin.
+      updateSneakers();
     } catch (e) { /* ignore */ }
     return;
   }
