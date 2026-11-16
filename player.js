@@ -396,7 +396,21 @@ async function loadPlayerRig() {
         if (n === 'Shirt') avatarShirtMat = m;
       }
     };
-    tint(['Skin', 'Face'], PLAYER_SKIN);
+    // Skin and Face are replaced with flat unlit MeshBasicMaterial in
+    // the player's skin tone, keeping their names so later lookups
+    // still work. The raw Skin is near-black (#1f1f1f) and the Face
+    // near-white, and neither has a texture map, so cloning them as
+    // MeshStandardMaterial and tinting the colour keeps them lit: in
+    // the dim mansion the tinted standard material renders far darker
+    // than the colour value, and the skin read as very dark brown,
+    // close to black-brown. An unlit basic material renders the exact
+    // colour and stays bright in dim light. The nose and fingers
+    // already use MeshBasicMaterial in this tone, so they blend with it.
+    for (const n of ['Skin', 'Face']) {
+      const m = new THREE.MeshBasicMaterial({ color: PLAYER_SKIN });
+      m.name = n;
+      rig.traverse(o => { if (o.isMesh && o.material && o.material.name === n) o.material = m; });
+    }
     tint(['Shirt'], outfitColor().getHex());
     rig.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     // The Casual Male model has an oversized head: its Hair is wider than
@@ -468,7 +482,7 @@ async function loadPlayerRig() {
     rig.traverse(o => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
     {
       const headBone = bones.get('Head');
-      const faceLayout = { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.007, 0.010], eyePush: 0.008 };
+      const faceLayout = { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.012, 0.010], eyePush: 0.008 };
       addFaceFeatures(headBone, 0.3 * s, faceLayout, fitScale);
     }
     addFingers(bones.get('FistL'), fitScale * s, 1);

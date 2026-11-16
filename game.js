@@ -859,9 +859,9 @@ function startIntro() {
 // Face mesh (centred X 0, Y 0.463, front Z 0.505); caleb and nurse use
 // the Atlas head bounds (front Z 0.237 and 0.303).
 const FACE_LAYOUTS = {
-  jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.007, 0.010], eyePush: 0.008 },
-  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.37, browZ: 0.23 },
-  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.43, browZ: 0.30 }
+  jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.012, 0.010], eyePush: 0.008 },
+  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.33, browZ: 0.23 },
+  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.39, browZ: 0.30 }
 };
 function addFaceFeatures(headBone, totalScale, layout, fitScale) {
   if (!headBone || !totalScale || totalScale <= 0 || !layout) return;
@@ -948,6 +948,20 @@ async function loadHumans() {
       group.name = def.name;
       // Hide Walter's bench (the game already has benches in the car).
       if (def.hideBench) group.traverse((o) => { if (o.name && o.name.indexOf('Bench') === 0) o.visible = false; });
+      // Skin and Face to flat unlit normal brown (0x8a5a3a). The Casual
+      // models' raw Skin is near-black and the Face near-white, with no
+      // texture map, so as lit standard materials they render far darker
+      // than their colour in the dim light and Jade read as very dark
+      // brown. An unlit basic material renders the exact colour. Names
+      // are kept so the Face/Hair check below still finds them. The
+      // Atlas models (Caleb, Nurse) have no Skin/Face materials (one
+      // Atlas texture for the whole body), so this is a no-op for them
+      // and their texture is untouched.
+      for (const n of ['Skin', 'Face']) {
+        const m = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
+        m.name = n;
+        group.traverse((o) => { if (o.isMesh && o.material && o.material.name === n) o.material = m; });
+      }
       // Caleb's officer markers: a navy cap and a gold badge disc on the chest.
       // NOTE: the jacket recolour below is a no-op on the rigged model: the
       // old scan had a 'casualsuit' material, but the rigged Matt uses a
