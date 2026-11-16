@@ -372,10 +372,40 @@ async function loadPlayerRig() {
     avatarBones = bones; avatarRestQuats = restQuats;
     avatarRigged = true;
     avatarParts = null;
-    try { const rs = document.getElementById('rigStatus'); if (rs) rs.textContent = 'Avatar: rigged model loaded, rigged=' + avatarRigged + ', kids=' + (outer ? outer.children.length : -1) + ', fallback=' + (avatarFallback ? 'still here' : 'gone') + ', rigScale=' + (rig ? rig.scale.x.toFixed(2) : '?'); } catch (e2) { /* ignore */ }
+    // White sneakers on the rigged model: the model's own shoes are dark,
+    // so from behind the feet read as dark. Attach a clearly visible white
+    // sneaker to each foot bone, sized in rig-local units (it scales with
+    // the rig to the 1.24 m height) and positioned on the foot in that
+    // bone's local space, so it follows the Walk animation. The two foot
+    // bones have different local frames (the bind pose is mid-stride), so
+    // each sneaker gets its own measured offset, and the sole sits on the
+    // ground-facing side of each foot.
+    const addSneaker = (boneName, yOff, soleSign) => {
+      const foot = bones.get(boneName);
+      if (!foot) return;
+      const group = new THREE.Group();
+      const shoe = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.08, 0.32),
+        new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6 })
+      );
+      shoe.castShadow = true; shoe.receiveShadow = true;
+      group.add(shoe);
+      const sole = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.02, 0.32),
+        new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 })
+      );
+      sole.position.y = 0.05 * soleSign;
+      sole.castShadow = true;
+      group.add(sole);
+      group.position.set(0, yOff, 0.13);
+      group.userData.keepAlive = true;
+      foot.add(group);
+    };
+    addSneaker('FootL', 0.34, 1);
+    addSneaker('FootR', -0.60, -1);
     // Re-apply the current pose on the rig (it may be lying or sitting).
     setAvatarPose(avatarPose);
-  } catch (e) { try { console.error('Player rig failed to load, keeping the fallback:', e && e.message ? e.message : e); } catch (e2) { /* ignore */ } try { const rs = document.getElementById('rigStatus'); if (rs) rs.textContent = 'Avatar: FAILED - ' + (e && e.message ? e.message : e); } catch (e2) { /* ignore */ } /* keep the fallback; the game never hangs on the avatar */ }
+  } catch (e) { try { console.error('Player rig failed to load, keeping the fallback:', e && e.message ? e.message : e); } catch (e2) { /* ignore */ } /* keep the fallback; the game never hangs on the avatar */ }
 }
 
 // Restore every rig bone to its rest rotation.
