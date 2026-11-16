@@ -33,7 +33,7 @@ const loader = new GLTFLoader();
 function loadOne(def) {
   return Promise.race([
     loader.loadAsync(def.file),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('crowd model timed out: ' + def.file)), 30000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error('crowd model timed out: ' + def.file)), 180000))
   ]).then(gltf => {
     // Jade (Casual Female) has an oversized head: its Hair is wider than
     // its shoulders, so it reads as a wide flat disc about twice normal
