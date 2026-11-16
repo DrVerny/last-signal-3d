@@ -49,7 +49,7 @@ Real scanned figures, not procedural geometry: `models/jade.glb` (Riley, woman, 
 - The full 16-scene script in full detail - Acts I, II and III are all built as playable slices, not the whole story shot-for-shot
 - Multiplayer
 - **Live-stream audience voting** - not built yet. How it could work later: viewers vote in chat (e.g. `!hospital` / `!residential` / `!industrial`); votes are collected as the sealed choice, encrypted, and revealed live at the end of the act - the audience's choice changes the ending, but nobody sees the tally until reveal
-- Real FHEVM contract - written, tested and wired (see "Zama FHEVM integration" below); not deployed to Sepolia yet, so the game runs in demo mode until the contract address is pasted into `zama-config.js`
+- Real FHEVM contract - written, tested, wired and deployed to Sepolia 2026-11-11, redeployed fresh the same day at 21:09 WAT (see "Zama FHEVM integration" below): `LastSignalSealedChoice` at `0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10` (replaces the abandoned 0x1504E234eab90BF383f64691BB7117da317740bC). The game runs in demo mode until the updated `zama-config.js` is pushed to GitHub Pages.
 
 ## Act II - City of Wires (added 2026-11-10)
 Act I's end card links to `act2.html`. Trust, System Integrity, the sealed choice and the RESET board carry over from Act I via localStorage (defaults apply when played standalone). Three missions, one per script location:
@@ -87,7 +87,7 @@ The two sealed choices are real FHEVM-encrypted choices on Sepolia, following th
 
 **Two modes.** Demo mode is the default: no wallet needed, the choices are simulated locally exactly as before, and the HUD badge reads "DEMO MODE - choices sealed locally". Sepolia mode starts when a wallet is connected (the "Connect wallet (Sepolia)" button in the HUD): the choice is ALSO encrypted in the browser with the Relayer SDK and sealed on-chain, in the background, without ever blocking a dialogue. The local simulation stays the source of truth for gameplay, so a failed seal (wallet rejected, no gas) never breaks the game - the status line says so plainly. The Act III end card has a "Reveal sealed choices on Sepolia" button that appears only when both choices are sealed on-chain; it calls `revealChoices()` and decrypts both with the Relayer SDK, showing the plaintext picks next to the ending.
 
-**Files.** `contracts/LastSignalSealedChoice.sol`, `test/LastSignalSealedChoice.test.ts` (9 tests, mocked FHEVM, including a seal-and-reveal round-trip that decrypts to exactly the numbers picked), `deploy/deploy.ts`, `hardhat.config.ts`, `package.json`, `tsconfig.json`, `zama.js` (shared Sepolia module, imported by `game.js` and `act3.js`), `zama-config.js` (contract address - empty until deployed), `zama-abi.js`, `vendor/ethers.umd.min.js` + `vendor/relayer-sdk-js.js` + `vendor/*.wasm` (vendored from Sealed Fortune). `node_modules` is a symlink to the Sealed Fortune project's `node_modules`, so both projects use the exact same toolchain versions.
+**Files.** `contracts/LastSignalSealedChoice.sol`, `test/LastSignalSealedChoice.test.ts` (9 tests, mocked FHEVM, including a seal-and-reveal round-trip that decrypts to exactly the numbers picked), `deploy/deploy.ts`, `hardhat.config.ts`, `package.json`, `tsconfig.json`, `zama.js` (shared Sepolia module, imported by `game.js` and `act3.js`), `zama-config.js` (contract address `0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10`, filled in after the 2026-11-11 deploy), `zama-abi.js`, `vendor/ethers.umd.min.js` + `vendor/relayer-sdk-js.js` + `vendor/*.wasm` (vendored from Sealed Fortune). `node_modules` is a symlink to the Sealed Fortune project's `node_modules`, so both projects use the exact same toolchain versions.
 
 **Build and test (local only).**
 ```
@@ -95,10 +95,14 @@ npm run compile   # npx hardhat compile
 npm test          # npx hardhat test - 9 passing
 ```
 
-**Deploy to Sepolia (not done yet).**
-1. Sepolia ETH in the deploy wallet (the same wallet used for Sealed Fortune: `0x41381f0d4f88b8954650ddf7b2607c89430a0e0a`). Top up from a Sepolia faucet if the balance is too low for gas.
-2. Wallet access: the deploy needs the deploy wallet's private key as the `PRIVATE_KEY` env var at deploy time only. It is never committed and never stored in this repo.
-3. Run: `PRIVATE_KEY=... npm run deploy:sepolia` (add `INFURA_API_KEY=...` or it falls back to the public Sepolia RPC). Copy the deployed address.
-4. Paste the address into `zama-config.js` as `CONTRACT_ADDRESS`, then push the game files to GitHub Pages as usual. The HUD badge will switch to "SEPOLIA" once a wallet connects.
-5. Play Acts I-III with the same wallet in all three acts, so both choices land under one player address. On the Act III end card, press "Reveal sealed choices on Sepolia" to decrypt and show the on-chain record.
+**Deploy to Sepolia (done 2026-11-11).**
+- Redeployed fresh: `LastSignalSealedChoice` at `0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10` on Sepolia, 2026-11-11 21:09 WAT (forced fresh deploy; the first deploy that day, 0x1504E234eab90BF383f64691BB7117da317740bC, is abandoned).
+- Deploy tx: `0x35fb6760a55b10e68ab0d5e76a5fde3cc5a36dd1073e94f7add3c7cd42a244e3`. Note: the 2026-11-11 17:46 UTC Etherscan check verified the OLD contract only - re-check https://sepolia.etherscan.io/address/0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10 before submitting.
+- Deployer: the same wallet used for Sealed Fortune, `0x41381f0d4f88b8954650ddf7b2607c89430a0e0a` (balance was 0.0351 Sepolia ETH before the redeploy, no faucet top-up needed; 6,100,454 gas).
+- The address is already in local `zama-config.js`. Push it to GitHub Pages (step 4 below) so the live site stops running demo-only.
+- Sepolia ETH in the deploy wallet came from the Sepolia faucet; top up from a faucet again if the balance is too low for gas.
+- Wallet access: the deploy needed the deploy wallet's private key as the `PRIVATE_KEY` env var at deploy time only. It is never committed and never stored in this repo.
+- Deploy command used: `PRIVATE_KEY=... npm run deploy:sepolia` (add `INFURA_API_KEY=...` or it falls back to the public Sepolia RPC).
+4. Push the updated `zama-config.js` (and all game + FHE files) to GitHub Pages as usual. The HUD badge will switch to "SEPOLIA" once a wallet connects. **Still pending as of 2026-11-11 17:47 UTC: the live Pages copy of `zama-config.js` still shows `CONTRACT_ADDRESS: ""`.**
+5. Play Acts I-III with the same wallet in all three acts, so both choices land under one player address. On the Act III end card, press "Reveal sealed choices on Sepolia" to decrypt and show the on-chain record. **Not yet verified live on Sepolia.**
 6. Optional: verify the contract on Etherscan with `ETHERSCAN_API_KEY=... npx hardhat verify --network sepolia <address>`.
