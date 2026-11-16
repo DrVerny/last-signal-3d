@@ -394,7 +394,7 @@ async function loadPlayerRig() {
     // Idle-pose foot position, with its sole on the ground and its toe
     // forward, and it follows its foot bone every frame (updateSneakers).
     avatarSneakers = [];
-    const shoeMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6, emissive: 0xffffff, emissiveIntensity: 0.4 });
+    const shoeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const soleMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
     for (const boneName of ['FootL', 'FootR']) {
       const foot = bones.get(boneName);
