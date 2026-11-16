@@ -849,6 +849,56 @@ function startIntro() {
     toast('BLACKOUT - click the glowing gold signal relay to repair it.');
   });
 }
+// Clear 3D facial features for a rigged character. The Face texture
+// does not read from the front, and the Atlas models have no Face mesh
+// at all, so the face looks blank. These sit on the face surface and
+// move with the Head bone. Positions are in Head-bone local space,
+// measured from the head geometry with invBind. Sizes are given in world
+// metres and divided by totalScale (Head bone scale x rig scale) because
+// a Head-bone child is shrunk by both. Layouts: jade uses the Casual
+// Face mesh (centred X 0, Y 0.463, front Z 0.505); caleb and nurse use
+// the Atlas head bounds (front Z 0.237 and 0.303).
+const FACE_LAYOUTS = {
+  jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47 },
+  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.37, browZ: 0.23 },
+  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.43, browZ: 0.30 }
+};
+function addFaceFeatures(headBone, totalScale, layout) {
+  if (!headBone || !totalScale || totalScale <= 0 || !layout) return;
+  try {
+    const w = (worldSize) => worldSize / totalScale;
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.7 });
+    const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const darkMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+    const mouthMat = new THREE.MeshStandardMaterial({ color: 0x5a2a22, roughness: 0.7 });
+    const grp = new THREE.Group();
+    for (const sx of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
+      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ);
+      eye.userData.keepAlive = true;
+      grp.add(eye);
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(w(0.011), 10, 8), darkMat);
+      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02));
+      pupil.userData.keepAlive = true;
+      grp.add(pupil);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.012), w(0.012)), darkMat);
+      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ);
+      brow.userData.keepAlive = true;
+      grp.add(brow);
+    }
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.045), w(0.04)), skinMat);
+    nose.position.set(layout.cx, layout.noseY, layout.noseZ);
+    nose.userData.keepAlive = true;
+    grp.add(nose);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(w(0.06), w(0.015), w(0.012)), mouthMat);
+    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ);
+    mouth.userData.keepAlive = true;
+    grp.add(mouth);
+    grp.userData.keepAlive = true;
+    headBone.add(grp);
+  } catch (e) { /* face features are cosmetic; never break the load */ }
+}
+
 async function loadHumans() {
   const loadingText = document.getElementById('loadingText');
   const loadingError = document.getElementById('loadingError');
@@ -943,6 +993,21 @@ async function loadHumans() {
       group.scale.setScalar(s);
       group.position.set(def.x, -minY * s, def.z);
       group.rotation.y = def.faceYaw || 0;
+      // Clear 3D facial features on the Head bone (eyes, nose, mouth,
+      // eyebrows). The Face texture does not read from the front, and
+      // the Atlas models have no Face mesh at all, so the face looks
+      // blank. Walter is a static scan with no Head bone, so this is a
+      // no-op for him. The Head bone scale is 0.3 for Casual models
+      // (Face/Hair) and 0.6 for Atlas models.
+      {
+        const layout = FACE_LAYOUTS[def.key];
+        if (layout) {
+          let headBone = null;
+          group.traverse((o) => { if (!headBone && o.isBone && o.name === 'Head') headBone = o; });
+          const headScale = hasFaceHair ? 0.3 : 0.6;
+          addFaceFeatures(headBone, headScale * s, layout);
+        }
+      }
       scene.add(group);
       // Walking: the standing characters patrol a short stretch of the aisle so
       // the car feels alive instead of frozen. Walter stays seated. Each walker

@@ -247,6 +247,80 @@ export function buildPlayerAvatar() {
   return avatar;
 }
 
+// Clear 3D facial features for a rigged head. The Face material's
+// texture does not read from the front, so the face looks blank. These
+// sit on the face surface and move with the Head bone. Positions are in
+// Head-bone local space, measured from the Face mesh with invBind (the
+// Casual face is centred at X 0, Y 0.463, front Z 0.505). Sizes are given
+// in world metres and divided by totalScale (Head bone scale x rig
+// scale) because a Head-bone child is shrunk by both.
+function addFaceFeatures(headBone, totalScale, layout) {
+  if (!headBone || !totalScale || totalScale <= 0) return;
+  try {
+    const w = (worldSize) => worldSize / totalScale;
+    const skinMat = new THREE.MeshStandardMaterial({ color: PLAYER_SKIN, roughness: 0.7 });
+    const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const darkMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+    const mouthMat = new THREE.MeshStandardMaterial({ color: 0x5a2a22, roughness: 0.7 });
+    const grp = new THREE.Group();
+    for (const sx of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
+      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ);
+      eye.userData.keepAlive = true;
+      grp.add(eye);
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(w(0.011), 10, 8), darkMat);
+      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02));
+      pupil.userData.keepAlive = true;
+      grp.add(pupil);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(w(0.05), w(0.012), w(0.012)), darkMat);
+      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ);
+      brow.userData.keepAlive = true;
+      grp.add(brow);
+    }
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(w(0.03), w(0.045), w(0.04)), skinMat);
+    nose.position.set(layout.cx, layout.noseY, layout.noseZ);
+    nose.userData.keepAlive = true;
+    grp.add(nose);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(w(0.06), w(0.015), w(0.012)), mouthMat);
+    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ);
+    mouth.userData.keepAlive = true;
+    grp.add(mouth);
+    grp.userData.keepAlive = true;
+    headBone.add(grp);
+  } catch (e) { /* face features are cosmetic; never break the load */ }
+}
+
+// Fingers on a rigged hand. The model's hands are solid mitten blocks
+// (part of the Skin mesh, no finger bones). These thin skin-tone boxes
+// extend past the fist so the hand reads as fingers, not a mitten. They
+// are children of the Fist bone so they move with the arm. Positions are
+// in Fist-bone local space, measured from the fist block with invBind
+// (the fist spans Y -0.042 to 0.348, X -0.113 to 0.128). Sizes are in
+// world metres divided by rigScale (the Fist bone has no extra scale).
+// thumbSign is +1 when the thumb sits on the Fist local +X side.
+function addFingers(fistBone, rigScale, thumbSign) {
+  if (!fistBone || !rigScale || rigScale <= 0) return;
+  try {
+    const w = (worldSize) => worldSize / rigScale;
+    const skinMat = new THREE.MeshStandardMaterial({ color: PLAYER_SKIN, roughness: 0.7 });
+    const grp = new THREE.Group();
+    const fingerX = [-0.075, -0.025, 0.025, 0.075];
+    for (const fx of fingerX) {
+      const finger = new THREE.Mesh(new THREE.BoxGeometry(w(0.035), w(0.16), w(0.035)), skinMat);
+      finger.position.set(fx, 0.31, 0.05);
+      finger.userData.keepAlive = true;
+      grp.add(finger);
+    }
+    const thumb = new THREE.Mesh(new THREE.BoxGeometry(w(0.035), w(0.14), w(0.035)), skinMat);
+    thumb.position.set(thumbSign * 0.13, 0.20, 0.08);
+    thumb.rotation.z = -thumbSign * 0.5;
+    thumb.userData.keepAlive = true;
+    grp.add(thumb);
+    grp.userData.keepAlive = true;
+    fistBone.add(grp);
+  } catch (e) { /* fingers are cosmetic; never break the load */ }
+}
+
 // Load the rigged young man. Recolours skin/face and the shirt, scales
 // him to the player's height, re-grounds his feet, sets up the Walk
 // and Idle clips, then swaps the fallback for the rig. Any failure
@@ -339,6 +413,19 @@ async function loadPlayerRig() {
       if (!rootBone) { for (const b of bones.values()) { rootBone = b; break; } }
       if (rootBone) rootRest = rootBone.position.clone();
     } catch (e) { mixer = null; walkAction = null; idleAction = null; }
+    // Clear 3D facial features on the Head bone, and fingers on both
+    // hands. The Face texture does not read from the front, so the face
+    // looks blank, and the hands are solid mitten blocks. Layout is in
+    // Head-bone local space, measured from the Face mesh (see
+    // addFaceFeatures). The Head bone scale is 0.3, so the total scale
+    // for a Head child is 0.3 times the rig scale s.
+    {
+      const headBone = bones.get('Head');
+      const faceLayout = { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47 };
+      addFaceFeatures(headBone, 0.3 * s, faceLayout);
+    }
+    addFingers(bones.get('FistL'), s, 1);
+    addFingers(bones.get('FistR'), s, -1);
     // A soft blob shadow under the feet, like the fallback had.
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.42, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; shadow.userData.keepAlive = true; rig.add(shadow);
