@@ -132,7 +132,6 @@ let avatarShirtMat = null; // the rig's shirt material, for re-tinting
 const SNEAKER_IDLE_BONE = { FootL: [0.205, 0.016, -0.180], FootR: [-0.108, 0.016, -0.180] };
 const SNEAKER_BIND_POS = { FootL: [0.207, 0.12, -0.129], FootR: [-0.110, 0.12, -0.129] };
 let avatarSneakers = null; // [{ bone, group, bindBone, bindPos }] once rigged
-let lastShoeStatus = 0; // TEMP DIAGNOSTIC: last time the shoe status line was refreshed
 function outfitColor() {
   try {
     const eq = getEquipped();
@@ -256,108 +255,307 @@ export function buildPlayerAvatar() {
   return avatar;
 }
 
-// Clear 3D facial features for a rigged head. The Face material's
-// texture does not read from the front, so the face looks blank. These
-// sit on the face surface and move with the Head bone. Positions are in
-// Head-bone local space, measured from the Face mesh with invBind (the
-// Casual face is centred at X 0, Y 0.463, front Z 0.505). Sizes are given
-// in world metres and divided by totalScale (Head bone scale x rig
-// scale) because a Head-bone child is shrunk by both.
-function addFaceFeatures(headBone, totalScale, layout, fitScale) {
-  if (!headBone || !totalScale || totalScale <= 0) return;
+// ---------- Realistic painted face ----------
+// The Face mesh is a thin plate over the front of the head (the
+// Quaternius asset's own face surface, built to carry a painted face).
+// It ships with no UVs, so planar UVs are generated from its own
+// geometry (u across its width, v up its height) and a canvas texture
+// is painted on it: skin with tonal variation, real eyes with iris and
+// pupil, eyelid crease and lashes, nose shading and nostrils, lips.
+// The feature anchors were measured from the face itself in Node:
+// eyes u 0.310 / 0.690, v 0.729; nose u 0.500, v 0.475; mouth u 0.500,
+// v 0.197; brows u 0.310 / 0.690, v 0.823. The texture is unlit
+// (MeshBasicMaterial), so it reads clearly in the dim mansion and in
+// the blackout, exactly like the flat skin did, but the painted shading
+// gives the face depth. The plate is skinned to the Head bone, so the
+// painted face moves with the head, and the smile and jaw morphs still
+// deform it. The old 3D googly eyes, box nose and box mouth are gone:
+// nothing references them (lip-sync measures the mouth from the face
+// geometry, not from the 3D mouth box). paintBrows is true for the
+// player (he has no expression brows); for speaking characters the
+// moving 3D brows from expression.js are the brows, so only a faint
+// wash is painted there.
+const FACE_TEX_W = 512;
+const FACE_TEX_H = 200;
+export function makeFaceTexture(paintBrows) {
+  const cv = document.createElement('canvas');
+  cv.width = FACE_TEX_W; cv.height = FACE_TEX_H;
+  const ctx = cv.getContext('2d');
+  const X = (u) => u * FACE_TEX_W;
+  const Y = (v) => (1 - v) * FACE_TEX_H;
+  // Soft radial blotch: rgb is 'r,g,b', alpha is the centre strength.
+  const soft = (cx, cy, rx, ry, rgb, alpha) => {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(rx, ry);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    g.addColorStop(0, 'rgba(' + rgb + ',' + alpha + ')');
+    g.addColorStop(1, 'rgba(' + rgb + ',0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(-1, -1, 2, 2);
+    ctx.restore();
+  };
+  const ellipse = (cx, cy, rx, ry, fill) => {
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+  };
+  // Base skin.
+  ctx.fillStyle = '#8a5a3a';
+  ctx.fillRect(0, 0, FACE_TEX_W, FACE_TEX_H);
+  // Large-scale tonal variation: forehead lighter, cheeks warmer,
+  // jaw and chin darker, edges fall off so the face reads round.
+  soft(256, 20, 220, 60, '154,106,66', 0.45);
+  soft(150, 110, 90, 55, '150,82,46', 0.30);
+  soft(362, 110, 90, 55, '150,82,46', 0.30);
+  soft(256, 195, 220, 45, '110,70,40', 0.35);
+  soft(30, 100, 70, 110, '70,40,20', 0.28);
+  soft(482, 100, 70, 110, '70,40,20', 0.28);
+  // Fine noise so the skin is not a flat fill.
+  for (let i = 0; i < 1400; i++) {
+    const nx = Math.random() * FACE_TEX_W, ny = Math.random() * FACE_TEX_H;
+    const light = Math.random() > 0.5;
+    ctx.fillStyle = light ? 'rgba(200,150,105,0.05)' : 'rgba(60,30,15,0.05)';
+    ctx.fillRect(nx, ny, 1.6, 1.6);
+  }
+  // One eye, centred at (ex, ey). Almond sclera, brown iris with a
+  // darker pupil and a catchlight, lid crease and lash lines.
+  const drawEye = (ex, ey) => {
+    const ew = 55, eh = 22;
+    soft(ex, ey - 28, 62, 18, '60,30,15', 0.20); // socket shadow
+    ctx.beginPath();
+    ctx.moveTo(ex - ew, ey);
+    ctx.quadraticCurveTo(ex - ew * 0.4, ey - eh, ex + ew, ey);
+    ctx.quadraticCurveTo(ex + ew * 0.4, ey + eh, ex - ew, ey);
+    ctx.closePath();
+    ctx.fillStyle = '#efe6d2';
+    ctx.fill();
+    const irisR = 19;
+    const ig = ctx.createRadialGradient(ex, ey, 2, ex, ey, irisR);
+    ig.addColorStop(0, '#1a0f06');
+    ig.addColorStop(0.55, '#2e1c0e');
+    ig.addColorStop(0.85, '#5a3a1e');
+    ig.addColorStop(1, '#241608');
+    ctx.beginPath(); ctx.arc(ex, ey, irisR, 0, Math.PI * 2);
+    ctx.fillStyle = ig; ctx.fill();
+    ctx.beginPath(); ctx.arc(ex, ey, 8, 0, Math.PI * 2);
+    ctx.fillStyle = '#0d0603'; ctx.fill();
+    ctx.beginPath(); ctx.arc(ex - 6, ey - 7, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(ex - ew + 6, ey - eh + 7);
+    ctx.quadraticCurveTo(ex, ey - eh - 5, ex + ew - 6, ey - eh + 7);
+    ctx.strokeStyle = 'rgba(40,20,10,0.55)'; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ex - ew + 4, ey - eh + 11);
+    ctx.quadraticCurveTo(ex, ey - eh + 3, ex + ew - 4, ey - eh + 11);
+    ctx.strokeStyle = 'rgba(20,10,5,0.8)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ex - ew + 8, ey + eh - 6);
+    ctx.quadraticCurveTo(ex, ey + eh + 2, ex + ew - 8, ey + eh - 6);
+    ctx.strokeStyle = 'rgba(60,30,15,0.30)'; ctx.lineWidth = 1.5; ctx.stroke();
+  };
+  // Brows. The player gets a full dark brow; speaking characters get
+  // only a faint wash, because their moving 3D brows are the brows.
+  const drawBrow = (ex, by, slope, strong) => {
+    ctx.save();
+    ctx.translate(ex, by);
+    ctx.rotate(slope);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 48, strong ? 5.5 : 6, 0, 0, Math.PI * 2);
+    ctx.fillStyle = strong ? '#241408' : 'rgba(107,74,48,0.35)';
+    ctx.fill();
+    ctx.restore();
+  };
+  const eyeY = Y(0.729), browY = Y(0.823);
+  drawEye(X(0.310), eyeY);
+  drawEye(X(0.690), eyeY);
+  // Left eye (canvas left) inner end is toward the centre, so it
+  // slopes down to the right; the right eye mirrors it.
+  drawBrow(X(0.310), browY, 0.07, paintBrows);
+  drawBrow(X(0.690), browY, -0.07, paintBrows);
+  // Nose: the 3D nose tip protrudes through the plate, so only the
+  // shading around it is painted: bridge highlight, side shadows,
+  // nostrils and the shadow under the tip.
+  soft(256, 88, 10, 26, '180,130,90', 0.30);
+  soft(238, 100, 8, 22, '60,30,15', 0.22);
+  soft(274, 100, 8, 22, '60,30,15', 0.22);
+  soft(256, 122, 16, 6, '50,25,12', 0.30);
+  ellipse(240, 118, 6, 4, 'rgba(40,18,8,0.75)');
+  ellipse(272, 118, 6, 4, 'rgba(40,18,8,0.75)');
+  // Mouth, centre (256, 161): upper lip with a Cupid's bow, fuller
+  // lower lip with a highlight, dark centre line, shadow below.
+  const mx = 256, my = 161;
+  ctx.beginPath();
+  ctx.moveTo(mx - 95, my);
+  ctx.quadraticCurveTo(mx - 70, my - 15, mx - 44, my - 12);
+  ctx.quadraticCurveTo(mx - 22, my - 11, mx, my - 6);
+  ctx.quadraticCurveTo(mx + 22, my - 11, mx + 44, my - 12);
+  ctx.quadraticCurveTo(mx + 70, my - 15, mx + 95, my);
+  ctx.quadraticCurveTo(mx + 44, my + 6, mx, my + 6);
+  ctx.quadraticCurveTo(mx - 44, my + 6, mx - 95, my);
+  ctx.closePath();
+  ctx.fillStyle = '#6e2418'; ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(mx - 89, my + 5);
+  ctx.quadraticCurveTo(mx, my + 21, mx + 89, my + 5);
+  ctx.quadraticCurveTo(mx + 44, my + 11, mx, my + 11);
+  ctx.quadraticCurveTo(mx - 44, my + 11, mx - 89, my + 5);
+  ctx.closePath();
+  ctx.fillStyle = '#8a3524'; ctx.fill();
+  soft(mx, my + 9, 30, 5, '200,120,80', 0.35);
+  ctx.beginPath();
+  ctx.moveTo(mx - 91, my + 1);
+  ctx.quadraticCurveTo(mx, my + 5, mx + 91, my + 1);
+  ctx.strokeStyle = '#3a120c'; ctx.lineWidth = 2.5; ctx.stroke();
+  soft(mx, my + 24, 40, 6, '50,25,12', 0.25);
+  // Cheek warmth and a faint chin crease.
+  soft(150, 128, 42, 20, '150,80,50', 0.12);
+  soft(362, 128, 42, 20, '150,80,50', 0.12);
+  ctx.beginPath();
+  ctx.moveTo(236, 186);
+  ctx.quadraticCurveTo(256, 189, 276, 186);
+  ctx.strokeStyle = 'rgba(60,30,15,0.18)'; ctx.lineWidth = 1.5; ctx.stroke();
+  const tex = new THREE.CanvasTexture(cv);
+  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+// Paint the face texture onto a Face mesh: generate planar UVs from
+// the mesh's own geometry, then replace its material with the painted
+// texture. Returns true when the face was painted.
+export function paintFaceOnMesh(faceMesh, paintBrows) {
+  if (!faceMesh || !faceMesh.geometry) return false;
   try {
-    const w = (worldSize) => worldSize / totalScale;
-    // The Head bone sits under the __fit node, so a Head child's true
-    // world scale is totalScale times fitScale (0.591 for Casual
-    // models, 0.89 for Atlas). The eyes keep the plain w() converter:
-    // at that scale they already read clearly live, and the designed
-    // 0.045 m eyeballs would overlap at the measured eye spacing. The
-    // nose, mouth and eyebrows use the corrected wf() converter so
-    // they render at their true world size instead of 0.59-0.89 of it.
-    const wf = (worldSize) => worldSize / (totalScale * (fitScale || 1));
-    // Feature sizes come from the layout so each model type can fit
-    // its own face: the Casual face is only about 0.11 m wide and
-    // 0.05 m tall in world, so the old nose (0.09 tall) was twice the
-    // face height and the old mouth (0.12 wide) was wider than the
-    // face, and the wide red mouth flanking the huge nose read as two
-    // red blocks at eye level. The small sizes below fit the Casual
-    // face; Atlas layouts leave them out and use the defaults.
-    const noseS = layout.nose || [0.06, 0.09, 0.08];
-    const mouthS = layout.mouth || [0.12, 0.03, 0.02];
-    const browS = layout.brow || [0.10, 0.024, 0.02];
-    const eyePush = layout.eyePush || 0;
-    // Eyes are unchanged: white MeshBasicMaterial eyeballs with dark
-    // pupils, already verified readable live. The nose, mouth and
-    // eyebrows are sized to the real face and use bright unlit
-    // materials so they read in the dim mansion. The nose and the
-    // fingers use the player's own skin tone so they blend with it.
-    const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const darkMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
-    const noseMat = new THREE.MeshBasicMaterial({ color: PLAYER_SKIN });
-    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
-    const browMat = new THREE.MeshBasicMaterial({ color: 0x3a2010 });
-    const grp = new THREE.Group();
-    for (const sx of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
-      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(eyePush));
-      eye.userData.keepAlive = true;
-      grp.add(eye);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(w(0.011), 10, 8), darkMat);
-      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02 + eyePush));
-      pupil.userData.keepAlive = true;
-      grp.add(pupil);
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(browS[0]), wf(browS[1]), wf(browS[2])), browMat);
-      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ + wf(0.006));
-      brow.userData.keepAlive = true;
-      grp.add(brow);
+    const geo = faceMesh.geometry;
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y;
+    if (w <= 0 || h <= 0) return false;
+    const pos = geo.attributes.position;
+    const uv = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i++) {
+      uv[i * 2] = (pos.getX(i) - bb.min.x) / w;
+      uv[i * 2 + 1] = (pos.getY(i) - bb.min.y) / h;
     }
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(wf(noseS[0]), wf(noseS[1]), wf(noseS[2])), noseMat);
-    nose.position.set(layout.cx, layout.noseY, layout.noseZ + wf(0.01));
-    nose.userData.keepAlive = true;
-    grp.add(nose);
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(mouthS[0]), wf(mouthS[1]), wf(mouthS[2])), mouthMat);
-    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ + wf(0.008));
-    mouth.userData.keepAlive = true;
-    grp.add(mouth);
-    grp.userData.keepAlive = true;
-    headBone.add(grp);
-  } catch (e) { /* face features are cosmetic; never break the load */ }
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    const mat = new THREE.MeshBasicMaterial({ map: makeFaceTexture(paintBrows) });
+    mat.name = 'Face';
+    faceMesh.material = mat;
+    return true;
+  } catch (e) { return false; }
+}
+// Skin tonal variation: a per-vertex colour attribute on the Skin
+// geometry, so the unlit skin does not read as flat plastic. Colours
+// are multipliers on the material colour (forehead lighter, cheeks
+// warmer, nose bridge highlighted, jaw and neck darker, fine noise).
+// Positions are in the model's geometry space (head y 2.0-3.3).
+export function addSkinToneVariation(skinMesh) {
+  if (!skinMesh || !skinMesh.geometry) return false;
+  try {
+    const geo = skinMesh.geometry;
+    const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      let r = 1, g = 1, b = 1;
+      if (y > 2.0) {
+        if (y > 2.68 && y < 2.9 && z > 0.2 && Math.abs(x) < 0.35) { r *= 1.07; g *= 1.06; b *= 1.05; }
+        if (y > 2.5 && y < 2.68 && Math.abs(x) > 0.12 && Math.abs(x) < 0.38 && z > 0.25) { r *= 1.07; b *= 0.94; }
+        if (y > 2.55 && y < 2.68 && Math.abs(x) < 0.07 && z > 0.4) { r *= 1.06; g *= 1.05; b *= 1.04; }
+        if (y > 2.52 && y < 2.66 && Math.abs(x) >= 0.07 && Math.abs(x) < 0.16 && z > 0.36) { r *= 0.93; g *= 0.93; b *= 0.93; }
+        if (y > 2.32 && y < 2.52) { r *= 0.93; g *= 0.93; b *= 0.93; }
+        if (y >= 2.0 && y < 2.32 && z < 0.3) { r *= 0.87; g *= 0.87; b *= 0.87; }
+        if (Math.abs(x) > 0.45 && y > 2.45 && y < 2.72) { r *= 0.94; g *= 0.94; b *= 0.94; }
+      }
+      const n = Math.sin(i * 12.9898) * 43758.5453;
+      const f = (n - Math.floor(n) - 0.5) * 0.06;
+      r += f; g += f; b += f;
+      colors[i * 3] = Math.min(1.15, Math.max(0.7, r));
+      colors[i * 3 + 1] = Math.min(1.15, Math.max(0.7, g));
+      colors[i * 3 + 2] = Math.min(1.15, Math.max(0.7, b));
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    if (skinMesh.material) skinMesh.material.vertexColors = true;
+    return true;
+  } catch (e) { return false; }
 }
 
+// Fist scale: the rigged hand is oversized. Measured in Node: the fist
+// block is 0.197 m long (wrist to fingertip, real: about 0.185 m) and
+// the old 0.22 m finger capsules stuck 0.09 m past it, so the hand
+// measured 0.29 m wrist to fingertip and the fingertips reached the
+// knees. Scaling the Fist bone to 0.75 shrinks the block to 0.148 m,
+// and with the shorter fingers below the whole hand measures about
+// 0.19 m. The clips carry a Fist scale track, so it is stripped with
+// the Head scale track in loadPlayerRig.
+export const FIST_SCALE = 0.75;
+// One finger pointing along +Y from the origin: a proximal capsule, a
+// knuckle, a distal capsule bent slightly forward, and a pale nail near
+// the tip. Lengths are world metres; w converts them to the Fist
+// bone's local units.
+function makeFinger(w, mat, nailMat, proxLen, distLen, radius) {
+  const g = new THREE.Group();
+  const prox = new THREE.Mesh(new THREE.CapsuleGeometry(w(radius), w(Math.max(0.001, proxLen - radius * 2)), 4, 10), mat);
+  prox.position.y = w(proxLen / 2);
+  g.add(prox);
+  const knuckle = new THREE.Mesh(new THREE.SphereGeometry(w(radius * 1.18), 10, 8), mat);
+  knuckle.position.y = w(proxLen);
+  knuckle.scale.set(1, 0.8, 1);
+  g.add(knuckle);
+  const dist = new THREE.Group();
+  dist.position.y = w(proxLen);
+  dist.rotation.x = 0.28; // slight natural curl forward
+  const distMesh = new THREE.Mesh(new THREE.CapsuleGeometry(w(radius * 0.92), w(Math.max(0.001, distLen - radius * 1.84)), 4, 10), mat);
+  distMesh.position.y = w(distLen / 2);
+  dist.add(distMesh);
+  const nail = new THREE.Mesh(new THREE.BoxGeometry(w(0.011), w(0.013), w(0.0025)), nailMat);
+  nail.position.set(0, w(distLen * 0.62), w(radius * 0.95));
+  dist.add(nail);
+  g.add(dist);
+  g.traverse(o => { o.userData.keepAlive = true; });
+  return g;
+}
 // Fingers on a rigged hand. The model's hands are solid mitten blocks
-// (part of the Skin mesh, no finger bones). These rounded capsules
+// (part of the Skin mesh, no finger bones). These jointed fingers
 // extend past the fist so the hand reads as real fingers, not
-// rectangular strips. They are children of the Fist bone so they move
-// with the arm. Positions are in Fist-bone local space, measured from
-// the fist block with invBind (the fist spans Y -0.042 to 0.348, X
-// -0.113 to 0.128, centre X 0.0075). Sizes are in world metres divided
-// by boneScale: the Fist bone sits under the __fit node (scale 0.591),
-// so a Fist child's world size is its local size times 0.591 times the
-// rig scale s, NOT times s alone. Dividing by s alone made the first
-// fingers 0.021 m wide and 0.095 m long with 4 mm gaps, so they
-// vanished into the fist and the hands still read as mittens. The
-// fingers are MeshBasicMaterial in the player's own skin tone so they
-// blend with the hand while staying bright in the dim mansion, and
-// they protrude 0.09 m past the fist tip. Four 0.03 m fingers is the
-// widest that fits the 0.122 m hand with clear gaps; 0.05 m fingers
-// would overlap into a solid slab. thumbSign is +1 when the thumb
+// rectangular prongs: two segments with a knuckle, a rounded tip and a
+// nail. They are children of the Fist bone so they move with the arm.
+// Sizes are world metres divided by boneScale times FIST_SCALE: a Fist
+// child is shrunk by the bone scale as well as the __fit node (0.591)
+// and the rig scale, so dividing by boneScale alone would make them
+// render at 0.75 of their designed size. The fingers are MeshBasicMaterial
+// in the player's own skin tone so they blend with the hand while
+// staying bright in the dim mansion. thumbSign is +1 when the thumb
 // sits on the Fist local +X side.
-function addFingers(fistBone, boneScale, thumbSign) {
+export function addJointedFingers(fistBone, boneScale, thumbSign) {
   if (!fistBone || !boneScale || boneScale <= 0) return;
   try {
-    const w = (worldSize) => worldSize / boneScale;
+    const eff = boneScale * FIST_SCALE;
+    const w = (worldSize) => worldSize / eff;
     const fingerMat = new THREE.MeshBasicMaterial({ color: PLAYER_SKIN });
+    const nailMat = new THREE.MeshBasicMaterial({ color: 0xe8cbb0 });
     const grp = new THREE.Group();
-    for (let i = 0; i < 4; i++) {
-      const finger = new THREE.Mesh(new THREE.CapsuleGeometry(w(0.015), w(0.19), 4, 10), fingerMat);
-      finger.position.set(0.0075 + (i - 1.5) * w(0.04), 0.31, 0.05);
-      finger.userData.keepAlive = true;
-      grp.add(finger);
+    // Four fingers from the thumb side: index, middle, ring, pinky.
+    // dx is the world offset from the fist centre (0.0075 local); the
+    // base sits inside the fist at local Y 0.20, the knuckle at the
+    // fist top, the tip about 0.04 m past it.
+    const defs = [
+      { dx: 0.030, dist: 0.045 },
+      { dx: 0.010, dist: 0.050 },
+      { dx: -0.010, dist: 0.048 },
+      { dx: -0.030, dist: 0.038 },
+    ];
+    for (const d of defs) {
+      const f = makeFinger(w, fingerMat, nailMat, 0.047, d.dist, 0.008);
+      f.position.set(0.0075 + w(thumbSign * d.dx), 0.20, 0.05);
+      grp.add(f);
     }
-    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(w(0.015), w(0.13), 4, 10), fingerMat);
-    thumb.position.set(thumbSign * 0.14, 0.18, 0.08);
-    thumb.rotation.z = -thumbSign * 0.5;
-    thumb.userData.keepAlive = true;
+    const thumb = makeFinger(w, fingerMat, nailMat, 0.030, 0.035, 0.0085);
+    thumb.position.set(0.0075 + w(thumbSign * 0.05), 0.16, 0.06);
+    thumb.rotation.z = -thumbSign * 0.55;
+    thumb.rotation.x = -0.35;
     grp.add(thumb);
     grp.userData.keepAlive = true;
     fistBone.add(grp);
@@ -396,21 +594,26 @@ async function loadPlayerRig() {
         if (n === 'Shirt') avatarShirtMat = m;
       }
     };
-    // Skin and Face are replaced with flat unlit MeshBasicMaterial in
-    // the player's skin tone, keeping their names so later lookups
-    // still work. The raw Skin is near-black (#1f1f1f) and the Face
-    // near-white, and neither has a texture map, so cloning them as
-    // MeshStandardMaterial and tinting the colour keeps them lit: in
-    // the dim mansion the tinted standard material renders far darker
-    // than the colour value, and the skin read as very dark brown,
-    // close to black-brown. An unlit basic material renders the exact
-    // colour and stays bright in dim light. The nose and fingers
-    // already use MeshBasicMaterial in this tone, so they blend with it.
-    for (const n of ['Skin', 'Face']) {
+    // Skin is replaced with flat unlit MeshBasicMaterial in the
+    // player's skin tone, keeping its name so later lookups still work.
+    // The raw Skin is near-black (#1f1f1f) with no texture map, so
+    // cloning it as MeshStandardMaterial and tinting the colour keeps
+    // it lit: in the dim mansion the tinted standard material renders
+    // far darker than the colour value, and the skin read as very dark
+    // brown, close to black-brown. An unlit basic material renders the
+    // exact colour and stays bright in dim light. The flat look is
+    // fixed with per-vertex tonal variation instead of lighting (see
+    // addSkinToneVariation). The Face is not replaced here: it is
+    // painted with the realistic face texture by paintFaceOnMesh below.
+    {
       const m = new THREE.MeshBasicMaterial({ color: PLAYER_SKIN });
-      m.name = n;
-      rig.traverse(o => { if (o.isMesh && o.material && o.material.name === n) o.material = m; });
+      m.name = 'Skin';
+      rig.traverse(o => { if (o.isMesh && o.material && o.material.name === 'Skin') o.material = m; });
     }
+    rig.traverse(o => {
+      if (o.isMesh && o.material && o.material.name === 'Skin') addSkinToneVariation(o);
+      if (o.isMesh && o.material && o.material.name === 'Face') paintFaceOnMesh(o, true);
+    });
     tint(['Shirt'], outfitColor().getHex());
     rig.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     // The Casual Male model has an oversized head: its Hair is wider than
@@ -422,8 +625,11 @@ async function loadPlayerRig() {
     // Every clip carries a scale track for the Head bone, so the mixer
     // would write the Head scale back to 1 every frame and undo the
     // shrink. Strip the Head scale track from every clip so the 0.3 stays.
+    // The Fist scale tracks are stripped too: the Fist bones are scaled
+    // to FIST_SCALE below (see addJointedFingers) and the clips would
+    // otherwise write them back to 1.
     for (const clip of (gltf.animations || [])) {
-      clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale');
+      clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale' && t.name !== 'FistL.scale' && t.name !== 'FistR.scale');
     }
     // Normalise height to the player's height, then re-ground the feet.
     // The scale lives on the INNER rig group, never on the outer avatar
@@ -470,23 +676,24 @@ async function loadPlayerRig() {
       if (!rootBone) { for (const b of bones.values()) { rootBone = b; break; } }
       if (rootBone) rootRest = rootBone.position.clone();
     } catch (e) { mixer = null; walkAction = null; idleAction = null; }
-    // Clear 3D facial features on the Head bone, and fingers on both
-    // hands. The Face texture does not read from the front, so the face
-    // looks blank, and the hands are solid mitten blocks. Layout is in
-    // Head-bone local space, measured from the Face mesh (see
-    // addFaceFeatures). The Head and Fist bones sit under the __fit
-    // node (scale 0.591), so a bone child's world scale is 0.591 times
-    // the rig scale s. Pass that to the face and finger helpers, not s
-    // alone, or the features render at 0.591 of their designed size.
+    // Jointed fingers on both hands. The face is already painted on the
+    // Face mesh (see the material step above), so no 3D face features
+    // are added. The hands are solid mitten blocks, so the fingers are
+    // children of the Fist bones. The Fist bones sit under the __fit
+    // node (scale 0.591), so a Fist child's world scale is 0.591 times
+    // the rig scale s. Pass that to the finger helper, not s alone, or
+    // the fingers render at 0.591 of their designed size. The Fist
+    // bones are scaled to FIST_SCALE first (see the note on the
+    // constant): it shrinks the oversized mitten so the whole hand
+    // measures about 0.19 m wrist to fingertip.
     let fitScale = 1;
     rig.traverse(o => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
-    {
-      const headBone = bones.get('Head');
-      const faceLayout = { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.012, 0.010], eyePush: 0.008 };
-      addFaceFeatures(headBone, 0.3 * s, faceLayout, fitScale);
+    for (const fistName of ['FistL', 'FistR']) {
+      const fb = bones.get(fistName);
+      if (fb) fb.scale.setScalar(FIST_SCALE);
     }
-    addFingers(bones.get('FistL'), fitScale * s, 1);
-    addFingers(bones.get('FistR'), fitScale * s, -1);
+    addJointedFingers(bones.get('FistL'), fitScale * s, 1);
+    addJointedFingers(bones.get('FistR'), fitScale * s, -1);
     // A soft blob shadow under the feet, like the fallback had.
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.42, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; shadow.userData.keepAlive = true; rig.add(shadow);
@@ -543,16 +750,45 @@ async function loadPlayerRig() {
     // Idle-pose foot position, with its sole on the ground and its toe
     // forward, and it follows its foot bone every frame (updateSneakers).
     avatarSneakers = [];
-    const shoeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    // Subtle weave texture for the white upper: a faint near-white
+    // crosshatch, so the shoe does not read as a flat slab. The
+    // ExtrudeGeometry UVs are arbitrary, so the texture is kept very
+    // low contrast and near-white on purpose: any UV oddity stays
+    // invisible and the shoe still reads white.
+    const weave = document.createElement('canvas');
+    weave.width = weave.height = 64;
+    {
+      const wc = weave.getContext('2d');
+      wc.fillStyle = '#f8f8f8';
+      wc.fillRect(0, 0, 64, 64);
+      wc.strokeStyle = 'rgba(150,150,150,0.35)';
+      wc.lineWidth = 1;
+      for (let i = -64; i <= 64; i += 6) {
+        wc.beginPath(); wc.moveTo(i, 0); wc.lineTo(i + 64, 64); wc.stroke();
+        wc.beginPath(); wc.moveTo(i + 64, 0); wc.lineTo(i, 64); wc.stroke();
+      }
+    }
+    const weaveTex = new THREE.CanvasTexture(weave);
+    weaveTex.wrapS = weaveTex.wrapT = THREE.RepeatWrapping;
+    weaveTex.repeat.set(3, 1);
+    if (THREE.SRGBColorSpace) weaveTex.colorSpace = THREE.SRGBColorSpace;
+    const shoeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, map: weaveTex });
     const soleMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
     // Running-shoe upper: an extruded side profile (low tapered toe,
     // higher heel, dipped ankle opening), not a plain box, so it reads
     // as a real running shoe. The profile is drawn in XY (X = length,
     // Y = height) and extruded across the width, then rotated so the
     // length runs along Z with the toe forward. A small bevel rounds
-    // the edges. The upper sits on the sole, whose bottom stays at
-    // group-local y -0.09 (sole bottom at y 0.032 world, same as
-    // before) so the white still shows above the floor.
+    // the edges. The measured profile is oversized: 0.54 m long by
+    // 0.28 m wide by 0.17 m tall in rig-local units, where a real shoe
+    // is about 0.28 x 0.10 x 0.10 m. The inner group below scales the
+    // whole shoe down to 0.31 m long, 0.16 m wide and 0.14 m tall
+    // (world, measured in Node). The sole bottom stays at group-local
+    // -0.09, so at the 0.12 bind height it sits at y 0.032 world and
+    // the shoe top at 0.176, showing 0.076 m above the indoor floor
+    // (0.10) and only a 0.012 m sliver of foot below the sole on the
+    // outdoor roads (0.02). Raising the bind would show more shoe
+    // indoors but leave a bare-foot strip outdoors, so it stays 0.12.
     const shoeProfile = new THREE.Shape();
     shoeProfile.moveTo(-0.27, 0);
     shoeProfile.lineTo(-0.27, 0.15);
@@ -565,23 +801,50 @@ async function loadPlayerRig() {
     const shoeGeo = new THREE.ExtrudeGeometry(shoeProfile, { depth: 0.28, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.01, bevelSegments: 2, steps: 1 });
     shoeGeo.rotateY(-Math.PI / 2);
     shoeGeo.translate(0.14, -0.06, 0);
+    const laceMat = new THREE.MeshBasicMaterial({ color: 0xdddddd });
     for (const boneName of ['FootL', 'FootR']) {
       const foot = bones.get(boneName);
       if (!foot) continue;
       const group = new THREE.Group();
+      // The whole shoe lives in this inner group so the profile, toe
+      // cap and sole can be scaled down together: x 0.60 (width),
+      // y 0.80 (height), z 0.62 (length). updateSneakers only sets
+      // the outer group's position, so this scale is untouched by
+      // the follow logic. Position y -0.018 keeps the sole bottom
+      // at group-local -0.09: the sole bottom is -0.09 in inner
+      // units, scaled by 0.80 to -0.072, then lifted by -0.018.
+      const inner = new THREE.Group();
+      inner.scale.set(0.60, 0.80, 0.62);
+      inner.position.y = -0.018;
+      group.add(inner);
       const shoe = new THREE.Mesh(shoeGeo, shoeMat);
       shoe.castShadow = true; shoe.receiveShadow = true;
-      group.add(shoe);
+      inner.add(shoe);
       // Rounded toe cap: a flattened sphere at the front of the shoe.
       const toeCap = new THREE.Mesh(new THREE.SphereGeometry(0.085, 14, 10), shoeMat);
       toeCap.scale.set(1, 0.6, 0.9);
       toeCap.position.set(0, 0.02, 0.22);
       toeCap.castShadow = true;
-      group.add(toeCap);
+      inner.add(toeCap);
+      // Four lace strips across the top of the shoe, following its
+      // curve. Their heights are the profile top at each Z plus the
+      // 0.01 bevel plus half the strip thickness, so they sit just
+      // above the upper instead of buried inside it: at Z 0.10 the
+      // profile top is 0.108, at 0.05 and 0.00 it is 0.117, at -0.05
+      // it is 0.121. The instep slopes down toward the toe, so the
+      // strips tilt with it (rotation.x 0.25).
+      const laceZ = [0.10, 0.05, 0.00, -0.05];
+      const laceY = [0.123, 0.132, 0.132, 0.136];
+      for (let i = 0; i < laceZ.length; i++) {
+        const lace = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.006, 0.018), laceMat);
+        lace.position.set(0, laceY[i], laceZ[i]);
+        lace.rotation.x = 0.25;
+        inner.add(lace);
+      }
       const sole = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.03, 0.58), soleMat);
       sole.position.y = -0.075;
       sole.castShadow = true;
-      group.add(sole);
+      inner.add(sole);
       const bindPos = SNEAKER_BIND_POS[boneName];
       group.position.set(bindPos[0], bindPos[1], bindPos[2]);
       group.userData.keepAlive = true;
@@ -589,8 +852,6 @@ async function loadPlayerRig() {
       const bindBone = SNEAKER_IDLE_BONE[boneName];
       avatarSneakers.push({ bone: foot, group, bindBone: new THREE.Vector3(bindBone[0], bindBone[1], bindBone[2]), bindPos: new THREE.Vector3(bindPos[0], bindPos[1], bindPos[2]) });
     }
-    // TEMP DIAGNOSTIC: report sneaker count and world positions on load.
-    writeShoeStatus();
     // Re-apply the current pose on the rig (it may be lying or sitting).
     setAvatarPose(avatarPose);
   } catch (e) { try { console.error('Player rig failed to load, keeping the fallback:', e && e.message ? e.message : e); } catch (e2) { /* ignore */ } /* keep the fallback; the game never hangs on the avatar */ }
@@ -697,22 +958,6 @@ export function setAvatarPose(pose) {
 // mesh rises only about two-thirds as much as the foot bone during the
 // swing (the foot rotates as it lifts), so following the bone's Y
 // exactly would float the shoe about 1 cm above the foot mid-stride.
-// TEMP DIAGNOSTIC: report the white sneakers' world positions on screen
-// so the live check can see whether they are in the scene at all and
-// where they are. Remove once the shoe visibility issue is solved.
-function writeShoeStatus() {
-  try {
-    const el = document.getElementById('shoeStatus');
-    if (!el) return;
-    const fmt = v => '(' + v.x.toFixed(2) + ',' + v.y.toFixed(2) + ',' + v.z.toFixed(2) + ')';
-    if (!avatarSneakers || !avatarRig) { el.textContent = 'Shoes: none (rig not loaded)'; return; }
-    const v = new THREE.Vector3();
-    const parts = avatarSneakers.map((s, i) => (i === 0 ? 'L=' : 'R=') + fmt(s.group.getWorldPosition(v)));
-    avatarRig.getWorldPosition(v);
-    el.textContent = 'Shoes: N=' + avatarSneakers.length + ' ' + parts.join(' ') + ' rig=' + fmt(v) + ' s=' + avatarRig.scale.x.toFixed(2);
-  } catch (e) { /* diagnostic only, never break the game */ }
-}
-
 function updateSneakers() {
   if (!avatarSneakers || !avatarRig) return;
   const v = new THREE.Vector3();
@@ -755,9 +1000,6 @@ export function updateAvatarWalk(moving, dt) {
       }
       // Sneakers follow the feet after the mixer and the root pin.
       updateSneakers();
-      // TEMP DIAGNOSTIC: refresh the shoe positions once a second.
-      const nowMs = performance.now();
-      if (nowMs - lastShoeStatus > 1000) { lastShoeStatus = nowMs; writeShoeStatus(); }
     } catch (e) { /* ignore */ }
     return;
   }

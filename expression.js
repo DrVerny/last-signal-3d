@@ -69,8 +69,8 @@ export function emotionForLine(text) {
 // the neck and the models' proportions differ. The eyes sit about
 // 6.4 cm apart; the brows and lids are sized to read at play distance.
 const EYE_HALF_SEP = 0.032;
-const BROW_LEN = 0.048;
-const BROW_R = 0.006;
+const BROW_LEN = 0.055;
+const BROW_R = 0.008;
 const LID_W = 0.034;
 const LID_H = 0.005;
 const LID_TRAVEL = 0.014; // how far the lid drops from wide open to narrowed
@@ -444,10 +444,24 @@ function buildFaceControls(group, name) {
       const one = new THREE.Vector3(1, 1, 1);
       // The face points, in group-local space, lifted just off the
       // skin so the brows and lids sit on the face instead of in it.
+      // The brows sit 0.004 m off the face surface. The lids need
+      // their own offset: the eyeballs bulge in front of the eye
+      // centre, so a lid at the brow offset is hidden behind the
+      // eyeball. The eyeball centre sits behind the face surface by
+      // a different amount per model (Jade 0.004 m, Caleb 0.011 m,
+      // Nurse 0.008 m in world), so the lid offset is per character:
+      // eyeball radius 0.0225 minus that depth plus 0.002 in front
+      // of the eyeball front. Divided by the group scale because
+      // these points are in group-local space. The lid rests at the
+      // top edge of the eye (eyeY + 0.006), not at the eye centre,
+      // so it reads as an upper lid.
       const off = 0.004 * fm.forwardSign;
+      const gs = group.scale.x || 1;
+      const LID_WORLD_OFF = { jade: 0.021, caleb: 0.013, nurse: 0.017 };
+      const lidOff = ((LID_WORLD_OFF[name] || 0.021) / gs) * fm.forwardSign;
       const mouthWorld = group.localToWorld(new THREE.Vector3(fm.faceCentreX, fm.mouthY, fm.mouthZ));
       const browCentre = group.localToWorld(new THREE.Vector3(fm.faceCentreX, browY, fm.browZ + off));
-      const lidCentre = group.localToWorld(new THREE.Vector3(fm.faceCentreX, eyeY, fm.eyeZ + off));
+      const lidCentre = group.localToWorld(new THREE.Vector3(fm.faceCentreX, eyeY + 0.006, fm.eyeZ + lidOff));
       const brows = [];
       const lids = [];
       for (const side of [-1, 1]) {
@@ -598,7 +612,11 @@ export function updateFaces(dt) {
         b.rig.rotation.z = cur.tilt * b.sideSign;
       }
       for (const l of c.lids) {
-        l.rig.position.y = -(cur.lid - 1) * LID_TRAVEL;
+        // Lid 1 is neutral, above 1 is wide open (surprised, the lid
+        // rises) and below 1 is narrowed (angry, the lid drops). The
+        // old sign was backwards: surprised dropped the lid and angry
+        // raised it.
+        l.rig.position.y = (cur.lid - 1) * LID_TRAVEL;
       }
       if (c.walterBrow) {
         const w = c.walterBrow;

@@ -10,7 +10,7 @@ import { initFlashlight, toggleFlashlight, updateFlashlight } from './flashlight
 import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
 import { grantPayout } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, paintFaceOnMesh, addSkinToneVariation, addJointedFingers, FIST_SCALE } from './player.js';
 // THE LAST SIGNAL - Act I: The 4 Train - 3D prototype
 // Original short dialogue in the spirit of the script; no long verbatim copying.
 // Sealed choice: hidden until reveal. In demo mode it is simulated locally;
@@ -860,9 +860,41 @@ function startIntro() {
 // the Atlas head bounds (front Z 0.237 and 0.303).
 const FACE_LAYOUTS = {
   jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.012, 0.010], eyePush: 0.008 },
-  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.33, browZ: 0.23 },
-  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.39, browZ: 0.30 }
+  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.33, browZ: 0.23, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.032, 0.010, 0.008] },
+  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.39, browZ: 0.30, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.032, 0.010, 0.008] }
 };
+// Real eyes: a white eyeball, a brown iris disc with a dark pupil and a
+// bright catchlight in front of it, and a thin upper lid line. The old
+// eye was a white sphere with a single bare pupil dot, which read as a
+// googly oval. The iris disc is a flat circle at the front of the
+// eyeball, not a second sphere, so the eye reads as an iris from the
+// front and does not poke out of the face. The iris material is
+// MeshBasicMaterial so the eyes stay bright in the dim mansion.
+function makeRealEye(w, eyePush) {
+  const g = new THREE.Group();
+  const whiteMat = new THREE.MeshBasicMaterial({ color: 0xf5efe2 });
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
+  eye.userData.keepAlive = true;
+  g.add(eye);
+  const iris = new THREE.Mesh(new THREE.CircleGeometry(w(0.010), 16), new THREE.MeshBasicMaterial({ color: 0x3a2412 }));
+  iris.position.z = w(0.0225 + 0.0015 + (eyePush || 0));
+  iris.userData.keepAlive = true;
+  g.add(iris);
+  const pupil = new THREE.Mesh(new THREE.CircleGeometry(w(0.0055), 12), new THREE.MeshBasicMaterial({ color: 0x0d0603 }));
+  pupil.position.z = w(0.0225 + 0.003 + (eyePush || 0));
+  pupil.userData.keepAlive = true;
+  g.add(pupil);
+  const shine = new THREE.Mesh(new THREE.CircleGeometry(w(0.0018), 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  shine.position.set(w(0.003), w(0.004), w(0.0225 + 0.0045 + (eyePush || 0)));
+  shine.userData.keepAlive = true;
+  g.add(shine);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(w(0.030), w(0.003), w(0.002)), new THREE.MeshBasicMaterial({ color: 0x20140e }));
+  lid.position.set(0, w(0.020), w(0.018 + (eyePush || 0)));
+  lid.userData.keepAlive = true;
+  g.add(lid);
+  g.traverse(o => { o.userData.keepAlive = true; });
+  return g;
+}
 function addFaceFeatures(headBone, totalScale, layout, fitScale) {
   if (!headBone || !totalScale || totalScale <= 0 || !layout) return;
   try {
@@ -881,30 +913,24 @@ function addFaceFeatures(headBone, totalScale, layout, fitScale) {
     // face height and the old mouth (0.12 wide) was wider than the
     // face, and the wide red mouth flanking the huge nose read as two
     // red blocks at eye level. The small sizes below fit the Casual
-    // face (Jade); Atlas layouts leave them out and use the defaults.
-    const noseS = layout.nose || [0.06, 0.09, 0.08];
-    const mouthS = layout.mouth || [0.12, 0.03, 0.02];
-    const browS = layout.brow || [0.10, 0.024, 0.02];
+    // face (Jade); the Atlas layouts (Caleb, Nurse) carry the same
+    // small sizes now instead of the old defaults, which were the
+    // same red-block sizes.
+    const noseS = layout.nose || [0.020, 0.018, 0.018];
+    const mouthS = layout.mouth || [0.040, 0.007, 0.010];
+    const browS = layout.brow || [0.032, 0.010, 0.008];
     const eyePush = layout.eyePush || 0;
-    // Eyes are unchanged: white MeshBasicMaterial eyeballs with dark
-    // pupils, already verified readable live. The nose, mouth and
-    // eyebrows are sized to the real face and use bright unlit
-    // materials so they read in the dim mansion.
-    const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const darkMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+    // The nose, mouth and eyebrows are small, skin-coloured and use
+    // bright unlit materials so they read in the dim mansion. The nose
+    // and the fingers use the player's own skin tone so they blend.
     const noseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
     const mouthMat = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
     const browMat = new THREE.MeshBasicMaterial({ color: 0x3a2010 });
     const grp = new THREE.Group();
     for (const sx of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
-      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(eyePush));
-      eye.userData.keepAlive = true;
+      const eye = makeRealEye(w, eyePush);
+      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ);
       grp.add(eye);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(w(0.011), 10, 8), darkMat);
-      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02 + eyePush));
-      pupil.userData.keepAlive = true;
-      grp.add(pupil);
       const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(browS[0]), wf(browS[1]), wf(browS[2])), browMat);
       brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ + wf(0.006));
       brow.userData.keepAlive = true;
@@ -922,7 +948,6 @@ function addFaceFeatures(headBone, totalScale, layout, fitScale) {
     headBone.add(grp);
   } catch (e) { /* face features are cosmetic; never break the load */ }
 }
-
 async function loadHumans() {
   const loadingText = document.getElementById('loadingText');
   const loadingError = document.getElementById('loadingError');
@@ -1007,8 +1032,12 @@ async function loadHumans() {
       } else {
         group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.6); });
       }
+      // The Fist scale tracks are stripped too: Jade's Fist bones are
+      // scaled to FIST_SCALE below and the clips would otherwise write
+      // them back to 1 (a no-op for the Atlas models, which have no
+      // Fist bones).
       for (const clip of (gltf.animations || [])) {
-        clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale');
+        clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale' && t.name !== 'FistL.scale' && t.name !== 'FistR.scale');
       }
       // Normalise height to the character's target height, then re-ground feet at y=0.
       // Measure the height from the raw geometry, not Box3.setFromObject:
@@ -1036,7 +1065,14 @@ async function loadHumans() {
       // the Atlas models have no Face mesh at all, so the face looks
       // blank. Walter is a static scan with no Head bone, so this is a
       // no-op for him. The Head bone scale is 0.3 for Casual models
-      // (Face/Hair) and 0.6 for Atlas models.
+      // (Face/Hair) and 0.6 for Atlas models. Jade (Casual) gets the
+      // painted face texture and skin tonal variation first: her
+      // painted brows are only a faint wash, because her moving 3D
+      // brows from expression.js are the brows. She also gets the
+      // jointed fingers and the Fist scale, the same treatment as the
+      // player. Caleb and Nurse (Atlas) have no Face mesh and no Fist
+      // bones, so they keep their textured head and get the small
+      // real-eye features below instead.
       {
         const layout = FACE_LAYOUTS[def.key];
         if (layout) {
@@ -1045,6 +1081,18 @@ async function loadHumans() {
           const headScale = hasFaceHair ? 0.3 : 0.6;
           let fitScale = 1;
           group.traverse((o) => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
+          if (hasFaceHair) {
+            group.traverse((o) => {
+              if (o.isMesh && o.material && o.material.name === 'Face') paintFaceOnMesh(o, false);
+              if (o.isMesh && o.material && o.material.name === 'Skin') addSkinToneVariation(o);
+            });
+            const fistL = group.getObjectByName('FistL');
+            const fistR = group.getObjectByName('FistR');
+            if (fistL) fistL.scale.setScalar(FIST_SCALE);
+            if (fistR) fistR.scale.setScalar(FIST_SCALE);
+            addJointedFingers(fistL, fitScale * s, 1);
+            addJointedFingers(fistR, fitScale * s, -1);
+          }
           addFaceFeatures(headBone, headScale * s, layout, fitScale);
         }
       }
