@@ -3076,9 +3076,28 @@ function homeAnimate() {
   beginPlayerFrame(homeCamera, 1.7);
   const sp = 0.07;
   const mv = moveDelta(homeKeys, homeYaw, sp);
+  // Remember where the player stood before this step, so the bed
+  // keep-out below can put them back instead of letting them walk
+  // through the bed.
+  const prevPX = homeCamera.position.x, prevPZ = homeCamera.position.z;
   homeCamera.position.x += mv.dx; homeCamera.position.z += mv.dz;
   homeCamera.position.x = Math.max(homeBounds.x[0], Math.min(homeBounds.x[1], homeCamera.position.x));
   homeCamera.position.z = Math.max(homeBounds.z[0], Math.min(homeBounds.z[1], homeCamera.position.z));
+  // Bed keep-out: the bed is solid furniture, not a walk-through. If
+  // this step would carry the player into the bed's footprint (from
+  // outside it), put them back where they stood. Without this, walking
+  // backwards from the prologue stand-up spot (S from -2.9, -1.3)
+  // walks straight into the bed, and the camera behind the player
+  // ends up inside the bed and the screen goes brown. The footprint
+  // is the bed frame (w by 3 m) plus a small margin. A player who
+  // somehow starts inside it can still walk out.
+  if (currentBedPos) {
+    const bx0 = currentBedPos.x - currentBedPos.w / 2 - 0.15, bx1 = currentBedPos.x + currentBedPos.w / 2 + 0.15;
+    const bz0 = currentBedPos.z - 1.6, bz1 = currentBedPos.z + 1.6;
+    const nowIn = homeCamera.position.x > bx0 && homeCamera.position.x < bx1 && homeCamera.position.z > bz0 && homeCamera.position.z < bz1;
+    const wasIn = prevPX > bx0 && prevPX < bx1 && prevPZ > bz0 && prevPZ < bz1;
+    if (nowIn && !wasIn) { homeCamera.position.x = prevPX; homeCamera.position.z = prevPZ; }
+  }
   const moving = homeKeys['w'] || homeKeys['a'] || homeKeys['s'] || homeKeys['d'];
   homeCamera.position.y = 1.7 + (moving ? Math.sin(t * 5.2) * 0.03 : Math.sin(t * 0.8) * 0.008);
   homeCamera.rotation.order = 'YXZ';
@@ -3229,9 +3248,13 @@ function homeAnimate() {
     }
   }
   // Third-person: show the player avatar and put the camera behind it.
+  // The camera is clamped inside the room (homeBounds), so it can
+  // never be pushed through a wall when the player stands near one:
+  // without this, the 4 m camera ended up outside the room and the
+  // screen went brown (the prologue S-walk did exactly that).
   {
     const mv2 = moveDelta(homeKeys, homeYaw, 1);
-    applyPlayerPresence({ scene: homeScene, camera: homeCamera, x: homeCamera.position.x, z: homeCamera.position.z, yaw: homeYaw, pitch: homePitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: 1.7 });
+    applyPlayerPresence({ scene: homeScene, camera: homeCamera, x: homeCamera.position.x, z: homeCamera.position.z, yaw: homeYaw, pitch: homePitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: 1.7, camBounds: homeBounds });
   }
   renderer.render(homeScene, homeCamera);
 }

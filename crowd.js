@@ -44,8 +44,8 @@ const CROWD_DEFS = [
 // layouts put every feature on the back of the head. Walter (Sam) is
 // an Atlas male like Matt, so he uses the caleb layout.
 const CROWD_FACE_LAYOUTS = {
-  jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47 },
-  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.24, browY: 0.37, browZ: 0.25, flipZ: true },
+  jade: { cx: 0.001, eyeX: 0.155, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47 },
+  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.23, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.24, browY: 0.37, browZ: 0.25, flipZ: true },
   nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.26, noseY: 0.27, noseZ: 0.28, mouthY: 0.16, mouthZ: 0.28, browY: 0.43, browZ: 0.29, flipZ: true }
 };
 const CROWD_FACE_LAYOUT_BY_FILE = {
@@ -62,7 +62,7 @@ const CROWD_FACE_LAYOUT_BY_FILE = {
 // mouth is a bright red so it reads as lips.
 const _crowdFaceWhite = new THREE.MeshBasicMaterial({ color: 0xf5efe2 });
 const _crowdFaceDark = new THREE.MeshBasicMaterial({ color: 0x0d0603 });
-const _crowdFaceIris = new THREE.MeshBasicMaterial({ color: 0x5a3a1e });
+const _crowdFaceIris = new THREE.MeshBasicMaterial({ color: 0x8a5a28 });
 const _crowdFaceRing = new THREE.MeshBasicMaterial({ color: 0x1a0f06 });
 const _crowdFaceMouth = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
 const _crowdNoseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
@@ -81,39 +81,38 @@ function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex, fitScale) {
     const zs = layout.flipZ ? -1 : 1;
     const grp = new THREE.Group();
     for (const sx of [-1, 1]) {
-      // Real eye: a small white eyeball with a warm brown iris, a
-      // dark limbic ring, a black pupil and a catchlight, plus skin
-      // lids above and below so it reads as an almond slit, not a
-      // googly white ball with a black dot. The old eye was a big
-      // white sphere with a bare dark pupil sphere.
+      // Real eye: a white eyeball with a warm brown iris, a dark
+      // limbic ring, a black pupil and a catchlight, plus a skin lid
+      // above so it reads as an almond slit, not a googly white ball
+      // with a black dot. Round 3: the old 0.011 m iris was about
+      // 6 px at 3 m and read as a dark mark, so the eye is larger
+      // (0.019 m white, 0.0155 m bright brown iris, about 8 px) and
+      // the lid is a single thin skin strip just above the iris top.
+      // Same sizes as makeRealEye in player.js; keep them in step.
       const eye = new THREE.Group();
-      const white = new THREE.Mesh(new THREE.SphereGeometry(wf(0.016), 12, 10), _crowdFaceWhite);
+      const white = new THREE.Mesh(new THREE.SphereGeometry(wf(0.019), 12, 10), _crowdFaceWhite);
       white.userData.keepAlive = true;
       eye.add(white);
-      const ring = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0125), 16), _crowdFaceRing);
-      ring.position.z = wf(0.017);
+      const ring = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0165), 16), _crowdFaceRing);
+      ring.position.z = wf(0.0195);
       ring.userData.keepAlive = true;
       eye.add(ring);
-      const iris = new THREE.Mesh(new THREE.CircleGeometry(wf(0.011), 16), _crowdFaceIris);
-      iris.position.z = wf(0.018);
+      const iris = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0155), 16), _crowdFaceIris);
+      iris.position.z = wf(0.0205);
       iris.userData.keepAlive = true;
       eye.add(iris);
-      const pupil = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0055), 12), _crowdFaceDark);
-      pupil.position.z = wf(0.019);
+      const pupil = new THREE.Mesh(new THREE.CircleGeometry(wf(0.005), 12), _crowdFaceDark);
+      pupil.position.z = wf(0.0215);
       pupil.userData.keepAlive = true;
       eye.add(pupil);
-      const shine = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0018), 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-      shine.position.set(wf(0.003), wf(0.004), wf(0.0205));
+      const shine = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0028), 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      shine.position.set(wf(0.004), wf(0.005), wf(0.023));
       shine.userData.keepAlive = true;
       eye.add(shine);
-      const lidTop = new THREE.Mesh(new THREE.BoxGeometry(wf(0.034), wf(0.009), wf(0.004)), _crowdFaceLid);
-      lidTop.position.set(0, wf(0.013), wf(0.015));
+      const lidTop = new THREE.Mesh(new THREE.BoxGeometry(wf(0.040), wf(0.005), wf(0.004)), _crowdFaceLid);
+      lidTop.position.set(0, wf(0.016), wf(0.021));
       lidTop.userData.keepAlive = true;
       eye.add(lidTop);
-      const lidBottom = new THREE.Mesh(new THREE.BoxGeometry(wf(0.034), wf(0.006), wf(0.004)), _crowdFaceLid);
-      lidBottom.position.set(0, wf(-0.013), wf(0.015));
-      lidBottom.userData.keepAlive = true;
-      eye.add(lidBottom);
       eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, zs * layout.eyeZ);
       if (zs < 0) eye.rotation.y = Math.PI;
       eye.userData.keepAlive = true;

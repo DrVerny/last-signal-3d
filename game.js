@@ -821,7 +821,7 @@ const humanGroups = []; // THREE.Group per loaded character, for raycast clickin
 const modelGroups = {}; // key -> {group}
 const MODEL_DEFS = [
   { key: 'jade', file: 'models/rigged/jade-rigged.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.68 },
-  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: -0.4, targetHeight: 1.68, recolourNavy: true },
+  { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: Math.PI, targetHeight: 1.68, recolourNavy: true },
   { key: 'nurse', file: 'models/rigged/nurse-rigged.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.68 },
   { key: 'walter', file: 'models/walter.glb', name: 'walter', x: -1.18, z: 4.5, faceYaw: 0.6, targetHeight: null, hideBench: true }
 ];
@@ -865,9 +865,9 @@ function startIntro() {
 // Z values are the measured face surface at each height, so the
 // features sit just proud of it instead of buried in it.
 const FACE_LAYOUTS = {
-  jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.012, 0.010], eyePush: 0.008 },
-  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.24, browY: 0.33, browZ: 0.25, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.032, 0.010, 0.008], flipZ: true },
-  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.26, noseY: 0.27, noseZ: 0.28, mouthY: 0.16, mouthZ: 0.28, browY: 0.39, browZ: 0.29, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.032, 0.010, 0.008], flipZ: true }
+  jade: { cx: 0.001, eyeX: 0.155, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.040, 0.012, 0.010], eyePush: 0.008 },
+  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.23, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.24, browY: 0.33, browZ: 0.25, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.038, 0.010, 0.008], flipZ: true },
+  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.26, noseY: 0.27, noseZ: 0.28, mouthY: 0.16, mouthZ: 0.28, browY: 0.39, browZ: 0.29, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.038, 0.010, 0.008], flipZ: true }
 };
 async function loadHumans() {
   const loadingText = document.getElementById('loadingText');
@@ -1054,7 +1054,12 @@ async function loadHumans() {
           }
         } catch (e) { mixer = null; rootBone = null; rootRest = null; }
       }
-      humans.push({ group, name: def.name, baseScale: s, phase: Math.random() * 6, seated: def.key === 'walter', baseY: group.position.y, shadow: humanShadows[def.key] || null, walk: wr ? { minZ: wr.minZ, maxZ: wr.maxZ, speed: wr.speed, dir: Math.random() < 0.5 ? 1 : -1, stepPhase: Math.random() * 6 } : null, mixer, rootBone, rootRest });
+      // Caleb always starts walking south (dir +1), toward the player
+      // spawn at z 4: his patrol faces the direction he walks, so a
+      // random start left him with his back to the camera half the
+      // time and his face could not be seen front-on at spawn. The
+      // others keep a random start direction.
+      humans.push({ group, name: def.name, baseScale: s, phase: Math.random() * 6, seated: def.key === 'walter', baseY: group.position.y, shadow: humanShadows[def.key] || null, walk: wr ? { minZ: wr.minZ, maxZ: wr.maxZ, speed: wr.speed, dir: def.key === 'caleb' ? 1 : (Math.random() < 0.5 ? 1 : -1), stepPhase: Math.random() * 6 } : null, mixer, rootBone, rootRest });
       humanGroups.push(group);
       modelGroups[def.key] = { group };
     } catch (e) {
@@ -1213,6 +1218,16 @@ canvas.addEventListener('pointercancel', endDrag);
 addEventListener('pointerup', endDrag);
 addEventListener('blur', endDrag);
 // Reset view: restores the default camera position and look direction.
+// Train interior camera bounds and distance. The car is 3.0 m wide
+// (x +/-1.05) and 14 m long (z +/-7) with an arched roof (walls to
+// y 1.9, apex 3.15, about 2.69 m at the wall). The old 4 m camera rode
+// at y 2.72 and 4 m behind the player with no clamp, so it clipped
+// through the roof and walls, and Reset/R/C/V could not recover the
+// interior view because the next frame put the camera straight back
+// outside. At 2.2 m the camera rides at y 2.22, below the arch at
+// every x, and the bounds keep it inside the car.
+const TRAIN_CAM_BOUNDS = { x: [-1.05, 1.05], z: [-7, 7] };
+const TRAIN_CAM_DIST = 2.2;
 const DEFAULT_VIEW = { x: 0, y: 1.6, z: 4, yaw: 0.23, pitch: 0 };
 function resetView() {
   if (!actActive) return;
@@ -1398,10 +1413,13 @@ function animate() {
   soundTick(dt, { moving, heartbeatBpm: hb });
   updateTrainRun(dt); // Act I dodge run, no-op when inactive
   // Third-person: show the player avatar and put the camera behind it.
-  // Skipped in the exterior orbit view, which has its own camera.
+  // Skipped in the exterior orbit view, which has its own camera. The
+  // camera is clamped inside the car at 2.2 m (TRAIN_CAM_BOUNDS /
+  // TRAIN_CAM_DIST above), so it can never clip through the roof or
+  // walls, and Reset/R/C/V always land back inside.
   if (!exteriorView) {
     const mv2 = moveDelta(keys, state.yaw, 1);
-    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: 1.6 });
+    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: 1.6, camBounds: TRAIN_CAM_BOUNDS, camDist: TRAIN_CAM_DIST });
   }
   renderer.render(scene, camera);
 }

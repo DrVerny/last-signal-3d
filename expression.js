@@ -69,13 +69,13 @@ export function emotionForLine(text) {
 // the neck and the models' proportions differ. The eyes sit about
 // 6.4 cm apart; the brows and lids are sized to read at play distance.
 const EYE_HALF_SEP = 0.032;
-const BROW_LEN = 0.055;
-const BROW_R = 0.008;
+const BROW_LEN = 0.042;
+const BROW_R = 0.006;
 const LID_W = 0.034;
-const LID_H = 0.005;
+const LID_H = 0.004;
 const LID_TRAVEL = 0.014; // how far the lid drops from wide open to narrowed
-const BROW_COLOUR = 0x20140e;
-const LID_COLOUR = 0x140f0c;
+const BROW_COLOUR = 0x3a2010;
+const LID_COLOUR = 0x8a5a3a;
 
 // Smoothstep, same shape as the one in lipsync.js.
 function smoothstep(a, b, x) {
@@ -392,9 +392,12 @@ function makeRig(parent, worldPos, worldQuat, worldScale) {
 }
 
 function browMesh() {
+  // Unlit dark brown, the same tone as the static brows in
+  // addFaceFeatures: the old near-black lit standard material went
+  // black in the dim train and, at 0.055 m long, read as a dark bar.
   const m = new THREE.Mesh(
     new THREE.CapsuleGeometry(BROW_R, BROW_LEN - BROW_R * 2, 4, 10),
-    new THREE.MeshStandardMaterial({ color: BROW_COLOUR, roughness: 0.95 })
+    new THREE.MeshBasicMaterial({ color: BROW_COLOUR })
   );
   m.rotation.z = Math.PI / 2; // long axis along X
   m.scale.z = 0.55; // flatten front to back
@@ -403,9 +406,13 @@ function browMesh() {
 }
 
 function lidMesh() {
+  // Skin-toned and unlit: the old near-black lit lid was a 0.034 m
+  // dark bar across the upper half of the iris, in front of the
+  // eyeball, and it read as sunglasses. A skin lid above the eye
+  // reads as an eyelid, and unlit it never goes black in dim light.
   const m = new THREE.Mesh(
     new THREE.BoxGeometry(LID_W, LID_H, 0.006),
-    new THREE.MeshStandardMaterial({ color: LID_COLOUR, roughness: 0.9 })
+    new THREE.MeshBasicMaterial({ color: LID_COLOUR })
   );
   m.castShadow = false;
   return m;
@@ -451,18 +458,22 @@ function buildFaceControls(group, name) {
       // eyeball. The eyeball centre sits behind the face surface by
       // a different amount per model (Jade 0.004 m, Caleb 0.011 m,
       // Nurse 0.008 m in world), so the lid offset is per character:
-      // eyeball radius 0.0225 minus that depth plus 0.002 in front
+      // eyeball radius 0.019 minus that depth plus 0.002 in front
       // of the eyeball front. Divided by the group scale because
-      // these points are in group-local space. The lid rests at the
-      // top edge of the eye (eyeY + 0.006), not at the eye centre,
-      // so it reads as an upper lid.
+      // these points are in group-local space. The lid rests just
+      // above the iris top (0.020 m world above the eye centre,
+      // the iris top is 0.0155 m), not across the middle of the eye:
+      // the old rest at eyeY + 0.006 put a near-black bar across the
+      // upper half of the iris and read as sunglasses. Narrowing
+      // still drops it onto the iris top (LID_TRAVEL 0.014 m), and
+      // widening still lifts it clear.
       const off = 0.004 * fm.forwardSign;
       const gs = group.scale.x || 1;
-      const LID_WORLD_OFF = { jade: 0.021, caleb: 0.013, nurse: 0.017 };
-      const lidOff = ((LID_WORLD_OFF[name] || 0.021) / gs) * fm.forwardSign;
+      const LID_WORLD_OFF = { jade: 0.017, caleb: 0.010, nurse: 0.013 };
+      const lidOff = ((LID_WORLD_OFF[name] || 0.017) / gs) * fm.forwardSign;
       const mouthWorld = group.localToWorld(new THREE.Vector3(fm.faceCentreX, fm.mouthY, fm.mouthZ));
       const browCentre = group.localToWorld(new THREE.Vector3(fm.faceCentreX, browY, fm.browZ + off));
-      const lidCentre = group.localToWorld(new THREE.Vector3(fm.faceCentreX, eyeY + 0.006, fm.eyeZ + lidOff));
+      const lidCentre = group.localToWorld(new THREE.Vector3(fm.faceCentreX, eyeY + 0.020 / gs, fm.eyeZ + lidOff));
       const brows = [];
       const lids = [];
       for (const side of [-1, 1]) {

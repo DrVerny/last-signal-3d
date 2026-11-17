@@ -357,49 +357,55 @@ export function paintFaceOnMesh(faceMesh, paintBrows) {
 // the back of the head, which is why Caleb's face read blank live.
 // Real eyes: a small white eyeball, a warm brown iris disc with a
 // darker limbic ring and a black pupil and a catchlight, and
-// skin-coloured upper and lower lids that leave an almond slit. The
-// old eye was a big white sphere with a bare pupil dot, which read
-// as a googly oval; the smaller white and the lids kill that look.
-// The iris, ring, pupil and shine sit 1-4.5 mm proud of the white
-// sphere's front, so they read as painted on the eyeball instead of
-// floating in front of it. (eyePush is kept for API compatibility
-// and ignored: the eye group position already puts the eyeball
-// proud of the face surface, so pushing the discs further forward
-// would only float them off the sphere.)
+// skin-coloured upper lid that leaves an almond slit. The old eye
+// was a small white sphere with a tiny dark iris (0.011 m, about 6 px
+// at 3 m, its brown annulus barely 1.4 px), so it read as a black dot
+// or a dark lash mark and no brown iris was visible live at 2-4 m.
+// This eye is substantially larger: a 0.019 m white eyeball (about
+// 10 px at 3 m), a 0.0155 m bright brown iris (about 8 px, its brown
+// annulus about 2.7 px), a thin dark limbic ring, a small pupil and a
+// bigger catchlight. The iris, ring, pupil and shine sit 1.5-4 mm
+// proud of the white sphere's front, so they read as painted on the
+// eyeball instead of floating in front of it. The single skin lid
+// sits just above the iris top (eye centre + 0.016 m) and just in
+// front of the iris disc, so it cuts the top of the white into an
+// almond slit without covering the brown. (eyePush is kept for API
+// compatibility and ignored: the eye group position already puts the
+// eyeball proud of the face surface, so pushing the discs further
+// forward would only float them off the sphere.)
 export function makeRealEye(w, eyePush) {
   const g = new THREE.Group();
   const whiteMat = new THREE.MeshBasicMaterial({ color: 0xf5efe2 });
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.016), 12, 10), whiteMat);
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.019), 12, 10), whiteMat);
   eye.userData.keepAlive = true;
   g.add(eye);
-  const ring = new THREE.Mesh(new THREE.CircleGeometry(w(0.0125), 16), new THREE.MeshBasicMaterial({ color: 0x1a0f06 }));
-  ring.position.z = w(0.017);
+  const ring = new THREE.Mesh(new THREE.CircleGeometry(w(0.0165), 16), new THREE.MeshBasicMaterial({ color: 0x1a0f06 }));
+  ring.position.z = w(0.0195);
   ring.userData.keepAlive = true;
   g.add(ring);
-  const iris = new THREE.Mesh(new THREE.CircleGeometry(w(0.011), 16), new THREE.MeshBasicMaterial({ color: 0x5a3a1e }));
-  iris.position.z = w(0.018);
+  const iris = new THREE.Mesh(new THREE.CircleGeometry(w(0.0155), 16), new THREE.MeshBasicMaterial({ color: 0x8a5a28 }));
+  iris.position.z = w(0.0205);
   iris.userData.keepAlive = true;
   g.add(iris);
-  const pupil = new THREE.Mesh(new THREE.CircleGeometry(w(0.0055), 12), new THREE.MeshBasicMaterial({ color: 0x0d0603 }));
-  pupil.position.z = w(0.019);
+  const pupil = new THREE.Mesh(new THREE.CircleGeometry(w(0.005), 12), new THREE.MeshBasicMaterial({ color: 0x0d0603 }));
+  pupil.position.z = w(0.0215);
   pupil.userData.keepAlive = true;
   g.add(pupil);
-  const shine = new THREE.Mesh(new THREE.CircleGeometry(w(0.0018), 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  shine.position.set(w(0.003), w(0.004), w(0.0205));
+  const shine = new THREE.Mesh(new THREE.CircleGeometry(w(0.0028), 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  shine.position.set(w(0.004), w(0.005), w(0.023));
   shine.userData.keepAlive = true;
   g.add(shine);
-  // Skin lids above and below the eyeball: they cover the top and
-  // bottom of the white sphere so the eye reads as an almond slit,
-  // not a round googly ball.
+  // Skin lid above the eyeball: it covers the top of the white sphere
+  // so the eye reads as an almond slit, not a round googly ball. It
+  // sits just above the iris top and just in front of the iris disc,
+  // so it trims the top sliver of the brown without covering it. There
+  // is no bottom lid: it added nothing at play distance and doubled
+  // the skin bar across the eye.
   const lidMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
-  const lidTop = new THREE.Mesh(new THREE.BoxGeometry(w(0.034), w(0.009), w(0.004)), lidMat);
-  lidTop.position.set(0, w(0.013), w(0.015));
+  const lidTop = new THREE.Mesh(new THREE.BoxGeometry(w(0.040), w(0.005), w(0.004)), lidMat);
+  lidTop.position.set(0, w(0.016), w(0.021));
   lidTop.userData.keepAlive = true;
   g.add(lidTop);
-  const lidBottom = new THREE.Mesh(new THREE.BoxGeometry(w(0.034), w(0.006), w(0.004)), lidMat);
-  lidBottom.position.set(0, w(-0.013), w(0.015));
-  lidBottom.userData.keepAlive = true;
-  g.add(lidBottom);
   g.traverse(o => { o.userData.keepAlive = true; });
   return g;
 }
@@ -466,7 +472,7 @@ export function addFaceFeatures(headBone, totalScale, layout, fitScale) {
 // Jade, so the same Head-local positions fit. eyeZ/noseZ/mouthZ/browZ
 // are the measured front of the Face plate (plate front Z 0.505 in
 // Head-local space).
-export const PLAYER_FACE_LAYOUT = { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.012, 0.010], eyePush: 0.008 };
+export const PLAYER_FACE_LAYOUT = { cx: 0.001, eyeX: 0.155, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.040, 0.012, 0.010], eyePush: 0.008 };
 // Skin tonal variation: a per-vertex colour attribute on the Skin
 // geometry, so the unlit skin does not read as flat plastic. Colours
 // are multipliers on the material colour (forehead lighter, cheeks
@@ -513,29 +519,36 @@ export function addSkinToneVariation(skinMesh) {
 // the Head scale track in loadPlayerRig.
 export const FIST_SCALE = 0.75;
 // One finger pointing along +Y from the origin: a proximal capsule, a
-// knuckle, a distal capsule bent slightly forward, and a pale nail near
-// the tip. Lengths are world metres; w converts them to the Fist
-// bone's local units. The knuckle is a large sphere so the joint reads
-// at 2-4 m, and the distal segment starts a little past the knuckle
-// so there is a visible gap at the joint instead of one solid paddle.
+// knuckle, a distal capsule bent slightly forward, and a nail near the
+// tip. Lengths are world metres; w converts them to the Fist bone's
+// local units. The knuckle is a large sphere so the joint reads at
+// 2-4 m, and the distal segment starts a little past the knuckle so
+// there is a visible gap at the joint instead of one solid paddle.
 // The nail sits on the Fist-local -Z side: measured live, the nail on
-// +Z read as palm-side, so the back of the hand is -Z here.
+// +Z read as palm-side, so the back of the hand is -Z here. The
+// finger group is turned PI about Y by addJointedFingers, so the
+// dorsal side (and the nail) faces forward in the Idle pose, where
+// the palms face the camera and the nails would otherwise face away.
+// That turn mirrors the curl too, so the distal bend is -0.28 here:
+// after the PI turn it curls toward the palm (+Z) exactly as before.
+// The nail is large (0.016 x 0.018 m) so it reads as a nail plate
+// from the front at 2-4 m, not a pale fingertip tip.
 function makeFinger(w, mat, nailMat, proxLen, distLen, radius) {
   const g = new THREE.Group();
   const prox = new THREE.Mesh(new THREE.CapsuleGeometry(w(radius), w(Math.max(0.001, proxLen - radius * 2)), 4, 10), mat);
   prox.position.y = w(proxLen / 2);
   g.add(prox);
-  const knuckle = new THREE.Mesh(new THREE.SphereGeometry(w(radius * 1.5), 10, 8), mat);
+  const knuckle = new THREE.Mesh(new THREE.SphereGeometry(w(radius * 1.8), 10, 8), mat);
   knuckle.position.y = w(proxLen);
   knuckle.scale.set(1.15, 0.85, 1.15);
   g.add(knuckle);
   const dist = new THREE.Group();
   dist.position.y = w(proxLen + 0.004);
-  dist.rotation.x = 0.28; // slight natural curl forward
+  dist.rotation.x = -0.28; // slight natural curl toward the palm once the group is turned PI about Y
   const distMesh = new THREE.Mesh(new THREE.CapsuleGeometry(w(radius * 0.92), w(Math.max(0.001, distLen - radius * 1.84)), 4, 10), mat);
   distMesh.position.y = w(distLen / 2);
   dist.add(distMesh);
-  const nail = new THREE.Mesh(new THREE.BoxGeometry(w(0.011), w(0.013), w(0.0025)), nailMat);
+  const nail = new THREE.Mesh(new THREE.BoxGeometry(w(0.016), w(0.018), w(0.003)), nailMat);
   nail.position.set(0, w(distLen * 0.62), w(-radius * 0.95));
   dist.add(nail);
   g.add(dist);
@@ -578,12 +591,25 @@ export function addJointedFingers(fistBone, boneScale, thumbSign) {
     for (const d of defs) {
       const f = makeFinger(w, fingerMat, nailMat, 0.047, d.dist, 0.008);
       f.position.set(0.0075 + w(thumbSign * d.dx), 0.20, 0.05);
+      // Turn the finger PI about its own Y (the finger's long axis):
+      // the dorsal side, where the nail sits, then faces forward in
+      // the Idle pose instead of away from the camera. The turn is
+      // about the finger's own axis, so the finger still points down
+      // and the knuckle stays put; the curl sign inside makeFinger
+      // is already mirrored to match. This is a plain Group, not a
+      // bone, so the Walk/Idle clips (which only track the Fist
+      // bones) never overwrite it.
+      f.rotation.y = Math.PI;
       grp.add(f);
     }
     const thumb = makeFinger(w, fingerMat, nailMat, 0.030, 0.035, 0.0085);
     thumb.position.set(0.0075 + w(thumbSign * 0.05), 0.16, 0.06);
-    thumb.rotation.z = -thumbSign * 0.55;
-    thumb.rotation.x = -0.35;
+    // Same dorsal turn for the thumb, composed as R = R_x * R_z *
+    // R_y (order XZY) so the thumb keeps its world tilt and curl and
+    // only its front and back swap: a plain XYZ Euler would flip the
+    // tilt sign instead. The thumb's own x/z numbers are unchanged.
+    thumb.rotation.order = 'XZY';
+    thumb.rotation.set(-0.35, Math.PI, -thumbSign * 0.55);
     grp.add(thumb);
     grp.userData.keepAlive = true;
     fistBone.add(grp);
@@ -791,14 +817,16 @@ async function loadPlayerRig() {
     // live; this one is mid-grey at half strength, so the weave shows
     // without the shoe reading grey. The ExtrudeGeometry UVs are
     // arbitrary, so the repeat is kept coarse (2x1) to avoid moire.
+    // Round 3: the old lines were about 1 px at 3 m and too faint to
+    // read from the front, so they are darker and thicker now.
     const weave = document.createElement('canvas');
     weave.width = weave.height = 64;
     {
       const wc = weave.getContext('2d');
       wc.fillStyle = '#f4f4f4';
       wc.fillRect(0, 0, 64, 64);
-      wc.strokeStyle = 'rgba(110,110,110,0.55)';
-      wc.lineWidth = 1.6;
+      wc.strokeStyle = 'rgba(80,80,80,0.8)';
+      wc.lineWidth = 2.2;
       for (let i = -64; i <= 64; i += 8) {
         wc.beginPath(); wc.moveTo(i, 0); wc.lineTo(i + 64, 64); wc.stroke();
         wc.beginPath(); wc.moveTo(i + 64, 0); wc.lineTo(i, 64); wc.stroke();
@@ -809,7 +837,12 @@ async function loadPlayerRig() {
     weaveTex.repeat.set(2, 1);
     if (THREE.SRGBColorSpace) weaveTex.colorSpace = THREE.SRGBColorSpace;
     const shoeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, map: weaveTex });
-    const soleMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
+    // Unlit dark, so the sole and midsole read dark from the front even
+    // in the dim train and mansion: the old lit standard material went
+    // near-black in shadow and near-white under a lamp, and the band
+    // vanished against the white upper.
+    const soleMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+    const bandMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
     // Running-shoe upper: an extruded side profile (low tapered toe,
     // higher heel, dipped ankle opening), not a plain box, so it reads
     // as a real running shoe. The profile is drawn in XY (X = length,
@@ -837,7 +870,7 @@ async function loadPlayerRig() {
     const shoeGeo = new THREE.ExtrudeGeometry(shoeProfile, { depth: 0.28, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.01, bevelSegments: 2, steps: 1 });
     shoeGeo.rotateY(-Math.PI / 2);
     shoeGeo.translate(0.14, -0.06, 0);
-    const laceMat = new THREE.MeshBasicMaterial({ color: 0x4a4a4a });
+    const laceMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
     for (const boneName of ['FootL', 'FootR']) {
       const foot = bones.get(boneName);
       if (!foot) continue;
@@ -868,20 +901,21 @@ async function loadPlayerRig() {
       // above the upper instead of buried inside it: at Z 0.10 the
       // profile top is 0.108, at 0.05 and 0.00 it is 0.117, at -0.05
       // it is 0.121. The instep slopes down toward the toe, so the
-      // strips tilt with it (rotation.x 0.25). The laces are dark grey
-      // and crossed: each strip is rotated alternately around Y so it
+      // strips tilt with it (rotation.x 0.25). The laces are dark and
+      // crossed: each strip is rotated alternately around Y so it
       // runs diagonally across the instep, zigzagging like real
-      // laces, and they are thick enough (0.010) to read at 2-4 m.
-      // The old near-white flat strips were invisible against the
-      // white upper. (Rotation is around Y, not Z: a Z rotation
-      // would tilt the strip up and down and bury one end in the
-      // shoe; a Y rotation keeps it flat on the instep while making
-      // the diagonal.)
+      // laces. Round 3: the old 0.010 thick dark-grey strips were
+      // about 2 px at 3 m and foreshortened to nothing from a
+      // straight front view, so they are thicker (0.016), wider,
+      // darker and raised a little further off the upper.
+      // (Rotation is around Y, not Z: a Z rotation would tilt the
+      // strip up and down and bury one end in the shoe; a Y rotation
+      // keeps it flat on the instep while making the diagonal.)
       const laceZ = [0.10, 0.05, 0.00, -0.05];
       const laceY = [0.123, 0.132, 0.132, 0.136];
       for (let i = 0; i < laceZ.length; i++) {
-        const lace = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.010, 0.020), laceMat);
-        lace.position.set(0, laceY[i] + 0.004, laceZ[i]);
+        const lace = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.016, 0.028), laceMat);
+        lace.position.set(0, laceY[i] + 0.008, laceZ[i]);
         lace.rotation.x = 0.25;
         lace.rotation.y = (i % 2 === 0 ? 1 : -1) * 0.4;
         inner.add(lace);
@@ -894,13 +928,18 @@ async function loadPlayerRig() {
       // real sole sits with its bottom at world y 0.032, under the
       // indoor floor top (0.10), so it is invisible from the front
       // indoors; only the white upper shows. This band is a separate
-      // dark strip at the bottom of the visible shoe (world y 0.100
-      // to 0.124), slightly wider and longer than the upper, so the
-      // shoe reads as having a dark sole from the front as well as
-      // the side. It does not move the sole or the bind height, so
-      // the shoe still sits on the floor exactly as before.
-      const midsole = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.03, 0.60), soleMat);
-      midsole.position.y = 0.013;
+      // dark strip at the bottom of the visible shoe (world y about
+      // 0.098 to 0.138), so the shoe reads as having a dark sole
+      // from the front as well as the side. Round 3: the old band
+      // (0.34 x 0.03 x 0.60) stuck out only 0.012 m and ended flush
+      // with the white toe cap, so from the front it read as part of
+      // the white shoe. This one is wider, taller and longer than
+      // the upper and the toe cap, so it protrudes about 0.03 m at
+      // the sides and 0.027 m past the toe cap and wraps the base as
+      // a dark band. It does not move the sole or the bind height,
+      // so the shoe still sits on the floor exactly as before.
+      const midsole = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.05, 0.68), bandMat);
+      midsole.position.y = 0.020;
       midsole.castShadow = true;
       inner.add(midsole);
       const bindPos = SNEAKER_BIND_POS[boneName];
@@ -1113,10 +1152,15 @@ export function beginPlayerFrame(camera, eyeY) {
 // Places the avatar at the player's ground position, faces it toward the
 // movement (or the camera yaw when still), and - in third-person - puts
 // the camera behind and above the avatar instead of at the eyes.
-// o: { scene, camera, x, z, yaw, pitch, moving, moveDx, moveDz, dt, t, eyeY }
+// o: { scene, camera, x, z, yaw, pitch, moving, moveDx, moveDz, dt, t, eyeY, camBounds, camDist }
 // The act still owns movement and bounds; this only positions the avatar
 // and overrides the camera in third-person. Returns true when the camera
 // was overridden (third-person), false in first-person.
+// camBounds clamps the camera inside the room the player walks in, so a
+// fixed distance never pushes it through a wall. camDist overrides the
+// camera distance (default zoomDist 4 m): a tight space like the train
+// car needs a short distance, or the camera rides up into the roof arch.
+// Both are optional; callers that pass neither get the old behaviour.
 export function applyPlayerPresence(o) {
   if (!o || !o.scene || !o.camera) return false;
   const a = getAvatar();
@@ -1143,7 +1187,9 @@ export function applyPlayerPresence(o) {
   updateAvatarWalk(o.moving, o.dt || 0.016);
   // Third-person camera: behind the avatar relative to the look yaw, and
   // above it. Forward is (-sin yaw, -cos yaw), so behind is the opposite.
-  const dist = zoomDist;
+  // camDist shortens the distance in tight spaces (the train car); the
+  // default 4 m would put the camera through the roof arch there.
+  const dist = o.camDist || zoomDist;
   const bx = Math.sin(o.yaw), bz = Math.cos(o.yaw);
   let camX = o.x + bx * dist;
   let camZ = o.z + bz * dist;
