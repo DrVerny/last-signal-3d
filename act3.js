@@ -9,7 +9,7 @@ import { initSoundUI, setAmbient, setTension, soundTick, sfxDoor, sfxBoom, sfxGa
 import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing } from './action.js';
 import { grantPayout } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos } from './player.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -250,6 +250,10 @@ function resetView() {
   camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
   state.yaw = v.yaw; state.pitch = 0; camBounds = v;
   camY = v.pos[1]; // the chapter view carries its own height (ch. 3 is raised so the road reads)
+  // Keep the stored player position in step, or the next frame's
+  // beginPlayerFrame teleports the camera back to the old spot and
+  // undoes the reset.
+  try { setPlayerPos(v.pos[0], v.pos[2]); } catch (e) { /* ignore */ }
 }
 document.getElementById('resetViewBtn').onclick = resetView;
 canvas.style.touchAction = 'none';

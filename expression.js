@@ -206,22 +206,23 @@ function measureFace(group, headBone) {
         }
       }
       if (!headVerts.length) return null;
-      // The face is on the +Z side of the head. That is the GLTF
-      // convention, and the Face mesh proves it for this model family,
-      // so it is not derived from a distance: the hair makes the back
-      // of the head stick out further from the Head bone than the nose
-      // does, so a distance comparison flips the face to the back.
-      // The front is the most forward point at nose height: the hair
-      // does not reach the nose height in front, so the nose band
-      // gives the face front even when the hair is in the head region.
-      forwardSign = 1;
+      // The face side is a property of the model family, measured from
+      // the GLB in Node: the Casual models (player, Jade) face +Z, the
+      // Atlas models (Caleb, Nurse) face -Z - their nose tip is on the
+      // -Z side (Caleb Head-local z -0.256, Nurse -0.266, back of the
+      // head +0.18). A distance test cannot tell them apart: the hair
+      // makes the back of the head stick out further from the Head
+      // bone than the nose does, so it flips the face to the back.
+      // The group name is the model key for the speaking characters.
+      forwardSign = (group.name === 'caleb' || group.name === 'nurse') ? -1 : 1;
       const noseY = headTop - 0.83 * headH;
-      let hFront = -Infinity;
+      let hFront = forwardSign > 0 ? -Infinity : Infinity;
       for (let i = 0; i < headVerts.length; i += 3) {
         if (Math.abs(headVerts[i + 1] - noseY) > 0.05) continue;
-        if (headVerts[i + 2] > hFront) hFront = headVerts[i + 2];
+        if (forwardSign > 0) { if (headVerts[i + 2] > hFront) hFront = headVerts[i + 2]; }
+        else if (headVerts[i + 2] < hFront) hFront = headVerts[i + 2];
       }
-      if (hFront === -Infinity) return null;
+      if (hFront === -Infinity || hFront === Infinity) return null;
       // Front slice: the most forward vertices, within 10 cm of the
       // front. Its height range is the face, chin to brow. The nose
       // sticks out about 5 cm in front of the lips and chin, so a

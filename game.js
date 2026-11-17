@@ -10,7 +10,7 @@ import { initFlashlight, toggleFlashlight, updateFlashlight } from './flashlight
 import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker } from './action.js';
 import { grantPayout } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, paintFaceOnMesh, addSkinToneVariation, addJointedFingers, FIST_SCALE } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, paintFaceOnMesh, addSkinToneVariation, addJointedFingers, addFaceFeatures, FIST_SCALE } from './player.js';
 // THE LAST SIGNAL - Act I: The 4 Train - 3D prototype
 // Original short dialogue in the spirit of the script; no long verbatim copying.
 // Sealed choice: hidden until reveal. In demo mode it is simulated locally;
@@ -853,101 +853,22 @@ function startIntro() {
 // does not read from the front, and the Atlas models have no Face mesh
 // at all, so the face looks blank. These sit on the face surface and
 // move with the Head bone. Positions are in Head-bone local space,
-// measured from the head geometry with invBind. Sizes are given in world
-// metres and divided by totalScale (Head bone scale x rig scale) because
-// a Head-bone child is shrunk by both. Layouts: jade uses the Casual
-// Face mesh (centred X 0, Y 0.463, front Z 0.505); caleb and nurse use
-// the Atlas head bounds (front Z 0.237 and 0.303).
+// measured from the head geometry in Node. Sizes are given in world
+// metres and divided by totalScale (Head bone scale x rig scale)
+// because a Head-bone child is shrunk by both. Layouts: jade uses the
+// Casual Face mesh (centred X 0, Y 0.463, front Z 0.505); caleb and
+// nurse use the Atlas head bounds, and flipZ mirrors them onto the
+// -Z side of the Head bone: measured in Node, the Atlas models face
+// -Z in their own space (Caleb nose tip Head-local z -0.256, Nurse
+// -0.266, back of the head +0.18), so the old +Z layouts put every
+// feature on the back of the head and the face read blank live. The
+// Z values are the measured face surface at each height, so the
+// features sit just proud of it instead of buried in it.
 const FACE_LAYOUTS = {
   jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.54, browZ: 0.47, nose: [0.022, 0.020, 0.020], mouth: [0.045, 0.008, 0.012], brow: [0.034, 0.012, 0.010], eyePush: 0.008 },
-  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.33, browZ: 0.23, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.032, 0.010, 0.008] },
-  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.39, browZ: 0.30, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.032, 0.010, 0.008] }
+  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.24, browY: 0.33, browZ: 0.25, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.032, 0.010, 0.008], flipZ: true },
+  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.26, noseY: 0.27, noseZ: 0.28, mouthY: 0.16, mouthZ: 0.28, browY: 0.39, browZ: 0.29, eyePush: 0.008, nose: [0.020, 0.018, 0.018], mouth: [0.040, 0.007, 0.010], brow: [0.032, 0.010, 0.008], flipZ: true }
 };
-// Real eyes: a white eyeball, a brown iris disc with a dark pupil and a
-// bright catchlight in front of it, and a thin upper lid line. The old
-// eye was a white sphere with a single bare pupil dot, which read as a
-// googly oval. The iris disc is a flat circle at the front of the
-// eyeball, not a second sphere, so the eye reads as an iris from the
-// front and does not poke out of the face. The iris material is
-// MeshBasicMaterial so the eyes stay bright in the dim mansion.
-function makeRealEye(w, eyePush) {
-  const g = new THREE.Group();
-  const whiteMat = new THREE.MeshBasicMaterial({ color: 0xf5efe2 });
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), whiteMat);
-  eye.userData.keepAlive = true;
-  g.add(eye);
-  const iris = new THREE.Mesh(new THREE.CircleGeometry(w(0.010), 16), new THREE.MeshBasicMaterial({ color: 0x3a2412 }));
-  iris.position.z = w(0.0225 + 0.0015 + (eyePush || 0));
-  iris.userData.keepAlive = true;
-  g.add(iris);
-  const pupil = new THREE.Mesh(new THREE.CircleGeometry(w(0.0055), 12), new THREE.MeshBasicMaterial({ color: 0x0d0603 }));
-  pupil.position.z = w(0.0225 + 0.003 + (eyePush || 0));
-  pupil.userData.keepAlive = true;
-  g.add(pupil);
-  const shine = new THREE.Mesh(new THREE.CircleGeometry(w(0.0018), 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  shine.position.set(w(0.003), w(0.004), w(0.0225 + 0.0045 + (eyePush || 0)));
-  shine.userData.keepAlive = true;
-  g.add(shine);
-  const lid = new THREE.Mesh(new THREE.BoxGeometry(w(0.030), w(0.003), w(0.002)), new THREE.MeshBasicMaterial({ color: 0x20140e }));
-  lid.position.set(0, w(0.020), w(0.018 + (eyePush || 0)));
-  lid.userData.keepAlive = true;
-  g.add(lid);
-  g.traverse(o => { o.userData.keepAlive = true; });
-  return g;
-}
-function addFaceFeatures(headBone, totalScale, layout, fitScale) {
-  if (!headBone || !totalScale || totalScale <= 0 || !layout) return;
-  try {
-    const w = (worldSize) => worldSize / totalScale;
-    // The Head bone sits under the __fit node, so a Head child's true
-    // world scale is totalScale times fitScale (0.591 for Casual
-    // models, 0.89 for Atlas). The eyes keep the plain w() converter:
-    // at that scale they already read clearly live, and the designed
-    // 0.045 m eyeballs would overlap at the measured eye spacing. The
-    // nose, mouth and eyebrows use the corrected wf() converter so
-    // they render at their true world size instead of 0.59-0.89 of it.
-    const wf = (worldSize) => worldSize / (totalScale * (fitScale || 1));
-    // Feature sizes come from the layout so each model type can fit
-    // its own face: the Casual face is only about 0.11 m wide and
-    // 0.05 m tall in world, so the old nose (0.09 tall) was twice the
-    // face height and the old mouth (0.12 wide) was wider than the
-    // face, and the wide red mouth flanking the huge nose read as two
-    // red blocks at eye level. The small sizes below fit the Casual
-    // face (Jade); the Atlas layouts (Caleb, Nurse) carry the same
-    // small sizes now instead of the old defaults, which were the
-    // same red-block sizes.
-    const noseS = layout.nose || [0.020, 0.018, 0.018];
-    const mouthS = layout.mouth || [0.040, 0.007, 0.010];
-    const browS = layout.brow || [0.032, 0.010, 0.008];
-    const eyePush = layout.eyePush || 0;
-    // The nose, mouth and eyebrows are small, skin-coloured and use
-    // bright unlit materials so they read in the dim mansion. The nose
-    // and the fingers use the player's own skin tone so they blend.
-    const noseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
-    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
-    const browMat = new THREE.MeshBasicMaterial({ color: 0x3a2010 });
-    const grp = new THREE.Group();
-    for (const sx of [-1, 1]) {
-      const eye = makeRealEye(w, eyePush);
-      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ);
-      grp.add(eye);
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(browS[0]), wf(browS[1]), wf(browS[2])), browMat);
-      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ + wf(0.006));
-      brow.userData.keepAlive = true;
-      grp.add(brow);
-    }
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(wf(noseS[0]), wf(noseS[1]), wf(noseS[2])), noseMat);
-    nose.position.set(layout.cx, layout.noseY, layout.noseZ + wf(0.01));
-    nose.userData.keepAlive = true;
-    grp.add(nose);
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(mouthS[0]), wf(mouthS[1]), wf(mouthS[2])), mouthMat);
-    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ + wf(0.008));
-    mouth.userData.keepAlive = true;
-    grp.add(mouth);
-    grp.userData.keepAlive = true;
-    headBone.add(grp);
-  } catch (e) { /* face features are cosmetic; never break the load */ }
-}
 async function loadHumans() {
   const loadingText = document.getElementById('loadingText');
   const loadingError = document.getElementById('loadingError');
@@ -1298,6 +1219,10 @@ function resetView() {
   if (exteriorView) { exteriorView = false; const btn = document.getElementById('exteriorBtn'); if (btn) btn.textContent = 'Exterior'; setExteriorViewRestore(); }
   camera.position.set(DEFAULT_VIEW.x, DEFAULT_VIEW.y, DEFAULT_VIEW.z);
   state.yaw = DEFAULT_VIEW.yaw; state.pitch = DEFAULT_VIEW.pitch;
+  // Keep the stored player position in step, or the next frame's
+  // beginPlayerFrame teleports the camera back to the old spot and
+  // undoes the reset.
+  try { setPlayerPos(DEFAULT_VIEW.x, DEFAULT_VIEW.z); } catch (e) { /* ignore */ }
 }
 // Restores the tunnel wall, lamps and platform hidden by the exterior view.
 // Kept separate so resetView can turn the exterior view off without recursing.

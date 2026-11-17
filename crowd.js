@@ -35,16 +35,18 @@ const CROWD_DEFS = [
 // and the Atlas models have no Face mesh at all, so the face looks
 // blank. These sit on the face surface and move with the Head bone.
 // Positions are in Head-bone local space, measured from the head
-// geometry with invBind. Sizes are given in world metres and divided by
+// geometry in Node. Sizes are given in world metres and divided by
 // totalScale (Head bone scale x rig scale) because a Head-bone child is
 // shrunk by both. Layouts: jade uses the Casual Face mesh; caleb and
-// nurse use the Atlas head bounds. Walter (Sam) is an Atlas male like
-// Matt, so he uses the caleb layout (his measured front Z 0.253 is
-// close to Matt's 0.237).
+// nurse use the Atlas head bounds, and flipZ mirrors them onto the -Z
+// side: measured in Node, the Atlas models face -Z in their own space
+// (nose tip Head-local z -0.256 Caleb, -0.266 Nurse), so the old +Z
+// layouts put every feature on the back of the head. Walter (Sam) is
+// an Atlas male like Matt, so he uses the caleb layout.
 const CROWD_FACE_LAYOUTS = {
   jade: { cx: 0.001, eyeX: 0.14, eyeY: 0.513, eyeZ: 0.48, noseY: 0.44, noseZ: 0.50, mouthY: 0.36, mouthZ: 0.46, browY: 0.56, browZ: 0.47 },
-  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.21, browY: 0.37, browZ: 0.23 },
-  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.29, noseY: 0.27, noseZ: 0.31, mouthY: 0.16, mouthZ: 0.28, browY: 0.43, browZ: 0.30 }
+  caleb: { cx: 0, eyeX: 0.11, eyeY: 0.30, eyeZ: 0.22, noseY: 0.21, noseZ: 0.25, mouthY: 0.10, mouthZ: 0.24, browY: 0.37, browZ: 0.25, flipZ: true },
+  nurse: { cx: 0, eyeX: 0.11, eyeY: 0.36, eyeZ: 0.26, noseY: 0.27, noseZ: 0.28, mouthY: 0.16, mouthZ: 0.28, browY: 0.43, browZ: 0.29, flipZ: true }
 };
 const CROWD_FACE_LAYOUT_BY_FILE = {
   'models/rigged/jade-rigged.glb': 'jade',
@@ -58,43 +60,87 @@ const CROWD_FACE_LAYOUT_BY_FILE = {
 // dark in the mansion and the hands still read as mittens. The nose is
 // a lighter skin tone than any face so it reads as a nose, and the
 // mouth is a bright red so it reads as lips.
-const _crowdFaceWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
-const _crowdFaceDark = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+const _crowdFaceWhite = new THREE.MeshBasicMaterial({ color: 0xf5efe2 });
+const _crowdFaceDark = new THREE.MeshBasicMaterial({ color: 0x0d0603 });
+const _crowdFaceIris = new THREE.MeshBasicMaterial({ color: 0x5a3a1e });
+const _crowdFaceRing = new THREE.MeshBasicMaterial({ color: 0x1a0f06 });
 const _crowdFaceMouth = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
 const _crowdNoseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
+const _crowdFaceLid = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
 const _crowdFingerMat = new THREE.MeshBasicMaterial({ color: 0xd9a986 });
-function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex) {
+function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex, fitScale) {
   if (!headBone || !totalScale || totalScale <= 0 || !layout) return;
   try {
-    const w = (worldSize) => worldSize / totalScale;
+    // The Head bone sits under the __fit node, so a Head child's true
+    // world scale is totalScale times fitScale (0.591 Casual, 0.89
+    // Atlas). Sizes use wf() so they render at their true world size
+    // instead of 0.59-0.89 of it.
+    const wf = (worldSize) => worldSize / (totalScale * (fitScale || 1));
+    // flipZ mirrors the features onto the -Z side for the Atlas
+    // models (see the layout note): their faces are on -Z.
+    const zs = layout.flipZ ? -1 : 1;
     const grp = new THREE.Group();
     for (const sx of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(w(0.0225), 12, 10), _crowdFaceWhite);
-      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ);
+      // Real eye: a small white eyeball with a warm brown iris, a
+      // dark limbic ring, a black pupil and a catchlight, plus skin
+      // lids above and below so it reads as an almond slit, not a
+      // googly white ball with a black dot. The old eye was a big
+      // white sphere with a bare dark pupil sphere.
+      const eye = new THREE.Group();
+      const white = new THREE.Mesh(new THREE.SphereGeometry(wf(0.016), 12, 10), _crowdFaceWhite);
+      white.userData.keepAlive = true;
+      eye.add(white);
+      const ring = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0125), 16), _crowdFaceRing);
+      ring.position.z = wf(0.017);
+      ring.userData.keepAlive = true;
+      eye.add(ring);
+      const iris = new THREE.Mesh(new THREE.CircleGeometry(wf(0.011), 16), _crowdFaceIris);
+      iris.position.z = wf(0.018);
+      iris.userData.keepAlive = true;
+      eye.add(iris);
+      const pupil = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0055), 12), _crowdFaceDark);
+      pupil.position.z = wf(0.019);
+      pupil.userData.keepAlive = true;
+      eye.add(pupil);
+      const shine = new THREE.Mesh(new THREE.CircleGeometry(wf(0.0018), 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      shine.position.set(wf(0.003), wf(0.004), wf(0.0205));
+      shine.userData.keepAlive = true;
+      eye.add(shine);
+      const lidTop = new THREE.Mesh(new THREE.BoxGeometry(wf(0.034), wf(0.009), wf(0.004)), _crowdFaceLid);
+      lidTop.position.set(0, wf(0.013), wf(0.015));
+      lidTop.userData.keepAlive = true;
+      eye.add(lidTop);
+      const lidBottom = new THREE.Mesh(new THREE.BoxGeometry(wf(0.034), wf(0.006), wf(0.004)), _crowdFaceLid);
+      lidBottom.position.set(0, wf(-0.013), wf(0.015));
+      lidBottom.userData.keepAlive = true;
+      eye.add(lidBottom);
+      eye.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, zs * layout.eyeZ);
+      if (zs < 0) eye.rotation.y = Math.PI;
       eye.userData.keepAlive = true;
       grp.add(eye);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(w(0.011), 10, 8), _crowdFaceDark);
-      pupil.position.set(layout.cx + sx * layout.eyeX, layout.eyeY, layout.eyeZ + w(0.02));
-      pupil.userData.keepAlive = true;
-      grp.add(pupil);
-      // Eyebrows, twice as thick and wider than before: the old thin
-      // dark lines vanished into the forehead shadow at 4 m.
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(w(0.07), w(0.024), w(0.024)), _crowdFaceDark);
-      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, layout.browZ + w(0.01));
+      // Eyebrows, sized to the face: the old 0.07 m brow was wider
+      // than half the face and read as a black bar.
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(wf(0.05), wf(0.012), wf(0.010)), _crowdFaceDark);
+      brow.position.set(layout.cx + sx * layout.eyeX, layout.browY, zs * (layout.browZ + wf(0.01)));
       brow.userData.keepAlive = true;
       grp.add(brow);
     }
-    // Nose, twice the old size in every dimension and pushed 1 cm
-    // further forward, in a lighter skin tone: the old small dark nose
-    // had no visible protrusion at 4 m.
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(w(0.06), w(0.09), w(0.08)), _crowdNoseMat);
-    nose.position.set(layout.cx, layout.noseY, layout.noseZ + w(0.01));
-    nose.userData.keepAlive = true;
-    grp.add(nose);
-    // Mouth, twice the old size and bright red: the old thin dark line
-    // did not read as a mouth at 4 m.
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(w(0.12), w(0.03), w(0.024)), _crowdFaceMouth);
-    mouth.position.set(layout.cx, layout.mouthY, layout.mouthZ + w(0.01));
+    // Nose: a small tip sphere plus a short bridge, skin-coloured.
+    // The old 0.06 x 0.09 m box was twice a real nose and would have
+    // read as a block once the flip put it on the face.
+    const noseTip = new THREE.Mesh(new THREE.SphereGeometry(wf(0.011), 10, 8), _crowdNoseMat);
+    noseTip.scale.set(1, 0.85, 1);
+    noseTip.position.set(layout.cx, layout.noseY, zs * (layout.noseZ + wf(0.008)));
+    noseTip.userData.keepAlive = true;
+    grp.add(noseTip);
+    const noseBridge = new THREE.Mesh(new THREE.BoxGeometry(wf(0.009), wf(0.020), wf(0.009)), _crowdNoseMat);
+    noseBridge.position.set(layout.cx, layout.noseY + wf(0.012), zs * (layout.noseZ + wf(0.002)));
+    noseBridge.userData.keepAlive = true;
+    grp.add(noseBridge);
+    // Mouth, sized to the face: the old 0.12 m wide mouth was wider
+    // than the face itself.
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(wf(0.05), wf(0.010), wf(0.012)), _crowdFaceMouth);
+    mouth.position.set(layout.cx, layout.mouthY, zs * (layout.mouthZ + wf(0.01)));
     mouth.userData.keepAlive = true;
     grp.add(mouth);
     grp.userData.keepAlive = true;
@@ -597,7 +643,7 @@ export function makeRiggedPerson(opts) {
       const layoutKey = CROWD_FACE_LAYOUT_BY_FILE[model.file];
       const layout = layoutKey ? CROWD_FACE_LAYOUTS[layoutKey] : null;
       const head = findBone(group, ['Head']);
-      if (head && layout) addCrowdFaceFeatures(head, (model.headScale || 0.6) * s, layout, look.skin);
+      if (head && layout) addCrowdFaceFeatures(head, (model.headScale || 0.6) * s, layout, look.skin, model.fitScale || 1);
       addCrowdFingers(group, s, model.fitScale || 1);
     } catch (e) { /* cosmetic; never break the crowd */ }
     // A phone in the right hand for phone users: a small dark box on the
@@ -761,7 +807,7 @@ export function makeSeatedPerson(opts) {
     try {
       const layoutKey = CROWD_FACE_LAYOUT_BY_FILE[model.file];
       const layout = layoutKey ? CROWD_FACE_LAYOUTS[layoutKey] : null;
-      if (posed.bones.head && layout) addCrowdFaceFeatures(posed.bones.head, (model.headScale || 0.6) * s, layout, look.skin);
+      if (posed.bones.head && layout) addCrowdFaceFeatures(posed.bones.head, (model.headScale || 0.6) * s, layout, look.skin, model.fitScale || 1);
       addCrowdFingers(group, s, model.fitScale || 1);
     } catch (e) { /* cosmetic; never break the crowd */ }
     return {

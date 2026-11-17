@@ -9,7 +9,7 @@ import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
 import { grantPayout, openStore, getEquippedCarDef } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
 // no long verbatim copying): 1. The Delaware Line (Rondout Reservoir),
@@ -776,6 +776,10 @@ function resetView() {
   if (inValveRoom) {
     camera.position.set(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[1], VALVE_ROOM_BOUNDS.pos[2]);
     state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
+    // Keep the stored player position in step, or the next frame's
+    // beginPlayerFrame teleports the camera back to the old spot and
+    // undoes the reset.
+    try { setPlayerPos(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[2]); } catch (e) { /* ignore */ }
     return;
   }
   // Before Mission 1 has started, Reset view returns the player to the
@@ -783,11 +787,13 @@ function resetView() {
   if (state.mission === 1 && !mission1Started) {
     camera.position.set(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[1], ARRIVAL_VIEW.pos[2]);
     state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = VIEWS[1];
+    try { setPlayerPos(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[2]); } catch (e) { /* ignore */ }
     return;
   }
   const v = VIEWS[state.mission];
   camera.position.set(v.pos[0], v.pos[1], v.pos[2]);
   state.yaw = v.yaw; state.pitch = 0; camBounds = v;
+  try { setPlayerPos(v.pos[0], v.pos[2]); } catch (e) { /* ignore */ }
 }
 document.getElementById('resetViewBtn').onclick = resetView;
 canvas.style.touchAction = 'none';

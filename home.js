@@ -13,7 +13,7 @@ import { canvas, renderer, disposeScene } from './core.js';
 import { getBalance, moneyFmt, grantPayout } from './economy.js';
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson } from './player.js';
 import { readingTimeMs } from './speak.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
@@ -3239,6 +3239,16 @@ function homeResetView() {
   if (!homeActive || !homeCamera) return;
   homeCamera.position.set(homeStart.x, homeStart.y, homeStart.z);
   homeYaw = homeStart.yaw; homePitch = 0;
+  // Keep the stored player position in step, or the next frame's
+  // beginPlayerFrame teleports the camera back to the old spot and
+  // undoes the reset.
+  try { setPlayerPos(homeStart.x, homeStart.z); } catch (e) { /* ignore */ }
+}
+// The Reset view button is wired per act (game.js, act2.js, act3.js);
+// the prologue runs under home.js, so it needs its own wiring, or the
+// button does nothing while the prologue is showing.
+if (typeof document !== 'undefined' && document.getElementById('resetViewBtn')) {
+  document.getElementById('resetViewBtn').addEventListener('click', () => { try { homeResetView(); } catch (e) { /* ignore */ } });
 }
 const homeRay = new THREE.Raycaster(), homeMouse = new THREE.Vector2();
 function homeHandleTap(clientX, clientY) {
