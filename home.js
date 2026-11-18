@@ -14,7 +14,7 @@ import { getBalance, moneyFmt, grantPayout, spendMoney, getEquippedCarDef } from
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson } from './player.js';
-import { readingTimeMs } from './speak.js';
+import { readingTimeMs, speakLine } from './speak.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
 let homeKind = null, homeOnLeave = null;
@@ -79,6 +79,15 @@ function dressUniform(p, kind) {
     const neck = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.03), new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.9 }));
     neck.position.set(0, 1.42, front * 0.15); neck.userData.uniformPart = true; g.add(neck);
     g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.9 }); });
+  } else if (kind === 'vendor') {
+    // A market vendor: a flat cap and a white apron over his shirt.
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.9 });
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.2, 0.07, 12), capMat);
+    cap.position.set(0, 1.69, 0); cap.userData.uniformPart = true; g.add(cap);
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.02, 0.12), new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 0.5 }));
+    brim.position.set(0, 1.66, front * 0.19); brim.userData.uniformPart = true; g.add(brim);
+    const apron = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.75, 0.03), new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.9 }));
+    apron.position.set(0, 1.02, front * 0.17); apron.userData.uniformPart = true; g.add(apron);
   }
   p.uniform = kind; p.uniformGroup = p.group;
 }
@@ -139,6 +148,7 @@ let terminalDoorSwing = null; // { group, t } while the car door swings open
 let terminalGetOutBtnEl = null;
 let glassDoor = null; // { panels, open, opening } revolving glass door at the front
 let glassDoorToastAt = -100, serviceDeskToastAt = -100;
+let marketVendorAt = -100; // throttle for the Market Street vendor greeting
 let callLines = [], callIdx = 0;
 
 // A soft radial glow texture, for the ringing phone and the platform sign.
@@ -1972,6 +1982,226 @@ function departuresTexture() {
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+// ---------- Market Street ----------
+// A lively dusk street from the reference image: a cobbled street lined
+// with varied shop facades, market stalls with striped awnings, a vendor
+// and shoppers. The composition follows the photo; the look is realistic
+// (real window frames, doors, cornices, columns), not boxy or flat.
+// A canvas facade texture per style, following the whiteFacadeMat pattern.
+function marketFacadeTexture(style) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  if (style === 'brick') {
+    ctx.fillStyle = '#8a4a38'; ctx.fillRect(0, 0, 256, 256);
+    ctx.strokeStyle = 'rgba(60,30,20,0.55)'; ctx.lineWidth = 2;
+    for (let y = 0; y <= 256; y += 16) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y); ctx.stroke(); }
+    for (let r = 0; r < 16; r++) { const off = (r % 2) * 16; for (let x = off; x <= 256; x += 32) { ctx.beginPath(); ctx.moveTo(x, r * 16); ctx.lineTo(x, r * 16 + 16); ctx.stroke(); } }
+    for (let r = 0; r < 3; r++) for (let col = 0; col < 3; col++) {
+      const wx = 28 + col * 76, wy = 24 + r * 76;
+      ctx.fillStyle = '#f2f2f2'; ctx.fillRect(wx - 4, wy - 4, 44, 56);
+      ctx.fillStyle = '#2a3a4a'; ctx.fillRect(wx, wy, 36, 48);
+      ctx.fillStyle = '#ffd166'; ctx.fillRect(wx, wy, 36, 6);
+    }
+  } else if (style === 'plaster') {
+    ctx.fillStyle = '#d8b078'; ctx.fillRect(0, 0, 256, 256);
+    ctx.fillStyle = '#c8a068'; ctx.fillRect(0, 0, 256, 12);
+    for (let r = 0; r < 3; r++) for (let col = 0; col < 3; col++) {
+      const wx = 28 + col * 76, wy = 24 + r * 76;
+      ctx.fillStyle = '#2e6a2e'; ctx.fillRect(wx - 16, wy, 12, 48); ctx.fillRect(wx + 40, wy, 12, 48);
+      ctx.fillStyle = '#f2f2f2'; ctx.fillRect(wx - 4, wy - 4, 44, 56);
+      ctx.fillStyle = '#2a3a4a'; ctx.fillRect(wx, wy, 36, 48);
+      ctx.fillStyle = '#6b4226'; ctx.fillRect(wx - 6, wy + 52, 48, 8);
+      ctx.fillStyle = '#c0392b'; ctx.fillRect(wx + 2, wy + 46, 8, 8); ctx.fillRect(wx + 26, wy + 46, 8, 8);
+      ctx.fillStyle = '#3a7a3a'; ctx.fillRect(wx + 12, wy + 44, 10, 8);
+    }
+  } else { // pale stone with arched windows and column strips at the edges
+    ctx.fillStyle = '#ddd5c2'; ctx.fillRect(0, 0, 256, 256);
+    ctx.fillStyle = '#e8e2d4'; ctx.fillRect(0, 0, 18, 256); ctx.fillRect(238, 0, 18, 256);
+    ctx.strokeStyle = '#c8bfa8'; ctx.lineWidth = 2;
+    for (let y = 0; y <= 256; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y); ctx.stroke(); }
+    for (let r = 0; r < 3; r++) for (let col = 0; col < 3; col++) {
+      const wx = 36 + col * 76, wy = 30 + r * 76;
+      ctx.fillStyle = '#f4f6f8';
+      ctx.beginPath(); ctx.moveTo(wx - 4, wy + 48); ctx.lineTo(wx - 4, wy + 10); ctx.arc(wx + 16, wy + 10, 20, Math.PI, 0, true); ctx.lineTo(wx + 36, wy + 48); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#2a3a4a';
+      ctx.beginPath(); ctx.moveTo(wx, wy + 48); ctx.lineTo(wx, wy + 12); ctx.arc(wx + 16, wy + 12, 16, Math.PI, 0, true); ctx.lineTo(wx + 32, wy + 48); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#f4f6f8'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(wx + 16, wy - 4); ctx.lineTo(wx + 16, wy + 48); ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// Cobblestones: small grey stones in varied shades on a dark grout, so
+// the street reads as cobbles, not a flat slab.
+function cobbleTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#3a3a38'; ctx.fillRect(0, 0, 256, 256);
+  const shades = ['#6a6a66', '#7a7a74', '#5a5a56', '#8a8a84', '#63635f'];
+  for (let r = 0; r < 8; r++) {
+    const off = (r % 2) * 16;
+    for (let col = -1; col < 8; col++) {
+      ctx.fillStyle = shades[(r * 3 + col + 8) % shades.length];
+      ctx.fillRect(col * 32 + off + 2, r * 32 + 2, 28, 28);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+// Red-and-white stripes for the stall awnings.
+function stripeTexture() {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 64;
+  const ctx = c.getContext('2d');
+  for (let i = 0; i < 8; i++) { ctx.fillStyle = i % 2 === 0 ? '#c0392b' : '#f2f2f2'; ctx.fillRect(i * 16, 0, 16, 64); }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+// A yellow disc with a dark Z, the Zama signboard from the reference.
+function marketZSignTexture() {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 128, 128);
+  ctx.fillStyle = '#ffd166';
+  ctx.beginPath(); ctx.arc(64, 64, 58, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 72px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('Z', 64, 68);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// One shop facade: w along the street (z), d deep (x), h tall, front
+// facing the street (face +1: front is the +x side, -1: the -x side).
+// The front face carries the canvas facade; the other faces are plain.
+function marketFacade(scene, cx, cz, w, h, d, face, style) {
+  const front = new THREE.MeshStandardMaterial({ map: marketFacadeTexture(style), roughness: 0.9, metalness: 0.02 });
+  const baseCol = style === 'brick' ? 0x8a4a38 : style === 'plaster' ? 0xd8b078 : 0xddd5c2;
+  const side = mat(baseCol, { roughness: 0.9 });
+  const roof = mat(0x3a3f44, { roughness: 0.9 });
+  const mats = face > 0 ? [front, side, roof, roof, side, side] : [side, front, roof, roof, side, side];
+  const b = new THREE.Mesh(new THREE.BoxGeometry(d, h, w), mats);
+  b.position.set(cx, h / 2, cz); b.castShadow = true; b.receiveShadow = true; scene.add(b);
+  // Cornice along the top of the front face, and a real door with a handle.
+  const fx = cx + face * (d / 2 + 0.12);
+  hbox(scene, 0.3, 0.18, w + 0.2, 0xe8e2d4, fx, h - 0.09, cz, null, { roughness: 0.8 });
+  const doorCol = style === 'brick' ? 0x2a3a4a : 0x4a3220;
+  hbox(scene, 0.12, 2.2, 1.1, doorCol, fx, 1.1, cz, null, { roughness: 0.6 });
+  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 }));
+  handle.position.set(fx + face * 0.1, 1.05, cz + 0.35); scene.add(handle);
+  if (style === 'stone') {
+    for (const dz of [-1.2, 1.2]) hcyl(scene, 0.16, 0.2, 3, 0xe8e2d4, fx + face * 0.25, 1.5, cz + dz, null, { roughness: 0.8 });
+  }
+  if (style === 'plaster') {
+    for (const dz of [-2.6, 2.6]) {
+      hbox(scene, 0.08, 1.2, 0.5, 0x2e6a2e, fx + face * 0.05, 5.2, cz + dz, null, { roughness: 0.9 });
+      hbox(scene, 0.14, 0.12, 0.7, 0x6b4226, fx + face * 0.08, 4.5, cz + dz, null, { roughness: 0.9 });
+    }
+  }
+  return b;
+}
+// One market stall: a wooden counter with fruit and vegetables on top,
+// crates beside it, four posts holding a sloped red-and-white striped
+// awning, and a Z signboard on the front facing the street.
+// face -1: the stall faces west (toward the street from the east side);
+// face +1: it faces east.
+function buildMarketStall(scene, x, z, face) {
+  hbox(scene, 0.9, 1.0, 3.0, 0x6b4226, x, 0.5, z, null, { roughness: 0.85 });
+  hbox(scene, 1.1, 0.08, 3.2, 0x8a6a42, x, 1.04, z, null, { roughness: 0.8 });
+  for (const [px, pz] of [[-0.4, -1.4], [0.4, -1.4], [-0.4, 1.4], [0.4, 1.4]]) {
+    hcyl(scene, 0.05, 0.05, 1.3, 0x4a3220, x + px, 1.7, z + pz, null, { roughness: 0.9 });
+  }
+  const stripeMat = new THREE.MeshStandardMaterial({ map: stripeTexture(), roughness: 0.85 });
+  const awn = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.08, 3.4), stripeMat);
+  awn.position.set(x, 2.4, z); awn.rotation.z = -face * 0.22; awn.castShadow = true; scene.add(awn);
+  // Goods on the counter: fruit and vegetables in coloured rows.
+  const goods = [0xc0392b, 0xe67e22, 0xf2d13a, 0x3a7a3a, 0x8a2a5a, 0xd8d8d8];
+  for (let r = 0; r < 2; r++) for (let i = 0; i < 6; i++) {
+    const g = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), mat(goods[(r * 6 + i) % goods.length], { roughness: 0.7 }));
+    g.position.set(x - 0.22 + r * 0.44, 1.17, z - 1.25 + i * 0.5); g.castShadow = true; scene.add(g);
+  }
+  // Crates of goods beside the stall.
+  hbox(scene, 0.6, 0.5, 0.6, 0x8a6a3a, x + face * 0.1, 0.25, z + 2.0, null, { roughness: 0.95 });
+  hbox(scene, 0.6, 0.5, 0.6, 0x8a6a3a, x + face * 0.1, 0.75, z + 2.0, null, { roughness: 0.95 });
+  // Z signboard on the front of the counter, facing the street.
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshStandardMaterial({ map: marketZSignTexture(), transparent: true, roughness: 0.8 }));
+  sign.position.set(x + face * 0.48, 0.55, z); sign.rotation.y = face * Math.PI / 2; scene.add(sign);
+}
+function buildMarketStreet(scene) {
+  // Dusk, like the reference image: a purple-orange evening sky over a
+  // cobbled street lined with shops and stalls.
+  scene.background = new THREE.Color(0x2a2038);
+  scene.fog = new THREE.Fog(0x2a2038, 30, 120);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), mat(0x3a3d40, { roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  // Cobblestone street down the middle, sidewalks on both sides.
+  const cob = cobbleTexture(); cob.repeat.set(3, 7);
+  const street = new THREE.Mesh(new THREE.PlaneGeometry(12, 29), new THREE.MeshStandardMaterial({ map: cob, roughness: 1 }));
+  street.rotation.x = -Math.PI / 2; street.position.set(0, 0.02, 1.5); street.receiveShadow = true; scene.add(street);
+  for (const s of [-1, 1]) {
+    const walk = new THREE.Mesh(new THREE.BoxGeometry(3, 0.08, 29), mat(0x8a8a86, { roughness: 1 }));
+    walk.position.set(s * 7.5, 0.04, 1.5); walk.receiveShadow = true; scene.add(walk);
+  }
+  // Buildings on both sides, varied facades and heights, fronts facing
+  // the street. Left (west): pale stone, red brick, painted plaster.
+  marketFacade(scene, -10.5, -8, 8, 11, 5, 1, 'stone');
+  marketFacade(scene, -10.5, 0.5, 7, 8, 5, 1, 'brick');
+  marketFacade(scene, -10.5, 9, 8, 9.5, 5, 1, 'plaster');
+  // Right (east): brick and plaster, with a gap between them for the stalls.
+  marketFacade(scene, 10.5, -7, 8, 9, 5, -1, 'brick');
+  marketFacade(scene, 10.5, 9.5, 7, 7.5, 5, -1, 'plaster');
+  // Stalls: one on each side, red-and-white striped awnings, goods on
+  // the counters, Z signboards on the fronts.
+  buildMarketStall(scene, 7.2, 1.5, -1);
+  buildMarketStall(scene, -7.2, 0.5, 1);
+  // A big Z board over the right stall, on a post, so the market reads as Zama's.
+  hcyl(scene, 0.06, 0.06, 2.6, 0x4a3220, 7.6, 1.3, 1.5, null, { roughness: 0.9 });
+  const bigZ = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), new THREE.MeshStandardMaterial({ map: marketZSignTexture(), transparent: true, roughness: 0.8 }));
+  bigZ.position.set(7.6, 3.4, 1.5); bigZ.rotation.y = -Math.PI / 2; scene.add(bigZ);
+  const sign = textSprite('MARKET STREET', '#2a2118', '#ffd166', 'Stalls and shops - Midtown');
+  sign.scale.set(7, 1.75, 1); sign.position.set(0, 8.5, -12.5); scene.add(sign);
+  // Cobra-head lamps along both sidewalks: a pole, an arm toward the
+  // street, a lamp head, and a warm point light.
+  for (const [lx, lz] of [[-5.8, -8], [5.8, -4], [-5.8, 4], [5.8, 8]]) {
+    hcyl(scene, 0.08, 0.08, 4.5, 0x6a747a, lx, 2.25, lz, null, { metalness: 0.8, roughness: 0.4 });
+    const armDir = lx < 0 ? 1 : -1;
+    hbox(scene, 0.9, 0.08, 0.08, 0x6a747a, lx + armDir * 0.45, 4.45, lz, null, { metalness: 0.8, roughness: 0.4 });
+    hbox(scene, 0.5, 0.12, 0.25, 0x2a2e33, lx + armDir * 0.85, 4.4, lz, null, { metalness: 0.6, roughness: 0.4 });
+    lamp(scene, lx + armDir * 0.85, 4.3, lz, 0xffe9a8, 0.8, 12);
+  }
+  // Parked cars on the street and trees at the ends of the street.
+  homeCar(scene, 0xc0392b, -4.6, -10, 0.1);
+  homeCar(scene, 0x2e6fb0, 4.6, 10, -0.1);
+  addTree(scene, -11, 14.5); addTree(scene, 11, -12.5);
+  // The vendor, behind the right stall counter, facing the street.
+  // He is a rigged person when the crowd models are loaded (makePedestrian
+  // falls back to a hidden primitive and upgrades it, like everyone else),
+  // with a flat cap and an apron, and he stands still (speed 0, heading
+  // west, so updatePedestrian keeps him facing the street).
+  const vendor = makePedestrian({ x: 8.2, z: 1.5, speed: 0, heading: -Math.PI / 2, coatColor: 0x3a5a3a, legColor: 0x2a2a2a, skinColor: 0x8a5a3a });
+  if (vendor) {
+    vendor.group.position.set(8.2, 0, 1.5);
+    scene.add(vendor.group);
+    dressUniform(vendor, 'vendor');
+    roomWalkers.push(vendor);
+  }
+  const tag = textSprite('Vendor', '#2a2118', '#ffd166', '');
+  tag.scale.set(1.8, 0.45, 1); tag.position.set(8.2, 2.15, 1.5); scene.add(tag);
+  hitBox(scene, 1.4, 2.0, 1.4, 8.2, 1.0, 1.5, 'marketVendor');
+  // Shoppers walking the street.
+  const crowd = makeCrowd({ count: 5, bounds: { minX: -3.5, maxX: 3.5, minZ: -12, maxZ: 15 } });
+  for (const p of crowd) { scene.add(p.group); roomWalkers.push(p); }
+}
+// The vendor greets the player: spoken in his voice, and shown as a toast
+// too, so the line lands even when speech is muted or unavailable.
+function greetMarketVendor() {
+  const now = Date.now() / 1000;
+  if (now - marketVendorAt < 6) return;
+  marketVendorAt = now;
+  const line = 'Fresh fruit, friend. Everything on this street is real New York.';
+  try { speakLine('vendor', line); } catch (e) { /* speech is best effort */ }
+  showHomeToast('Vendor: ' + line);
+}
 // ---------- Train Terminal front (prologue arrival) ----------
 // After the prologue drive the player parks in the lot in front of
 // Grand Central, gets out of his car, and walks through the revolving
@@ -2046,7 +2276,7 @@ function buildTerminalGlassDoor(scene) {
   const panels = new THREE.Group();
   panels.position.set(0, 0, dz);
   scene.add(panels);
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
   const railMat = mat(0x2a3a4a, { metalness: 0.7, roughness: 0.3 });
   for (let i = 0; i < 4; i++) {
     const arm = new THREE.Group();
@@ -2059,6 +2289,12 @@ function buildTerminalGlassDoor(scene) {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 1.35), railMat);
       rail.position.set(0, ry, 0.75); arm.add(rail);
     }
+    // Vertical edge rail on the outer edge of the panel: at the old
+    // opacity the four panels read as two faint panes in a V, because
+    // the edge-on panels vanished. A hard metal edge on every panel
+    // makes all four read as distinct panels, open or shut.
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.3, 0.06), railMat);
+    edge.position.set(0, 1.25, 1.42); arm.add(edge);
     panels.add(arm);
   }
   // A generous hit box over the whole door, so a tap anywhere on it
@@ -2253,8 +2489,13 @@ function buildTerminal(scene) {
   // attendant stands behind the counter in a navy uniform and cap.
   hbox(scene, 3.2, 1.1, 0.9, 0x6b4226, 8, 0.55, 10, null, { roughness: 0.7 });
   hbox(scene, 3.4, 0.08, 1.0, 0xd8cfc0, 8, 1.14, 10, null, { roughness: 0.5 });
-  const deskSign = textSprite('TRAIN SERVICE DESK', '#2a2118', '#ffd166', 'Tickets - 0.1 ZAMA');
-  deskSign.scale.set(4.2, 1.05, 1); deskSign.position.set(8, 2.3, 10); scene.add(deskSign);
+  // The sign stands at the west end of the desk, at eye level, on a
+  // post: the old sign floated high above the desk and the top-left HUD
+  // panel covered its left half, so it read "VICE DESK". Shortened to
+  // SERVICE DESK so the whole word fits clear of the HUD.
+  const deskSign = textSprite('SERVICE DESK', '#2a2118', '#ffd166', 'Tickets - 0.1 ZAMA');
+  deskSign.scale.set(3.2, 0.8, 1); deskSign.position.set(6.0, 1.8, 10); scene.add(deskSign);
+  hbox(scene, 0.08, 1.4, 0.08, 0x2a3a4a, 6.0, 0.7, 10, null, { metalness: 0.6, roughness: 0.4 });
   const attendant = new THREE.Group(); attendant.position.set(8, 0, 9.2); scene.add(attendant);
   const navy = mat(0x1a3a5a, { roughness: 0.85 });
   const skin = mat(0x8a5a3a, { roughness: 0.8 });
@@ -3200,7 +3441,7 @@ export function enterPlace(kind, onLeave, options) {
   // Terminal front: a fresh arrival starts with no ticket and nobody
   // seated; the seat logic below puts the player in the parked car.
   terminalSeated = false; terminalFrontCar = null; terminalFrontDoor = null; terminalDoorSwing = null;
-  glassDoor = null; glassDoorToastAt = -100; serviceDeskToastAt = -100;
+  glassDoor = null; glassDoorToastAt = -100; serviceDeskToastAt = -100; marketVendorAt = -100;
   if (kind === 'terminalFront' && homePrologue) terminalTicket = false;
   hideTerminalGetOutButton();
   const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel' || kind === 'windtunnel' || kind === 'symposium' || kind === 'policestation' || kind === 'navybarracks' || kind === 'sensorvault';
@@ -3223,6 +3464,7 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'policestation') { buildPoliceStation(homeScene); homeBounds = { x: [-8.4, 8.4], z: [-6.4, 6.4] }; homeStart = { x: 0, y: 1.7, z: 5.5, yaw: 0 }; }
   else if (kind === 'navybarracks') { buildNavyBarracks(homeScene); homeBounds = { x: [-9.4, 9.4], z: [-5.4, 5.4] }; homeStart = { x: 0, y: 1.7, z: 4.5, yaw: 0 }; }
   else if (kind === 'sensorvault') { buildSensorVault(homeScene); homeBounds = { x: [-5.4, 5.4], z: [-3.4, 3.4] }; homeStart = { x: 0, y: 1.7, z: 1.0, yaw: 0 }; }
+  else if (kind === 'marketstreet') { buildMarketStreet(homeScene); homeBounds = { x: [-13, 13], z: [-13, 16] }; homeStart = { x: 0, y: 1.7, z: 12, yaw: 0 }; }
   else return;
   // Third person on entering any place, so the player sees himself
   // in every room and exterior, not just in the missions.
@@ -3250,7 +3492,8 @@ export function enterPlace(kind, onLeave, options) {
     symposium: 'Symposium Hall - a full house. Take the NYC podium on the stage.',
     policestation: 'Police Station - NYPD Midtown. The officers are on duty. Look around, then head back to the map.',
     navybarracks: 'Navy Barracks - Brooklyn Navy Yard. The sailors are on duty. Look around, then head back to the map.',
-    sensorvault: 'Sensor Vault - underground, under the treatment plant. The pressure sensors read the three water lines. Tap a panel for the readings.'
+    sensorvault: 'Sensor Vault - underground, under the treatment plant. The pressure sensors read the three water lines. Tap a panel for the readings.',
+    marketstreet: 'Market Street - stalls, shops and a vendor. Look around, then head back to the map.'
   };
   showHomeToast(welcomes[kind] || kind);
   if (homeRaf) cancelAnimationFrame(homeRaf);
@@ -3285,7 +3528,7 @@ export function leavePlace() {
   prologueInBed = false; prologueSeated = false; callActive = false; phoneDown = false; boothBriefAt = -100;
   try { const a = getAvatar(); setAvatarPose('stand'); detachAvatar(); } catch (e) { /* ignore */ }
   try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
-  phoneGlow = null; terminalPedestrians = [];
+  phoneGlow = null; terminalPedestrians = []; marketVendorAt = -100;
   terminalSeated = false; terminalFrontCar = null; terminalFrontDoor = null; terminalDoorSwing = null; glassDoor = null;
   hideTerminalGetOutButton();
   const bar = document.getElementById('homeBar');
@@ -3683,6 +3926,9 @@ function homeHandleTap(clientX, clientY) {
   } else if (action === 'serviceDesk') {
     // The staffed service desk: tap it to buy the train ticket.
     buyTrainTicket();
+  } else if (action === 'marketVendor') {
+    // The Market Street vendor: tap him to hear his greeting.
+    greetMarketVendor();
   } else if (action === 'tunnelPanel') {
     startTunnelRun();
   } else if (action === 'vaultPanel') {

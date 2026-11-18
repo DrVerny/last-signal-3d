@@ -795,11 +795,21 @@ const release = box(0.4, 0.5, 0.15, 0xef476f, 1.42, 1.5, -4.0, 'release');
 release.rotation.y = Math.PI / 2; // wall-mounted boxes must face into the room, not along the car (same edge-on bug as the relay)
 const panel = box(0.8, 1.0, 0.15, 0x4cc9f0, -1.42, 1.5, 4.0, 'panel');
 panel.rotation.y = Math.PI / 2;
-const board = box(0.35, 0.25, 0.05, 0x7ac74f, 1.38, 1.1, 3.9, 'board');
+const board = box(0.35, 0.25, 0.05, 0x7ac74f, 1.38, 1.1, 3.9, 'board', { color: 0x7ac74f, emissive: 0x2a7a1a, emissiveIntensity: 0.55 });
 // Generous invisible click target around the RESET board: the board itself is
 // only 0.35 m wide, so clicks on its upper half used to miss it entirely.
 const boardHit = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.5), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
 boardHit.position.set(1.38, 1.1, 3.9); boardHit.name = 'board'; boardHit.userData.clickable = true; scene.add(boardHit);
+// RESET board beacon: the board is a small unlit green box, so in the dark
+// car after the battery dies it is invisible. A green glow sprite, a
+// floating marker and a small light mark it once the objective is live,
+// mirroring the relay beacon. They stay hidden until the sealed choice
+// sets the board objective.
+const boardGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x7ac74f, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+boardGlow.scale.set(1.2, 1.2, 1); boardGlow.position.set(1.28, 1.1, 3.9); boardGlow.visible = false; scene.add(boardGlow);
+const boardMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('▼ RESET', '#7ac74f', '#111111', ''), transparent: true, depthWrite: false, fog: false }));
+boardMarker.scale.set(1.4, 0.35, 1); boardMarker.position.set(0.7, 2.0, 3.9); boardMarker.visible = false; scene.add(boardMarker);
+const boardLight = new THREE.PointLight(0x7ac74f, 0.8, 4, 1.8); boardLight.position.set(0.9, 1.1, 3.9); boardLight.visible = false; scene.add(boardLight);
 board.rotation.y = Math.PI / 2; // moved to z 3.9, onto a solid pillar between windows (was z 3, inside a window opening)
 board.visible = false; // appears on the platform after evacuation
 // ---------- Human characters: rigged CC0 3D people (Quaternius) ----------
@@ -823,7 +833,7 @@ const MODEL_DEFS = [
   { key: 'jade', file: 'models/rigged/jade-rigged.glb', name: 'jade', x: -0.55, z: -2.6, faceYaw: 0.5, targetHeight: 1.68 },
   { key: 'caleb', file: 'models/rigged/caleb-alt-civilian.glb', name: 'caleb', x: 0.6, z: -2, faceYaw: Math.PI, targetHeight: 1.68, recolourNavy: true },
   { key: 'nurse', file: 'models/rigged/nurse-rigged.glb', name: 'nurse', x: 0.55, z: 1, faceYaw: -0.9, targetHeight: 1.68 },
-  { key: 'walter', file: 'models/walter.glb', name: 'walter', x: -1.18, z: 4.5, faceYaw: 0.6, targetHeight: null, hideBench: true }
+  { key: 'walter', file: 'models/walter.glb?v=webp-free-1', name: 'walter', x: -1.18, z: 4.5, faceYaw: 0.6, targetHeight: null, hideBench: true }
 ];
 let introStarted = false;
 function startIntro() {
@@ -875,201 +885,254 @@ async function loadHumans() {
   const loadingContinue = document.getElementById('loadingContinue');
   const loader = new GLTFLoader();
   const failures = [];
+  const timedOut = []; // models that timed out: retried in the background
   let done = 0;
-  // Each model load races a 30 s timeout: a network request that hangs
+  // Each model load races a deadline: a network request that hangs
   // (never resolves, never rejects) would otherwise stall Promise.all
-  // forever and leave the game stuck on "Loading characters...". A timed
-  // out model is treated as a failed load, so the game can still start
-  // and offer "Continue without the missing characters".
-  const loadWithTimeout = (def) => Promise.race([
+  // forever and leave the game stuck on "Loading characters...". A
+  // timed-out model is retried in the background (see retryHumanLater),
+  // so the game still starts on time; only a load that fails outright
+  // (bad file, parse error) is treated as failed and offers
+  // "Continue without the missing characters".
+  // Load one model with a deadline. The live browser sometimes stalls a
+  // fetch for longer than the 30 s the player is willing to wait, so the
+  // timeout is per attempt: a timed-out model is retried in the
+  // background after the game starts instead of blocking the start.
+  const loadWithTimeoutMs = (def, ms, quiet) => Promise.race([
     loader.loadAsync(def.file, (ev) => {
-      if (ev.total > 0) loadingText.textContent = 'Loading characters... ' + def.key + ' ' + Math.min(100, Math.round(ev.loaded / ev.total * 100)) + '%';
+      if (!quiet && ev.total > 0) loadingText.textContent = 'Loading characters... ' + def.key + ' ' + Math.min(100, Math.round(ev.loaded / ev.total * 100)) + '%';
     }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('load timed out after 30s')), 30000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error('load timed out after 30s')), ms))
   ]);
+  const loadWithTimeout = (def) => loadWithTimeoutMs(def, 30000, false);
+  // Turn a loaded GLB into a live character in the car: bench hiding,
+  // skin/face treatment, head shrink, height normalisation, face
+  // features, walk clip and patrol registration. Used for the first
+  // load and for a background retry, so a timed-out model streams in
+  // exactly like a model that loaded first time.
+  const addLoadedHuman = (def, gltf) => {
+    const group = gltf.scene;
+    group.name = def.name;
+    // Hide Walter's bench (the game already has benches in the car).
+    if (def.hideBench) group.traverse((o) => { if (o.name && o.name.indexOf('Bench') === 0) o.visible = false; });
+    // Skin and Face to flat unlit normal brown (0x8a5a3a). The Casual
+    // models' raw Skin is near-black and the Face near-white, with no
+    // texture map, so as lit standard materials they render far darker
+    // than their colour in the dim light and Jade read as very dark
+    // brown. An unlit basic material renders the exact colour. Names
+    // are kept so the Face/Hair check below still finds them. The
+    // Atlas models (Caleb, Nurse) have no Skin/Face materials (one
+    // Atlas texture for the whole body), so this is a no-op for them
+    // and their texture is untouched.
+    for (const n of ['Skin', 'Face']) {
+      const m = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
+      m.name = n;
+      group.traverse((o) => { if (o.isMesh && o.material && o.material.name === n) o.material = m; });
+    }
+    // Caleb's officer markers: a navy cap and a gold badge disc on the chest.
+    // NOTE: the jacket recolour below is a no-op on the rigged model: the
+    // old scan had a 'casualsuit' material, but the rigged Matt uses a
+    // single "Atlas" texture material for the whole body, so recolouring
+    // it would tint the skin too. The cap + badge carry the officer look.
+    // Positions are calibrated for the rigged Matt (measured from its GLB):
+    // native height 1.508, head top local y 1.503, and it faces -z (local
+    // forward is -z, so the chest front and the brim are on the -z side).
+    // These are local units, added before the height normalisation scales
+    // the whole group, so they land on the head/chest after scaling.
+    if (def.recolourNavy) {
+      const navy = new THREE.MeshStandardMaterial({ color: 0x1a3a5a, roughness: 0.85, metalness: 0.02 });
+      group.traverse((o) => {
+        if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = navy;
+      });
+      // Simple navy cap and a gold badge disc on the chest.
+      const capMat = new THREE.MeshStandardMaterial({ color: 0x16283f, roughness: 0.7 });
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.125, 0.13, 0.07, 16), capMat);
+      crown.position.set(0, 1.51, -0.13); crown.castShadow = true; group.add(crown);
+      const brim = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.012, 0.1), new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3 }));
+      brim.position.set(0, 1.47, -0.22); group.add(brim);
+      const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25, side: THREE.DoubleSide }));
+      badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.22, -0.38); group.add(badge);
+    }
+    group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    // Jade (Casual Female) has the same oversized head as the player
+    // model: its Hair is wider than its shoulders, so it reads as a
+    // wide flat disc about twice normal width. The Atlas models
+    // (Caleb, Nurse) read as chibi, with heads too big for their
+    // bodies, so they get a moderate shrink. Shrink the head bone
+    // before the height is normalised, so the normalisation measures
+    // the corrected head. Walter is a static scan with no Head bone,
+    // so the traverse is a no-op for him. Every clip on the Casual
+    // models carries a Head scale track that would write the scale
+    // back to 1 every frame, so strip that track from every clip so
+    // the shrink stays. (The Atlas clips carry no Head scale track,
+    // so the strip is a no-op for them, but it is kept so a future
+    // re-export of those models cannot undo the shrink either.)
+    let hasFaceHair = false;
+    group.traverse((o) => { if (o.isMesh && o.material && (o.material.name === 'Face' || o.material.name === 'Hair')) hasFaceHair = true; });
+    if (hasFaceHair) {
+      group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
+    } else {
+      group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.6); });
+    }
+    // The Fist scale tracks are stripped too: Jade's Fist bones are
+    // scaled to FIST_SCALE below and the clips would otherwise write
+    // them back to 1 (a no-op for the Atlas models, which have no
+    // Fist bones).
+    for (const clip of (gltf.animations || [])) {
+      clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale' && t.name !== 'FistL.scale' && t.name !== 'FistR.scale');
+    }
+    // Normalise height to the character's target height, then re-ground feet at y=0.
+    // Measure the height from the raw geometry, not Box3.setFromObject:
+    // for a skinned mesh that measures the skinned bounds, which
+    // collapse while the bones are unposed at load time, so the scale
+    // came out far too big and the character stood metres tall.
+    group.updateMatrixWorld(true);
+    let minY = Infinity, maxY = -Infinity;
+    const _gb = new THREE.Box3();
+    group.traverse(o => {
+      if (!o.isMesh || !o.geometry || !o.geometry.attributes || !o.geometry.attributes.position) return;
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      _gb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+      if (_gb.min.y < minY) minY = _gb.min.y;
+      if (_gb.max.y > maxY) maxY = _gb.max.y;
+    });
+    let s = 1;
+    const geomH = (maxY > minY) ? (maxY - minY) : 0;
+    if (def.targetHeight && geomH > 0) s = def.targetHeight / geomH;
+    group.scale.setScalar(s);
+    group.position.set(def.x, -minY * s, def.z);
+    group.rotation.y = def.faceYaw || 0;
+    // Clear 3D facial features on the Head bone (eyes, nose, mouth,
+    // eyebrows). The Face texture does not read from the front, and
+    // the Atlas models have no Face mesh at all, so the face looks
+    // blank. Walter is a static scan with no Head bone, so this is a
+    // no-op for him. The Head bone scale is 0.3 for Casual models
+    // (Face/Hair) and 0.6 for Atlas models. Jade (Casual) gets the
+    // painted face texture and skin tonal variation first: her
+    // painted brows are only a faint wash, because her moving 3D
+    // brows from expression.js are the brows. She also gets the
+    // jointed fingers and the Fist scale, the same treatment as the
+    // player. Caleb and Nurse (Atlas) have no Face mesh and no Fist
+    // bones, so they keep their textured head and get the small
+    // real-eye features below instead.
+    {
+      const layout = FACE_LAYOUTS[def.key];
+      if (layout) {
+        let headBone = null;
+        group.traverse((o) => { if (!headBone && o.isBone && o.name === 'Head') headBone = o; });
+        const headScale = hasFaceHair ? 0.3 : 0.6;
+        let fitScale = 1;
+        group.traverse((o) => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
+        if (hasFaceHair) {
+          group.traverse((o) => {
+            if (o.isMesh && o.material && o.material.name === 'Face') paintFaceOnMesh(o, false);
+            if (o.isMesh && o.material && o.material.name === 'Skin') addSkinToneVariation(o);
+          });
+          const fistL = group.getObjectByName('FistL');
+          const fistR = group.getObjectByName('FistR');
+          if (fistL) fistL.scale.setScalar(FIST_SCALE);
+          if (fistR) fistR.scale.setScalar(FIST_SCALE);
+          addJointedFingers(fistL, fitScale * s, 1);
+          addJointedFingers(fistR, fitScale * s, -1);
+        }
+        addFaceFeatures(headBone, headScale * s, layout, fitScale);
+      }
+    }
+    scene.add(group);
+    // Walking: the standing characters patrol a short stretch of the aisle so
+    // the car feels alive instead of frozen. Walter stays seated. Each walker
+    // gets a patrol range around their home spot, a slow speed, and a step
+    // phase for the bob. The contact shadow follows them.
+    const walkRanges = {
+      jade: { minZ: -4.5, maxZ: -0.5, speed: 0.35 },
+      caleb: { minZ: -4.5, maxZ: 0.5, speed: 0.4 },
+      nurse: { minZ: -0.5, maxZ: 3.5, speed: 0.3 }
+    };
+    const wr = walkRanges[def.key];
+    // Walk animation (rigged models only): the standing characters play
+    // the plain "Walk" clip on loop while they patrol, so arms swing
+    // from the shoulder, elbows bend, and legs step with knees bending.
+    // Walter is seated, so no Walk clip is played for him. The Walk
+    // clips walk in place: the skeleton root (Bone on the 23-joint rig,
+    // Root on the 43-joint rig) does not travel, so the group's patrol
+    // translation does the moving. The root bone's horizontal position
+    // is still reset to its rest pose after each mixer update (see
+    // animate), which keeps the character in place if a clip ever does
+    // carry root motion. If no "Walk" clip is found the character
+    // simply patrols with the step bob as before.
+    let mixer = null, rootBone = null, rootRest = null;
+    if (wr) {
+      try {
+        const walkClip = THREE.AnimationClip.findByName(gltf.animations || [], 'Walk');
+        if (walkClip) {
+          mixer = new THREE.AnimationMixer(group);
+          mixer.clipAction(walkClip).play();
+          group.traverse((o) => {
+            if (!rootBone && o.isBone && (o.name === 'Bone' || o.name === 'Root')) rootBone = o;
+          });
+          if (!rootBone) group.traverse((o) => { if (!rootBone && o.isBone) rootBone = o; });
+          if (rootBone) rootRest = rootBone.position.clone();
+        }
+      } catch (e) { mixer = null; rootBone = null; rootRest = null; }
+    }
+    // Caleb always starts walking south (dir +1), toward the player
+    // spawn at z 4: his patrol faces the direction he walks, so a
+    // random start left him with his back to the camera half the
+    // time and his face could not be seen front-on at spawn. The
+    // others keep a random start direction.
+    humans.push({ group, name: def.name, baseScale: s, phase: Math.random() * 6, seated: def.key === 'walter', baseY: group.position.y, shadow: humanShadows[def.key] || null, walk: wr ? { minZ: wr.minZ, maxZ: wr.maxZ, speed: wr.speed, dir: def.key === 'caleb' ? 1 : (Math.random() < 0.5 ? 1 : -1), stepPhase: Math.random() * 6 } : null, mixer, rootBone, rootRest });
+    humanGroups.push(group);
+    modelGroups[def.key] = { group };
+  };
+  // Retry a timed-out model in the background: two more attempts, the
+  // first after 2 s and the second 5 s after that, each with a 60 s
+  // race. The game has already started by then, so a slow retry never
+  // blocks the player. On success the character is added to the live
+  // scene and registered for gestures; only if every attempt fails is
+  // the player told, and the game continues without them.
+  const retryHumanLater = (def) => {
+    let attempt = 0;
+    const tryOnce = async () => {
+      attempt++;
+      try {
+        const gltf = await loadWithTimeoutMs(def, 60000, true);
+        addLoadedHuman(def, gltf);
+        registerHumans(humans);
+      } catch (e) {
+        if (attempt < 2) {
+          setTimeout(tryOnce, 5000);
+        } else {
+          try { toast(def.name + ' could not be loaded - the game continues without them.'); } catch (e2) { /* toast is best effort */ }
+        }
+      }
+    };
+    setTimeout(tryOnce, 2000);
+  };
   const jobs = MODEL_DEFS.map(async (def) => {
     try {
       const gltf = await loadWithTimeout(def);
-      const group = gltf.scene;
-      group.name = def.name;
-      // Hide Walter's bench (the game already has benches in the car).
-      if (def.hideBench) group.traverse((o) => { if (o.name && o.name.indexOf('Bench') === 0) o.visible = false; });
-      // Skin and Face to flat unlit normal brown (0x8a5a3a). The Casual
-      // models' raw Skin is near-black and the Face near-white, with no
-      // texture map, so as lit standard materials they render far darker
-      // than their colour in the dim light and Jade read as very dark
-      // brown. An unlit basic material renders the exact colour. Names
-      // are kept so the Face/Hair check below still finds them. The
-      // Atlas models (Caleb, Nurse) have no Skin/Face materials (one
-      // Atlas texture for the whole body), so this is a no-op for them
-      // and their texture is untouched.
-      for (const n of ['Skin', 'Face']) {
-        const m = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
-        m.name = n;
-        group.traverse((o) => { if (o.isMesh && o.material && o.material.name === n) o.material = m; });
-      }
-      // Caleb's officer markers: a navy cap and a gold badge disc on the chest.
-      // NOTE: the jacket recolour below is a no-op on the rigged model: the
-      // old scan had a 'casualsuit' material, but the rigged Matt uses a
-      // single "Atlas" texture material for the whole body, so recolouring
-      // it would tint the skin too. The cap + badge carry the officer look.
-      // Positions are calibrated for the rigged Matt (measured from its GLB):
-      // native height 1.508, head top local y 1.503, and it faces -z (local
-      // forward is -z, so the chest front and the brim are on the -z side).
-      // These are local units, added before the height normalisation scales
-      // the whole group, so they land on the head/chest after scaling.
-      if (def.recolourNavy) {
-        const navy = new THREE.MeshStandardMaterial({ color: 0x1a3a5a, roughness: 0.85, metalness: 0.02 });
-        group.traverse((o) => {
-          if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = navy;
-        });
-        // Simple navy cap and a gold badge disc on the chest.
-        const capMat = new THREE.MeshStandardMaterial({ color: 0x16283f, roughness: 0.7 });
-        const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.125, 0.13, 0.07, 16), capMat);
-        crown.position.set(0, 1.51, -0.13); crown.castShadow = true; group.add(crown);
-        const brim = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.012, 0.1), new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3 }));
-        brim.position.set(0, 1.47, -0.22); group.add(brim);
-        const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25, side: THREE.DoubleSide }));
-        badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.22, -0.38); group.add(badge);
-      }
-      group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      // Jade (Casual Female) has the same oversized head as the player
-      // model: its Hair is wider than its shoulders, so it reads as a
-      // wide flat disc about twice normal width. The Atlas models
-      // (Caleb, Nurse) read as chibi, with heads too big for their
-      // bodies, so they get a moderate shrink. Shrink the head bone
-      // before the height is normalised, so the normalisation measures
-      // the corrected head. Walter is a static scan with no Head bone,
-      // so the traverse is a no-op for him. Every clip on the Casual
-      // models carries a Head scale track that would write the scale
-      // back to 1 every frame, so strip that track from every clip so
-      // the shrink stays. (The Atlas clips carry no Head scale track,
-      // so the strip is a no-op for them, but it is kept so a future
-      // re-export of those models cannot undo the shrink either.)
-      let hasFaceHair = false;
-      group.traverse((o) => { if (o.isMesh && o.material && (o.material.name === 'Face' || o.material.name === 'Hair')) hasFaceHair = true; });
-      if (hasFaceHair) {
-        group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.3); });
-      } else {
-        group.traverse((o) => { if (o.isBone && o.name === 'Head') o.scale.setScalar(0.6); });
-      }
-      // The Fist scale tracks are stripped too: Jade's Fist bones are
-      // scaled to FIST_SCALE below and the clips would otherwise write
-      // them back to 1 (a no-op for the Atlas models, which have no
-      // Fist bones).
-      for (const clip of (gltf.animations || [])) {
-        clip.tracks = clip.tracks.filter(t => t.name !== 'Head.scale' && t.name !== 'FistL.scale' && t.name !== 'FistR.scale');
-      }
-      // Normalise height to the character's target height, then re-ground feet at y=0.
-      // Measure the height from the raw geometry, not Box3.setFromObject:
-      // for a skinned mesh that measures the skinned bounds, which
-      // collapse while the bones are unposed at load time, so the scale
-      // came out far too big and the character stood metres tall.
-      group.updateMatrixWorld(true);
-      let minY = Infinity, maxY = -Infinity;
-      const _gb = new THREE.Box3();
-      group.traverse(o => {
-        if (!o.isMesh || !o.geometry || !o.geometry.attributes || !o.geometry.attributes.position) return;
-        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
-        _gb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
-        if (_gb.min.y < minY) minY = _gb.min.y;
-        if (_gb.max.y > maxY) maxY = _gb.max.y;
-      });
-      let s = 1;
-      const geomH = (maxY > minY) ? (maxY - minY) : 0;
-      if (def.targetHeight && geomH > 0) s = def.targetHeight / geomH;
-      group.scale.setScalar(s);
-      group.position.set(def.x, -minY * s, def.z);
-      group.rotation.y = def.faceYaw || 0;
-      // Clear 3D facial features on the Head bone (eyes, nose, mouth,
-      // eyebrows). The Face texture does not read from the front, and
-      // the Atlas models have no Face mesh at all, so the face looks
-      // blank. Walter is a static scan with no Head bone, so this is a
-      // no-op for him. The Head bone scale is 0.3 for Casual models
-      // (Face/Hair) and 0.6 for Atlas models. Jade (Casual) gets the
-      // painted face texture and skin tonal variation first: her
-      // painted brows are only a faint wash, because her moving 3D
-      // brows from expression.js are the brows. She also gets the
-      // jointed fingers and the Fist scale, the same treatment as the
-      // player. Caleb and Nurse (Atlas) have no Face mesh and no Fist
-      // bones, so they keep their textured head and get the small
-      // real-eye features below instead.
-      {
-        const layout = FACE_LAYOUTS[def.key];
-        if (layout) {
-          let headBone = null;
-          group.traverse((o) => { if (!headBone && o.isBone && o.name === 'Head') headBone = o; });
-          const headScale = hasFaceHair ? 0.3 : 0.6;
-          let fitScale = 1;
-          group.traverse((o) => { if (o.name === '__fit' && o.scale) fitScale = o.scale.x; });
-          if (hasFaceHair) {
-            group.traverse((o) => {
-              if (o.isMesh && o.material && o.material.name === 'Face') paintFaceOnMesh(o, false);
-              if (o.isMesh && o.material && o.material.name === 'Skin') addSkinToneVariation(o);
-            });
-            const fistL = group.getObjectByName('FistL');
-            const fistR = group.getObjectByName('FistR');
-            if (fistL) fistL.scale.setScalar(FIST_SCALE);
-            if (fistR) fistR.scale.setScalar(FIST_SCALE);
-            addJointedFingers(fistL, fitScale * s, 1);
-            addJointedFingers(fistR, fitScale * s, -1);
-          }
-          addFaceFeatures(headBone, headScale * s, layout, fitScale);
-        }
-      }
-      scene.add(group);
-      // Walking: the standing characters patrol a short stretch of the aisle so
-      // the car feels alive instead of frozen. Walter stays seated. Each walker
-      // gets a patrol range around their home spot, a slow speed, and a step
-      // phase for the bob. The contact shadow follows them.
-      const walkRanges = {
-        jade: { minZ: -4.5, maxZ: -0.5, speed: 0.35 },
-        caleb: { minZ: -4.5, maxZ: 0.5, speed: 0.4 },
-        nurse: { minZ: -0.5, maxZ: 3.5, speed: 0.3 }
-      };
-      const wr = walkRanges[def.key];
-      // Walk animation (rigged models only): the standing characters play
-      // the plain "Walk" clip on loop while they patrol, so arms swing
-      // from the shoulder, elbows bend, and legs step with knees bending.
-      // Walter is seated, so no Walk clip is played for him. The Walk
-      // clips walk in place: the skeleton root (Bone on the 23-joint rig,
-      // Root on the 43-joint rig) does not travel, so the group's patrol
-      // translation does the moving. The root bone's horizontal position
-      // is still reset to its rest pose after each mixer update (see
-      // animate), which keeps the character in place if a clip ever does
-      // carry root motion. If no "Walk" clip is found the character
-      // simply patrols with the step bob as before.
-      let mixer = null, rootBone = null, rootRest = null;
-      if (wr) {
-        try {
-          const walkClip = THREE.AnimationClip.findByName(gltf.animations || [], 'Walk');
-          if (walkClip) {
-            mixer = new THREE.AnimationMixer(group);
-            mixer.clipAction(walkClip).play();
-            group.traverse((o) => {
-              if (!rootBone && o.isBone && (o.name === 'Bone' || o.name === 'Root')) rootBone = o;
-            });
-            if (!rootBone) group.traverse((o) => { if (!rootBone && o.isBone) rootBone = o; });
-            if (rootBone) rootRest = rootBone.position.clone();
-          }
-        } catch (e) { mixer = null; rootBone = null; rootRest = null; }
-      }
-      // Caleb always starts walking south (dir +1), toward the player
-      // spawn at z 4: his patrol faces the direction he walks, so a
-      // random start left him with his back to the camera half the
-      // time and his face could not be seen front-on at spawn. The
-      // others keep a random start direction.
-      humans.push({ group, name: def.name, baseScale: s, phase: Math.random() * 6, seated: def.key === 'walter', baseY: group.position.y, shadow: humanShadows[def.key] || null, walk: wr ? { minZ: wr.minZ, maxZ: wr.maxZ, speed: wr.speed, dir: def.key === 'caleb' ? 1 : (Math.random() < 0.5 ? 1 : -1), stepPhase: Math.random() * 6 } : null, mixer, rootBone, rootRest });
-      humanGroups.push(group);
-      modelGroups[def.key] = { group };
+      addLoadedHuman(def, gltf);
     } catch (e) {
-      failures.push(def.key + ': ' + (e && e.message ? e.message : e));
+      const msg = e && e.message ? e.message : String(e);
+      if (msg.indexOf('load timed out') !== -1) {
+        // Slow, not broken: the game starts on time and this model is
+        // retried in the background. Only a retry that also fails is
+        // reported to the player.
+        timedOut.push(def);
+      } else {
+        failures.push(def.key + ': ' + msg);
+      }
     }
     done++;
     loadingText.textContent = 'Loading characters... ' + done + ' / ' + MODEL_DEFS.length;
   });
   await Promise.all(jobs);
   registerHumans(humans); // speaking gestures use the loaded models
+  // A model that timed out is retried in the background once the game
+  // is running: the file is small and loads fast in a real browser,
+  // so the stall is in the live tab, not the model, and a later
+  // attempt usually lands. The character streams in when he arrives.
+  for (const def of timedOut) retryHumanLater(def);
   if (failures.length) {
     loadingError.classList.remove('hidden');
     loadingError.textContent = 'Could not load: ' + failures.join(' ; ') + '. The game can still start without them.';
@@ -1321,6 +1384,15 @@ function animate() {
   relayBackplateMat.emissiveIntensity = (isBlackout ? 0.7 : 0.12) + 0.08 * pulse;
   relayMarker.position.y = 2.2 + Math.sin(t * 2) * 0.06;
   relayArrow.position.y = 1.95 + Math.sin(t * 2) * 0.06;
+  // RESET board beacon: pulse the green glow and the board's own emissive
+  // once the objective is live, so the small board stays findable in the
+  // dark car after the battery dies.
+  if (boardMarker.visible) {
+    boardGlow.material.opacity = 0.22 + 0.08 * pulse;
+    boardGlow.scale.set(1.1 + 0.25 * pulse, 1.1 + 0.25 * pulse, 1);
+    boardMarker.position.y = 2.0 + Math.sin(t * 2) * 0.06;
+    board.material.emissiveIntensity = 0.55 + 0.35 * pulse;
+  }
   // Tunnel lights stream past the windows while the train is moving (intro
   // stage, and again after the repair when the train moves off); once the
   // blackout hits, the train is stopped and they freeze. Wall lamps stream
@@ -1660,7 +1732,7 @@ function sealedChoice() {
       { label: 'Residential - dialysis clinic line', effect: () => { state.sealedChoice = 'Residential'; integrity('Power', -5); sealActIChoice('Residential'); } },
       { label: 'Industrial - water treatment plant', effect: () => { state.sealedChoice = 'Industrial'; integrity('Transit', -5); sealActIChoice('Industrial'); } }
     ] }
-  ], () => { setObjectives(5); toast('Choice sealed. Find the green RESET board behind you.'); });
+  ], () => { setObjectives(5); boardGlow.visible = true; boardMarker.visible = true; boardLight.visible = true; toast('Choice sealed. Find the green RESET board behind you.'); });
 }
 // Seal the Act I pick on Sepolia when a wallet is connected. Never
 // blocks the dialogue: the seal runs in the background, and if it
