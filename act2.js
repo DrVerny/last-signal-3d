@@ -362,6 +362,15 @@ let camBounds = VIEWS[1];
 const ARRIVAL_VIEW = { pos: [-3.9, 1.7, 12.3], yaw: Math.PI };
 let arrivalDone = false; // true once the player has walked off the platform
 let mission1Started = false; // true once startMission1 has run
+// The rental car at Rondout station: a free plain sedan he drives to the
+// water facility. The mission briefing starts only after that drive.
+let stationRental = null; // { group, hit, label } built at the station, removed on take
+let rentalTaken = false; // true once he has taken the rental car
+let arrivedByRental = false; // the rental drive just ended; park the rental at the facility
+let travelRental = false; // the drive in progress is the rental car, not his own car
+let rentalExtraCar = null; // his own car in the second bay while the rental takes the first
+let rentalToastAt = -10; // throttle for the walk-up rental toast
+let takeRentalBtnEl = null;
 // The dam the water is piped from: the concrete wall stands on the west
 // side at x -14, and the roar of its spillway is the Mission 1 ambient.
 // DAM_X/DAM_Z is the roar source point for the distance level.
@@ -466,6 +475,33 @@ function parkPlayerCar(mission) {
   const p = PARKING[mission];
   if (!p) return;
   const group = mission === 1 ? mission1 : mission === 2 ? mission2 : mission3;
+  // Rental arrival at the facility: the rental parks in the player's bay
+  // and his own car takes the second bay, so seatIfDrove seats him in
+  // the car he drove. Consumes the flag here, before seating.
+  if (mission === 1 && arrivedByRental) {
+    arrivedByRental = false;
+    try { disposeCarGroup(parkedCars[1]); } catch (e) { /* ignore */ }
+    parkedCars[1] = null;
+    try { disposeCarGroup(rentalExtraCar); } catch (e) { /* ignore */ }
+    rentalExtraCar = null;
+    let rental = null;
+    try { rental = buildRentalCar(); } catch (e) { rental = null; }
+    if (rental) {
+      rental.rotation.y = p.carRotY;
+      rental.position.set(p.carX, 0, p.carZ);
+      group.add(rental);
+      parkedCars[1] = rental;
+    }
+    let own = null;
+    try { own = buildPlayerCar(); } catch (e) { own = null; }
+    if (own) {
+      own.rotation.y = p.carRotY;
+      own.position.set(p.cx + 1.4, 0, p.carZ);
+      group.add(own);
+      rentalExtraCar = own;
+    }
+    return;
+  }
   try { disposeCarGroup(parkedCars[mission]); } catch (e) { /* ignore */ }
   parkedCars[mission] = null;
   let car = null;
@@ -478,10 +514,11 @@ function parkPlayerCar(mission) {
 }
 // After a drive arrival, stand the player beside the parked car instead
 // of at the default mission spawn, so he has just got out of the car.
-// Only Mission 2 has a drive spawn: Mission 1 is reached by train and
-// Mission 3 on foot or by a drive the deck bounds cannot hold (the deck
-// is 2.4 m wide), so they keep their normal spawn and the car is simply
-// parked in the lot. Consumes the arrivedByDrive flag.
+// Mission 1 uses this for the rental drive from Rondout station, and
+// Mission 2 for a drive to the substation. Mission 3 has no drive
+// spawn: it is reached on foot or by a drive the deck bounds cannot
+// hold (the deck is 2.4 m wide), so it keeps its normal spawn and the
+// car is simply parked in the lot. Consumes the arrivedByDrive flag.
 function applyDriveSpawn(mission) {
   const p = PARKING[mission];
   if (!arrivedByDrive || !p || !p.driveSpawn) { arrivedByDrive = false; return; }
@@ -1435,26 +1472,32 @@ function moralChoiceWater() {
   ], () => { setObjectives(OBJ1, 4); toast('Click the small green circuit board on the station wall - it is outside, so leave the valve room first if you are still in it.'); });
 }
 // Act II arrival: the player steps off the train at Rondout station.
-// No briefing, no objectives, no dialogue yet: he walks off the
-// platform toward the tower first, and the mission starts when he
-// crosses z 7 (see the arrival trigger in animate()).
+// No briefing, no dialogue yet: he takes the free rental car by the
+// platform and drives it to the facility first, and the mission starts
+// when that drive arrives (see startRentalDrive).
 function startArrival() {
   try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
   mission1Started = false; arrivalDone = false;
+  rentalTaken = false; arrivedByRental = false; travelRental = false;
+  hideTakeRentalButton();
   setTimeOfDay('day'); // Rondout arrival is bright morning.
   currentPlaceKey = 'reservoir';
-  setObjectives([], 0);
+  setObjectives(['Take the rental car to the water facility'], 0);
   updateHUD();
   camera.position.set(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[1], ARRIVAL_VIEW.pos[2]);
   state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = VIEWS[1];
   // The player's car is already parked in the lot in front of the
   // tower, so he sees it as he walks up from the platform.
   parkPlayerCar(1);
-  toast('Rondout station, 6 AM. You step off the train.');
+  // A free rental car waits by the platform end: he drives it to the
+  // facility, parks it, and only then does the mission begin.
+  buildStationRental();
+  toast('Rondout station, 6 AM. You step off the train. A free rental car is waiting by the platform - take it to the water facility.');
 }
 function startMission1() {
   if (mission1Started) return; // the arrival trigger fires exactly once
   mission1Started = true;
+  hideTakeRentalButton(); // the rental step is done; the button must not linger
   // Third person on entering the mission, so the player sees himself.
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   // Build the jaw morphs now that the game is on screen, not during the
@@ -1501,6 +1544,83 @@ function startMission1() {
     toast('Enter the valve room through the station door - the valves are inside. Walk up to a valve wheel to open the pressure controls.');
   });
   });
+}
+
+// ---------- The rental car: Rondout station to the water facility ----------
+// The player steps off the train, takes a free rental car by the platform
+// and drives it to the facility. The rental is a plain light-grey sedan
+// with no brand and no logo; the UI calls it a rental car.
+function buildRentalCar() {
+  const car = buildCar(0xcfd4d6, { type: 'sedan' });
+  car.userData.carName = 'Rental car';
+  return car;
+}
+function buildStationRental() {
+  disposeStationRental();
+  const g = new THREE.Group();
+  // Asphalt pull-off under the car, east of the dirt track by the
+  // platform end, so it reads as a parked rental, not a car on the grass.
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.06, 5.6), stdMat({ color: 0x3a3d40, roughness: 0.95 }));
+  pad.position.set(4.5, 0.03, 9.0); pad.receiveShadow = true; g.add(pad);
+  const car = buildRentalCar();
+  car.rotation.y = Math.PI; // facing north, up the track toward the facility
+  car.position.set(4.5, 0, 9.0);
+  g.add(car);
+  // Floating label so the player can find it from the platform.
+  const label = makeTextSprite('RENTAL CAR - FREE', '#ffd166');
+  label.scale.set(4.6, 1.15, 1); label.position.set(4.5, 2.9, 9.0); g.add(label);
+  // Generous invisible hit box over the car, so a tap anywhere on it
+  // takes the rental.
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.4, 5.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  hit.position.set(4.5, 1.1, 9.0); hit.name = 'rentalCar'; hit.userData.clickable = true; g.add(hit);
+  mission1.add(g);
+  stationRental = { group: g, hit, label };
+  window._rentalCarHit = hit;
+}
+function disposeStationRental() {
+  if (!stationRental) return;
+  try { mission1.remove(stationRental.group); } catch (e) { /* ignore */ }
+  try { disposeCarGroup(stationRental.group); } catch (e) { /* ignore */ }
+  stationRental = null; window._rentalCarHit = null;
+}
+// Gold on-screen button, the forgiving path for players who walk up to
+// the rental without thinking to click it. Mirrors the Get out button.
+function showTakeRentalButton() {
+  if (!takeRentalBtnEl) {
+    takeRentalBtnEl = document.createElement('div');
+    takeRentalBtnEl.id = 'takeRentalBtn';
+    takeRentalBtnEl.innerHTML = '<button type="button" id="takeRentalBtnInner" style="padding:14px 26px;font-size:17px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:10px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.5);">Take the rental car</button>';
+    takeRentalBtnEl.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);z-index:56;text-align:center;pointer-events:auto;';
+    document.body.appendChild(takeRentalBtnEl);
+    document.getElementById('takeRentalBtnInner').onclick = () => { startRentalDrive(); };
+  }
+  takeRentalBtnEl.style.display = 'block';
+}
+function hideTakeRentalButton() { if (takeRentalBtnEl) takeRentalBtnEl.style.display = 'none'; }
+// Take the rental and drive it to the water facility. Short drive: the
+// station and the facility share one map, so the drive is the 12-second
+// minimum. On arrival the rental parks in the lot and the mission
+// briefing starts only then.
+function startRentalDrive() {
+  if (rentalTaken || travelActive || mission1Started) return;
+  rentalTaken = true;
+  hideTakeRentalButton();
+  // The station rental is the car he drives: take it off the platform
+  // so it does not sit there twice after the drive.
+  disposeStationRental();
+  travelRental = true;
+  mapFromKey = 'reservoir';
+  try {
+    startTravelDrive('reservoir', () => {
+      arrivedByRental = true;
+      startMission1();
+    });
+  } catch (e) {
+    // The drive did not start: put the rental back and let him try again.
+    travelRental = false; rentalTaken = false;
+    buildStationRental();
+    toast('The rental car would not start - try again.');
+  }
 }
 
 // ---------- Mission 2: The Grid (Con Edison substation) ----------
@@ -3013,7 +3133,8 @@ function startTravelDrive(toKey, onArrive) {
       } catch (e) { /* ignore */ }
       driveCar = null;
     }
-    driveCar = buildPlayerCar();
+    // The rental drive uses the plain rental sedan, not his own car.
+    driveCar = travelRental ? buildRentalCar() : buildPlayerCar();
     driveCar.rotation.y = Math.PI;
     driveCar.position.set(0, 0, 4);
     travelGroup.add(driveCar);
@@ -3037,6 +3158,8 @@ function startTravelDrive(toKey, onArrive) {
   camera.position.set(0, 1.7, 4);
   state.yaw = 0; state.pitch = 0;
   showDriveHood();
+  // The hood shows the equipped car name; the rental drive says so.
+  if (travelRental) { const hl = driveHoodEl && driveHoodEl.querySelector('.hood-label'); if (hl) hl.textContent = 'Rental car'; }
   updateDriveBanner();
   // Drive controls: no more "any key skips" - the drive is driven now.
   // W or D is gas, S is brake, C switches the camera view, Escape (or
@@ -3066,7 +3189,8 @@ function updateDriveBanner() {
   const left = Math.max(0, Math.round(travelMiles * (1 - travelT / travelDur)));
   if (left === travelLastMilesShown) return;
   travelLastMilesShown = left;
-  showActionBanner('Driving your ' + car.name + ' to ' + to.name + ' - ' + left + ' miles to go. Hold W or D to drive, S to brake, C to switch view, Esc or Skip to arrive.');
+  if (travelRental) showActionBanner('Driving the rental car to the water facility - ' + left + ' miles to go. Hold W or D to drive, S to brake, C to switch view, Esc or Skip to arrive.');
+  else showActionBanner('Driving your ' + car.name + ' to ' + to.name + ' - ' + left + ' miles to go. Hold W or D to drive, S to brake, C to switch view, Esc or Skip to arrive.');
 }
 function endTravelDrive() {
   if (!travelActive) return;
@@ -3106,6 +3230,7 @@ function endTravelDrive() {
   arrivedByDrive = true;
   if (cb) cb();
   arrivedByDrive = false;
+  travelRental = false;
 }
 function updateTravelDrive(dt, t) {
   if (!travelActive) return;
@@ -3800,6 +3925,7 @@ export function stopAct() {
   actActive = false;
   dlgToken++; // a pending auto-advance must not fire after the act stops
   if (dlgTimer) { clearTimeout(dlgTimer); dlgTimer = null; }
+  try { hideTakeRentalButton(); } catch (e) { /* button is optional */ }
   if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
   try { if (typeof valveTimer !== 'undefined' && valveTimer) { clearInterval(valveTimer); valveTimer = null; } } catch (e) { /* ignore */ }
   try { if (typeof bombInterval !== 'undefined' && bombInterval) { clearInterval(bombInterval); bombInterval = null; } } catch (e) { /* ignore */ }
@@ -3832,7 +3958,7 @@ function handleTap(clientX, clientY) {
   if (!document.getElementById('valveModal').classList.contains('hidden')) return;
   if (!document.getElementById('scadaModal').classList.contains('hidden')) return;
   const targets = [];
-  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, window._stationDoor, window._stationDoorHit, window._stationKey, window._stationKeyLabel);
+  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, window._stationDoor, window._stationDoorHit, window._stationKey, window._stationKeyLabel, window._rentalCarHit);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
   if (state.mission === 3) targets.push(...chargeMeshes, window._catwalkHit, ...(window._catwalkPlanks || []));
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
@@ -3873,6 +3999,7 @@ function interact(name) {
   // The parked car door: open it and step outside. This is how the
   // player gets out of the car at any destination he drove to.
   if (name === 'carDoor') { getOutOfParkedCar(); return; }
+  if (name === 'rentalCar') { startRentalDrive(); return; }
   if (name === 'valveHospital' || name === 'valveResidential' || name === 'valveIndustrial') {
     // The valves are inside the valve room: the puzzle only opens once the
     // player has walked in through the station door to reach them.
@@ -3893,6 +4020,12 @@ function interact(name) {
     return;
   }
   if (name === 'stationDoor') {
+    // Before the mission starts the door stays shut: he takes the rental
+    // car to the facility first. The briefing starts after that drive.
+    if (!mission1Started) {
+      toast('Take the rental car to the water facility first - it is free and waiting by the platform.');
+      return;
+    }
     // The station door is locked: it needs the station key, which is
     // on the hook beside the door. Without the key the door shows it
     // is locked instead of opening.
@@ -4019,7 +4152,23 @@ function animate() {
     && document.getElementById('valveModal').classList.contains('hidden')) {
     if (camera.position.z < 7) {
       arrivalDone = true;
-      startMission1();
+      // Walking off the platform leads to the rental car, not straight
+      // into the mission: the briefing starts only after the rental drive.
+      showTakeRentalButton();
+      toast('Take the rental car to the water facility - it is free. Click the car, or tap Take the rental car.');
+    }
+  }
+  // The rental car by the platform: walking up to it offers the drive,
+  // so a player who does not think to click still gets the button.
+  if (state.mission === 1 && !mission1Started && !rentalTaken && stationRental
+    && document.getElementById('dialogue').classList.contains('hidden')
+    && document.getElementById('valveModal').classList.contains('hidden')) {
+    if (dist2D(camera.position.x, camera.position.z, 4.5, 9.0) < 4) {
+      showTakeRentalButton();
+      if (t - rentalToastAt > 6) {
+        rentalToastAt = t;
+        toast('Rental car - free. Take it to the water facility.');
+      }
     }
   }
   // Station key: walking up to the hook picks it up, so a missed click
@@ -4048,7 +4197,12 @@ function animate() {
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
     if (dist2D(camera.position.x, camera.position.z, 0, -0.68) < 1.8) {
-      if (hasKey('station')) enterValveRoom();
+      if (!mission1Started) {
+        if (t - stationDoorLockedAt > 3) {
+          stationDoorLockedAt = t;
+          toast('Take the rental car to the water facility first - it is free and waiting by the platform.');
+        }
+      } else if (hasKey('station')) enterValveRoom();
       else if (t - stationDoorLockedAt > 3) {
         stationDoorLockedAt = t;
         toast('Locked - needs the station key. It is on the hook beside the door.');
