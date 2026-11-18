@@ -1,7 +1,11 @@
 // THE LAST SIGNAL - in-game economy: ZAMA, the store, clothes, cars, accessories.
-// No wallet, no real money: ZAMA here is play money earned by finishing missions.
-// It persists in localStorage so it survives reloads. Demo mode works with
-// no wallet connected - the store and the money are purely in-game.
+// No real money: ZAMA here is play money earned by finishing missions.
+// It persists in localStorage so it survives reloads. Earning ZAMA needs
+// no wallet. Spending it in the store does: the player connects a wallet
+// and signs in ("Sign in to THE LAST SIGNAL", zama.js). The ZAMA stays
+// in-game; the wallet is only the sign-in. Without it the store is
+// browse-only: items show, buying is locked.
+import { isWalletSignedIn, signInWithWallet, getSignedInAddress, shortAddr } from './zama.js';
 
 // Mission payouts. The story missions total exactly 1,000,000 ZAMA.
 // The two side missions (wind tunnel lab, symposium hall) add 5,000
@@ -82,15 +86,17 @@ export function migrateCurrency() {
     localStorage.setItem(CURRENCY_KEY, '1');
   } catch (e) { /* private mode - migration skipped, balance stays as-is */ }
 }
-function setBalance(n) { try { localStorage.setItem(MONEY_KEY, String(Math.max(0, Math.floor(n)))); } catch (e) { /* ignore */ } updateWalletHUD(); }
+function setBalance(n) { try { localStorage.setItem(MONEY_KEY, String(Math.max(0, Math.round(n * 100) / 100))); } catch (e) { /* ignore */ } updateWalletHUD(); }
 export function addMoney(n) { setBalance(getBalance() + n); }
-function spendMoney(n) { if (getBalance() < n) return false; setBalance(getBalance() - n); return true; }
+export function spendMoney(n) { if (getBalance() < n) return false; setBalance(getBalance() - n); return true; }
 
 export function updateWalletHUD() {
   const el = document.getElementById('walletBal');
   if (el) el.innerHTML = moneyHTML(getBalance());
   const sb = document.getElementById('storeBalance');
   if (sb) sb.innerHTML = 'Balance: ' + moneyHTML(getBalance());
+  const sw = document.getElementById('storeWallet');
+  if (sw) sw.textContent = isWalletSignedIn() ? 'Signed in: ' + shortAddr(getSignedInAddress()) : '';
 }
 
 // A gold toast on the shared #toast element, like the acts use.
@@ -160,6 +166,11 @@ function buyItem(id) {
   const item = ITEM_BY_ID[id];
   if (!item) return false;
   if (isOwned(id)) return false;
+  // Spending needs the wallet connected and signed in (zama.js). The
+  // ZAMA stays in-game; the wallet is only the sign-in. This is the
+  // enforcement: the Buy buttons are disabled while locked too, but a
+  // stale button must not be able to spend.
+  if (!isWalletSignedIn()) { storeMsg('Buying is locked - connect your wallet and sign in to spend ZAMA. Your ZAMA stays in-game; the wallet is only your sign-in.'); return false; }
   if (!spendMoney(item.price)) { storeMsg('Not enough ZAMA - ' + item.name + ' costs ' + moneyHTML(item.price) + ', you have ' + moneyHTML(getBalance()) + '. Finish a mission to earn more.'); return false; }
   const owned = getOwned(); owned.push(id); writeJSON(OWNED_KEY, owned);
   storeMsg('Bought ' + item.name + ' for ' + moneyHTML(item.price) + '.');
@@ -332,6 +343,13 @@ function renderStoreItems() {
   if (!box) return;
   const eq = getEquipped();
   const items = STORE_ITEMS[storeTab] || [];
+  const signedIn = isWalletSignedIn();
+  // Lock banner: buying is locked until the wallet is connected and
+  // signed in. Browsing and equipping what he already owns still work.
+  const lock = document.getElementById('storeLock');
+  if (lock) lock.classList.toggle('hidden', signedIn);
+  const signBtn = document.getElementById('storeSignInBtn');
+  if (signBtn) { signBtn.disabled = false; signBtn.textContent = 'Connect wallet and sign in'; }
   box.innerHTML = '';
   for (const it of items) {
     const owned = isOwned(it.id);
@@ -346,6 +364,7 @@ function renderStoreItems() {
     btn.type = 'button';
     if (!owned) {
       btn.innerHTML = 'Buy ' + (it.price === 0 ? 'Free' : moneyHTML(it.price));
+      if (!signedIn) { btn.disabled = true; btn.title = 'Connect your wallet and sign in to buy'; }
       btn.onclick = () => { if (buyItem(it.id)) { renderStoreItems(); drawPreview(); updateWalletHUD(); } else { renderStoreItems(); } };
     } else if (storeTab === 'accessories') {
       btn.textContent = isEq ? 'Unequip' : 'Wear';
@@ -373,11 +392,15 @@ function buildStore() {
   ov.id = 'storeOverlay';
   ov.className = 'hidden';
   ov.innerHTML = '<div class="store-panel">'
-    + '<div class="store-head"><span>STORE</span><span id="storeBalance"></span><button id="storeClose" type="button">Close</button></div>'
+    + '<div class="store-head"><span>STORE</span><span id="storeBalance"></span><span id="storeWallet"></span><button id="storeClose" type="button">Close</button></div>'
     + '<div class="store-tabs">'
     + '<button type="button" data-tab="clothes">Clothes</button>'
     + '<button type="button" data-tab="cars">Cars</button>'
     + '<button type="button" data-tab="accessories">Accessories</button>'
+    + '</div>'
+    + '<div id="storeLock" class="store-lock hidden">'
+    + '<div>Buying is locked. Connect your wallet and sign in to spend your ZAMA. Your ZAMA stays in-game - the wallet is only your sign-in, not a payment.</div>'
+    + '<button id="storeSignInBtn" type="button">Connect wallet and sign in</button>'
     + '</div>'
     + '<div class="store-body">'
     + '<div class="store-look"><div class="store-look-label">Your look</div><canvas id="lookCanvas" width="220" height="320"></canvas><div id="lookCaption"></div></div>'
@@ -387,6 +410,17 @@ function buildStore() {
     + '</div>';
   document.body.appendChild(ov);
   document.getElementById('storeClose').onclick = () => closeStore();
+  document.getElementById('storeSignInBtn').onclick = () => {
+    const b = document.getElementById('storeSignInBtn');
+    if (b) { b.disabled = true; b.textContent = 'Waiting for your wallet…'; }
+    // Re-render when the flow settles either way: on success the
+    // banner hides and buying unlocks; on a rejected prompt the
+    // button comes back so he can try again.
+    signInWithWallet().then(() => { renderStoreItems(); }).catch(() => { renderStoreItems(); });
+  };
+  // The wallet account or network changed: the sign-in is gone, so the
+  // store must lock again at once if it is open.
+  addEventListener('lastSignalWalletChanged', () => { if (isStoreOpen()) renderStoreItems(); updateWalletHUD(); });
   document.querySelectorAll('#storeOverlay .store-tabs button').forEach(b => {
     b.onclick = () => { storeTab = b.dataset.tab; storeMsg(''); renderStoreItems(); };
   });

@@ -18,6 +18,16 @@
 // fails (wallet rejected, no gas, contract not deployed), the game
 // continues in demo mode and the status line says so plainly.
 //
+// WALLET SIGN-IN (store spending):
+// Spending in-game ZAMA in the store needs the wallet connected AND
+// signed in: after connecting, the player signs the short message
+// "Sign in to THE LAST SIGNAL" with the wallet. The ZAMA stays
+// in-game play money - there is no on-chain token and no payment;
+// the wallet is only the sign-in that unlocks spending. Earning ZAMA
+// from missions needs no wallet. The sign-in lasts for the browser
+// session (sessionStorage, keyed by address), so it survives the page
+// reload between acts; a new tab or a different wallet signs in again.
+//
 // Libraries (vendored, no CDN needed):
 //   vendor/ethers.umd.min.js  -> window.ethers (ethers v6 UMD),
 //     loaded with a classic <script> tag in index.html / act3.html.
@@ -46,12 +56,26 @@ const ETHERSCAN = "https://sepolia.etherscan.io";
 let zama = null;
 // Which choices this session sealed on-chain (confirmed tx).
 const sealedOnChain = { priority: false, final: false };
+// Wallet sign-in for store spending (see the header note above).
+const SIGN_IN_MESSAGE = "Sign in to THE LAST SIGNAL";
+const SIGN_IN_KEY = "lastSignalWalletSignIn";
+let walletSignedIn = false;
 
 export function isConfigured() { return !!CFG.CONTRACT_ADDRESS; }
 export function isConnected() { return !!zama; }
 export function getMode() { return isConnected() ? "sepolia" : "demo"; }
 export function wasSealedOnChain(kind) { return !!sealedOnChain[kind]; }
 export function getAccount() { return zama ? zama.account : null; }
+// Signed in means the connected wallet signed the sign-in message this
+// browser session. The signed address is kept in sessionStorage, so a
+// page reload between acts keeps the sign-in, but only for the same
+// wallet: a different account has to sign in again.
+export function isWalletSignedIn() {
+  if (walletSignedIn) return true;
+  if (!isConnected()) return false;
+  try { return sessionStorage.getItem(SIGN_IN_KEY) === zama.account; } catch (e) { return false; }
+}
+export function getSignedInAddress() { return isWalletSignedIn() ? zama.account : null; }
 export function shortAddr(a) { return a ? a.slice(0, 6) + "…" + a.slice(-4) : ""; }
 
 function el(id) { return document.getElementById(id); }
@@ -76,7 +100,17 @@ function setModeBadge() {
     b.classList.add("demo");
   }
   const w = el("zamaWallet");
-  if (w) w.textContent = isConnected() ? "Connected: " + shortAddr(zama.account) + " (Sepolia)" : "";
+  if (w) {
+    if (isWalletSignedIn()) w.textContent = "Signed in: " + shortAddr(zama.account) + " (Sepolia)";
+    else if (isConnected()) w.textContent = "Connected: " + shortAddr(zama.account) + " (Sepolia) - sign in to unlock the store";
+    else w.textContent = "";
+  }
+  const cb = el("zamaConnectBtn");
+  if (cb) {
+    if (isWalletSignedIn()) cb.textContent = "Signed in: " + shortAddr(zama.account);
+    else if (isConnected()) cb.textContent = "Sign in to unlock the store";
+    else cb.textContent = isConfigured() ? "Connect wallet (Sepolia)" : "Connect wallet (Sepolia - not deployed yet)";
+  }
 }
 
 export function friendlyError(e) {
@@ -119,6 +153,10 @@ export async function connectWallet(onConnect) {
     const signer = await provider.getSigner();
     const contract = new window.ethers.Contract(CFG.CONTRACT_ADDRESS, ABI, signer);
     zama = { provider, signer, contract, account: accounts[0], instance: null };
+    // Signed in earlier this session with the same wallet? The sign-in
+    // survives the page reload between acts, so no new signature is
+    // needed for the same address.
+    try { walletSignedIn = sessionStorage.getItem(SIGN_IN_KEY) === accounts[0]; } catch (e) { walletSignedIn = false; }
     setModeBadge();
     setZamaStatus("Wallet connected. Your sealed choices will also be encrypted on Sepolia.");
     if (onConnect) { try { await onConnect(); } catch (e) { /* the game decides what a failed refresh means */ } }
@@ -126,6 +164,33 @@ export async function connectWallet(onConnect) {
   } catch (e) {
     setZamaStatus("Wallet connection failed: " + friendlyError(e));
     return null;
+  }
+}
+
+// Connect the wallet if needed, then sign the sign-in message. Returns
+// true when the wallet is connected and signed in, false otherwise.
+// Never throws: every failure is reported through the status line and
+// the store stays locked. `onConnect` is passed through to
+// connectWallet, so the acts' post-connect refresh still runs.
+export async function signInWithWallet(onConnect) {
+  if (!isConnected()) {
+    const account = await connectWallet(onConnect);
+    if (!account) return false;
+  }
+  if (isWalletSignedIn()) { setModeBadge(); return true; }
+  if (!zama || !zama.signer) return false;
+  try {
+    setZamaStatus("Sign in with your wallet - sign the message to unlock the store. No money moves; the wallet is only your sign-in.");
+    const sig = await zama.signer.signMessage(SIGN_IN_MESSAGE);
+    if (!sig) throw new Error("No signature returned.");
+    walletSignedIn = true;
+    try { sessionStorage.setItem(SIGN_IN_KEY, zama.account); } catch (e) { /* private mode */ }
+    setModeBadge();
+    setZamaStatus("Signed in as " + shortAddr(zama.account) + " - the store is unlocked. Your ZAMA stays in-game.");
+    return true;
+  } catch (e) {
+    setZamaStatus("Sign-in cancelled - the store stays locked until you sign in. " + friendlyError(e));
+    return false;
   }
 }
 
@@ -287,18 +352,25 @@ export function initZamaUI(options) {
   setModeBadge();
   const btn = el("zamaConnectBtn");
   if (btn) {
-    btn.onclick = () => { connectWallet(options && options.onConnect); };
-    if (!isConfigured()) btn.textContent = "Connect wallet (Sepolia - not deployed yet)";
+    // One flow: connect the wallet, then sign in. The sign-in is what
+    // unlocks spending ZAMA in the store.
+    btn.onclick = () => { signInWithWallet(options && options.onConnect); };
   }
   if (window.ethereum && !zamaListenersAttached) {
     zamaListenersAttached = true;
     window.ethereum.on("accountsChanged", () => {
-      zama = null; sealedOnChain.priority = false; sealedOnChain.final = false;
+      zama = null; walletSignedIn = false;
+      try { sessionStorage.removeItem(SIGN_IN_KEY); } catch (e) { /* ignore */ }
+      sealedOnChain.priority = false; sealedOnChain.final = false;
       setModeBadge(); setZamaStatus("Wallet account changed - connect again.");
+      try { window.dispatchEvent(new CustomEvent("lastSignalWalletChanged")); } catch (e) { /* ignore */ }
     });
     window.ethereum.on("chainChanged", () => {
-      zama = null; sealedOnChain.priority = false; sealedOnChain.final = false;
+      zama = null; walletSignedIn = false;
+      try { sessionStorage.removeItem(SIGN_IN_KEY); } catch (e) { /* ignore */ }
+      sealedOnChain.priority = false; sealedOnChain.final = false;
       setModeBadge(); setZamaStatus("Network changed - connect again on Sepolia.");
+      try { window.dispatchEvent(new CustomEvent("lastSignalWalletChanged")); } catch (e) { /* ignore */ }
     });
   }
 }

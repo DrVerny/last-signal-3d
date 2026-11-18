@@ -10,7 +10,7 @@
 
 import * as THREE from 'three';
 import { canvas, renderer, disposeScene } from './core.js';
-import { getBalance, moneyFmt, grantPayout } from './economy.js';
+import { getBalance, moneyFmt, grantPayout, spendMoney, getEquippedCarDef } from './economy.js';
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson } from './player.js';
@@ -128,6 +128,17 @@ let boothBriefAt = -100;
 const COUCH_SIT = { x: 0.6, z: -0.2 };
 const COUCH_PHONE = { x: -0.2, z: -0.2 };
 let terminalPedestrians = [];
+// Train Terminal front (prologue arrival): the player parks in front of
+// the terminal, gets out, and walks through the revolving glass door.
+// The ticket is bought at the service desk inside for 0.1 ZAMA and is
+// needed to board in prologue mode; in visit mode no ticket is needed.
+let terminalTicket = false;
+let terminalSeated = false; // seated in the parked car at the terminal front
+let terminalFrontCar = null, terminalFrontDoor = null; // parked car + its door hinge
+let terminalDoorSwing = null; // { group, t } while the car door swings open
+let terminalGetOutBtnEl = null;
+let glassDoor = null; // { panels, open, opening } revolving glass door at the front
+let glassDoorToastAt = -100, serviceDeskToastAt = -100;
 let callLines = [], callIdx = 0;
 
 // A soft radial glow texture, for the ringing phone and the platform sign.
@@ -632,6 +643,12 @@ function goToTerminal() {
 // (Act II) the train is already ridden, so it just says so.
 function boardTrain() {
   if (homePrologue && prologueOnBoardTrain) {
+    // The ticket comes first: in the prologue he must buy it at the
+    // service desk near the entrance (0.1 ZAMA) before boarding.
+    if (!terminalTicket) {
+      showHomeToast('You need a ticket first - buy one at the service desk near the entrance (0.1 ZAMA).');
+      return;
+    }
     const cb = prologueOnBoardTrain;
     prologueOnBoardTrain = null;
     homePrologue = false;
@@ -907,7 +924,10 @@ function endPrologueDrive() {
     detachAvatar();
   } catch (e) { /* ignore */ }
   plDriveCar = null;
-  enterPlace('terminal', () => {}, { prologue: true, onBoardTrain: prologueOnBoardTrain });
+  // The drive ends in the parking lot in front of the terminal, not
+  // straight inside it: the player starts seated in his parked car,
+  // gets out, and walks through the glass doors.
+  enterPlace('terminalFront', () => {}, { prologue: true, onBoardTrain: prologueOnBoardTrain });
 }
 // One drive frame: speed from the pedals, the car rolls down the road,
 // the camera follows it, and the miles count down. Arrives when the
@@ -954,6 +974,7 @@ function showHomeBar(kind) {
     hospital: 'CITY HOSPITAL',
     industry: 'INDUSTRIAL AREA - WATER TREATMENT PLANT',
     terminal: 'TRAIN TERMINAL - GRAND CENTRAL',
+    terminalFront: 'TRAIN TERMINAL - GRAND CENTRAL',
     hotel: 'HOTEL - YOUR SUITE',
     airport: 'AIRPORT - JFK TERMINAL',
     carpark: 'CAR PARK',
@@ -965,7 +986,8 @@ function showHomeBar(kind) {
     safehouse: 'Drag to look around - WASD to walk - click the bed or table to save.',
     hospital: 'Drag to look around - WASD to walk - look around, then head back.',
     industry: 'Drag to look around - WASD to walk - look around, then head back.',
-    terminal: homePrologue ? 'Walk through the concourse to the platform and board the 4 train. The train is at the far end.' : 'Drag to look around - WASD to walk - the 4 train is on the platform. Look around, then head back.',
+    terminal: homePrologue ? 'Buy your ticket at the service desk (0.1 ZAMA), then board the 4 train on Platform 4.' : 'Drag to look around - WASD to walk - the 4 train is on the platform. Look around, then head back.',
+    terminalFront: homePrologue ? 'You are parked in front of the terminal. Get out of the car and walk to the glass doors.' : 'Drag to look around - WASD to walk - the 4 train is on the platform. Look around, then head back.',
     hotel: 'Drag to look around - WASD to walk - click the bed to sleep.',
     airport: 'Drag to look around - WASD to walk - look around, then head back.',
     carpark: 'Drag to look around - WASD to walk - rows of parked cars. Look around, then head back.',
@@ -1950,6 +1972,249 @@ function departuresTexture() {
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+// ---------- Train Terminal front (prologue arrival) ----------
+// After the prologue drive the player parks in the lot in front of
+// Grand Central, gets out of his car, and walks through the revolving
+// glass doors at the front. The lot, the facade and the glass door live
+// in their own place ('terminalFront'); walking through the open glass
+// door enters the terminal interior ('terminal') as before.
+function buildTerminalFront(scene) {
+  // Night, like the prologue drive that ends here.
+  scene.background = new THREE.Color(0x141c2e);
+  scene.fog = new THREE.Fog(0x141c2e, 30, 120);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), mat(0x3a3d40, { roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  // The terminal building: a long white modern block with lit windows
+  // and a glass front, its name over the entrance.
+  const termMat = whiteFacadeMat(12, 4, 0.25);
+  const term = new THREE.Mesh(new THREE.BoxGeometry(26, 12, 4), termMat);
+  term.position.set(0, 6, -12); term.castShadow = true; term.receiveShadow = true; scene.add(term);
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(22, 5), mat(0x1a3a5a, { roughness: 0.1, metalness: 0.5 }));
+  glass.position.set(0, 3, -9.95); scene.add(glass);
+  const sign = textSprite('GRAND CENTRAL', '#2a2118', '#ffd166', 'Train Terminal');
+  sign.scale.set(8, 2, 1); sign.position.set(0, 13.5, -9.8); scene.add(sign);
+  // Sidewalk in front of the building.
+  const walk = new THREE.Mesh(new THREE.BoxGeometry(28, 0.08, 4), mat(0x8a8a86, { roughness: 1 }));
+  walk.position.set(0, 0.04, -7); walk.receiveShadow = true; scene.add(walk);
+  // The parking lot: a paved two-bay pad with white bay lines, a curb
+  // along the back, and a P sign at the head of the player's bay.
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.06, 5.7), mat(0x2e3235, { roughness: 0.95 }));
+  pad.position.set(0, 0.03, 3); pad.receiveShadow = true; scene.add(pad);
+  const lineMat = new THREE.MeshBasicMaterial({ color: 0xf2f2f2 });
+  for (const lx of [-2.8, 0, 2.8]) {
+    const line = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, 5.7), lineMat);
+    line.position.set(lx, 0.07, 3); scene.add(line);
+  }
+  const curb = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.16, 0.3), mat(0x8a8a86, { roughness: 0.95 }));
+  curb.position.set(0, 0.08, 0.3); curb.castShadow = true; scene.add(curb);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 8), mat(0x6a747a, { metalness: 0.7, roughness: 0.4 }));
+  post.position.set(-1.4, 1.1, 0.45); post.castShadow = true; scene.add(post);
+  const psign = textSprite('P', '#1a4a8a', '#ffffff', 'PARKING');
+  psign.scale.set(1.2, 0.6, 1); psign.position.set(-1.4, 2.45, 0.45); scene.add(psign);
+  // The player's car, parked in the west bay, facing the building.
+  const car = buildPlayerCar();
+  car.rotation.y = Math.PI;
+  car.position.set(-1.4, 0, 3);
+  scene.add(car);
+  terminalFrontCar = car;
+  // Lamps and trees beside the lot, and a couple of parked cars across
+  // the street, so the front reads as a city place.
+  hcyl(scene, 0.08, 0.08, 4.5, 0x6a747a, -6, 2.25, -4, null, { metalness: 0.8, roughness: 0.4 });
+  lamp(scene, -6, 4.5, -4, 0xffe9a8, 0.8, 12);
+  hcyl(scene, 0.08, 0.08, 4.5, 0x6a747a, 6, 2.25, 8, null, { metalness: 0.8, roughness: 0.4 });
+  lamp(scene, 6, 4.5, 8, 0xffe9a8, 0.8, 12);
+  addTree(scene, -10, -4); addTree(scene, 10, -4);
+  homeCar(scene, 0xc0392b, 8, 8, 0.2);
+  homeCar(scene, 0x2e6fb0, 12, 6, -0.1);
+  // The revolving glass door at the front.
+  buildTerminalGlassDoor(scene);
+}
+// The revolving glass door at the front of the terminal: a frame, a
+// centre post, and four glass panels in a cross around the post.
+// Touching it (or walking up to it) rotates the panels open; walking
+// through the doorway enters the terminal interior.
+function buildTerminalGlassDoor(scene) {
+  const dz = -9.8; // just in front of the facade face at z -10
+  for (const px of [-1.6, 1.6]) {
+    hbox(scene, 0.18, 2.6, 0.18, 0x2a3a4a, px, 1.3, dz, null, { metalness: 0.6, roughness: 0.3 });
+  }
+  hbox(scene, 3.4, 0.18, 0.18, 0x2a3a4a, 0, 2.65, dz, null, { metalness: 0.6, roughness: 0.3 });
+  const ring = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 0.08, 24), mat(0x6a747a, { metalness: 0.7, roughness: 0.4 }));
+  ring.position.set(0, 0.04, dz); ring.receiveShadow = true; scene.add(ring);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.5, 12), mat(0x2a3a4a, { metalness: 0.7, roughness: 0.3 }));
+  post.position.set(0, 1.25, dz); post.castShadow = true; scene.add(post);
+  const panels = new THREE.Group();
+  panels.position.set(0, 0, dz);
+  scene.add(panels);
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+  const railMat = mat(0x2a3a4a, { metalness: 0.7, roughness: 0.3 });
+  for (let i = 0; i < 4; i++) {
+    const arm = new THREE.Group();
+    arm.rotation.y = i * Math.PI / 2;
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.3, 1.35), glassMat);
+    panel.position.set(0, 1.25, 0.75); panel.castShadow = true;
+    panel.name = 'terminalGlassDoor'; panel.userData.homeAction = 'terminalGlassDoor'; homeTargets.push(panel);
+    arm.add(panel);
+    for (const ry of [0.12, 2.38]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 1.35), railMat);
+      rail.position.set(0, ry, 0.75); arm.add(rail);
+    }
+    panels.add(arm);
+  }
+  // A generous hit box over the whole door, so a tap anywhere on it
+  // opens it instead of missing.
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.7, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  hit.position.set(0, 1.35, dz); hit.name = 'terminalGlassDoor'; hit.userData.homeAction = 'terminalGlassDoor'; homeTargets.push(hit); scene.add(hit);
+  const label = textSprite('GRAND CENTRAL - ENTRANCE', '#2a2118', '#f2e9d8', 'Push the glass doors');
+  label.scale.set(4.5, 1.1, 1); label.position.set(0, 3.2, dz + 0.4); scene.add(label);
+  glassDoor = { panels, open: 0, opening: false, z: dz };
+}
+function openTerminalGlassDoor() {
+  if (!glassDoor || glassDoor.opening || glassDoor.open >= 1) return;
+  glassDoor.opening = true;
+  showHomeToast('The glass doors revolve open.');
+}
+function updateTerminalGlassDoor(dt) {
+  if (!glassDoor || !glassDoor.opening) return;
+  glassDoor.open = Math.min(1, glassDoor.open + dt / 0.8);
+  const e = 1 - (1 - glassDoor.open) * (1 - glassDoor.open);
+  glassDoor.panels.rotation.y = (Math.PI / 4) * e;
+  if (glassDoor.open >= 1) glassDoor.opening = false;
+}
+function enterTerminalInterior() {
+  if (!homeActive || homeKind !== 'terminalFront') return;
+  enterPlace('terminal', () => {}, { prologue: homePrologue, onBoardTrain: prologueOnBoardTrain });
+}
+// Gold on-screen button for getting out of the parked car at the
+// terminal front. Same look as the act's Get out button.
+function showTerminalGetOutButton() {
+  if (!terminalGetOutBtnEl) {
+    terminalGetOutBtnEl = document.createElement('div');
+    terminalGetOutBtnEl.id = 'homeGetOutBtn';
+    terminalGetOutBtnEl.innerHTML = '<button type="button" id="homeGetOutBtnInner" style="padding:14px 26px;font-size:17px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:10px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.5);">Get out of the car</button>';
+    terminalGetOutBtnEl.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);z-index:56;text-align:center;pointer-events:auto;';
+    document.body.appendChild(terminalGetOutBtnEl);
+    document.getElementById('homeGetOutBtnInner').onclick = () => { getOutOfTerminalCar(); };
+  }
+  terminalGetOutBtnEl.style.display = 'block';
+}
+function hideTerminalGetOutButton() { if (terminalGetOutBtnEl) terminalGetOutBtnEl.style.display = 'none'; }
+// A real driver's door on the parked car at the terminal front: same
+// shape as the act's car door (panel, glass, chrome handle, hinged at
+// the front edge on the driver's side), sized from the car's own box.
+function buildTerminalCarDoor(car) {
+  const savedPos = car.position.clone(), savedRotY = car.rotation.y;
+  car.position.set(0, 0, 0); car.rotation.y = 0; car.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(car);
+  car.position.copy(savedPos); car.rotation.y = savedRotY; car.updateMatrixWorld(true);
+  const seatZ = (car.userData && car.userData.headPos) ? car.userData.headPos.z : 0.35;
+  let paint = 0x9aa5ad;
+  try { const def = getEquippedCarDef(); if (def && def.color) paint = new THREE.Color(def.color).getHex(); } catch (e) { /* default paint */ }
+  const doorX = box.min.x - 0.01;
+  const hingeZ = seatZ + 0.55;
+  const doorLen = 1.1;
+  const doorBottom = 0.32;
+  const doorTop = Math.min(1.25, box.max.y - 0.08);
+  const doorH = Math.max(0.6, doorTop - doorBottom);
+  const doorMidY = (doorTop + doorBottom) / 2;
+  const hinge = new THREE.Group();
+  hinge.position.set(doorX, 0, hingeZ);
+  hinge.name = 'terminalCarDoorHinge';
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, doorH, doorLen), new THREE.MeshStandardMaterial({ color: paint, roughness: 0.5, metalness: 0.4 }));
+  panel.position.set(0, doorMidY, -doorLen / 2);
+  panel.castShadow = true;
+  panel.name = 'terminalCarDoor'; panel.userData.homeAction = 'terminalCarDoor'; homeTargets.push(panel);
+  hinge.add(panel);
+  const win = new THREE.Mesh(new THREE.BoxGeometry(0.02, doorH * 0.32, doorLen * 0.78), new THREE.MeshStandardMaterial({ color: 0x10181f, roughness: 0.15, metalness: 0.7, transparent: true, opacity: 0.55 }));
+  win.position.set(-0.03, doorTop - doorH * 0.2, -doorLen / 2);
+  hinge.add(win);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 0.22), new THREE.MeshStandardMaterial({ color: 0xc8ccd0, roughness: 0.25, metalness: 0.9 }));
+  handle.position.set(-0.045, 1.0, -doorLen + 0.15);
+  hinge.add(handle);
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.7, doorLen + 0.4), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  hit.position.set(0, 0.95, -doorLen / 2);
+  hit.name = 'terminalCarDoor'; hit.userData.homeAction = 'terminalCarDoor'; homeTargets.push(hit);
+  hinge.add(hit);
+  car.add(hinge);
+  return hinge;
+}
+// Seat the player in the parked car at the terminal front, door closed,
+// ready to step out. Called once when the front place opens.
+function seatTerminalFront() {
+  if (!terminalFrontCar) return;
+  terminalFrontDoor = buildTerminalCarDoor(terminalFrontCar);
+  const driver = getAvatar();
+  try { if (driver.parent) driver.parent.remove(driver); } catch (e) { /* ignore */ }
+  setAvatarPose('sit');
+  driver.visible = true;
+  driver.position.set(-0.38, 0.02, 0.35);
+  driver.rotation.set(0, 0, 0);
+  driver.scale.set(0.62, 0.62, 0.62);
+  terminalFrontCar.add(driver);
+  terminalSeated = true;
+  try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
+  showTerminalGetOutButton();
+  showHomeToast('You are parked in front of Grand Central. Click the car door, or Get out, to step outside.');
+}
+// Open the driver's door and step outside. The door swings open and
+// stays open; the player ends up standing beside the car, at full size,
+// in third person, facing the terminal building.
+function getOutOfTerminalCar() {
+  if (!terminalSeated || !terminalFrontCar) return;
+  terminalSeated = false;
+  hideTerminalGetOutButton();
+  terminalDoorSwing = { group: terminalFrontDoor, t: 0 };
+  try {
+    const driver = getAvatar();
+    if (driver.parent === terminalFrontCar) { try { terminalFrontCar.remove(driver); } catch (e) { /* ignore */ } }
+    setAvatarPose('stand');
+    driver.scale.set(1, 1, 1);
+    driver.rotation.set(0, 0, 0);
+    driver.visible = true;
+    detachAvatar();
+  } catch (e) { /* ignore */ }
+  // On foot beside the driver's door (east side of the car, the door is
+  // on the driver's side), facing the terminal building.
+  try {
+    homeCamera.position.set(0.4, 1.7, 3);
+    homeYaw = 0; homePitch = 0;
+    setPlayerPos(0.4, 3);
+  } catch (e) { /* presence is best effort */ }
+  showHomeToast('You are out. Walk to the glass doors at the front of the terminal.');
+}
+// Chase camera while the player is seated in the parked car: behind and
+// to the driver's side, so he sees himself in the car and the door he
+// can click.
+function updateTerminalSeatView() {
+  if (!terminalFrontCar || !homeCamera) return;
+  const pos = new THREE.Vector3();
+  terminalFrontCar.getWorldPosition(pos);
+  const q = new THREE.Quaternion();
+  terminalFrontCar.getWorldQuaternion(q);
+  const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+  const side = new THREE.Vector3(-1, 0, 0).applyQuaternion(q);
+  homeCamera.position.set(pos.x - fwd.x * 4.2 + side.x * 2.2, 2.0, pos.z - fwd.z * 4.2 + side.z * 2.2);
+  homeCamera.rotation.order = 'YXZ';
+  homeCamera.lookAt(pos.x, 1.0, pos.z);
+}
+function updateTerminalDoorSwing(dt) {
+  if (!terminalDoorSwing || !terminalDoorSwing.group) { terminalDoorSwing = null; return; }
+  terminalDoorSwing.t = Math.min(1, terminalDoorSwing.t + dt / 0.6);
+  const e = 1 - (1 - terminalDoorSwing.t) * (1 - terminalDoorSwing.t);
+  try { terminalDoorSwing.group.rotation.y = 1.15 * e; } catch (err) { /* ignore */ }
+  if (terminalDoorSwing.t >= 1) terminalDoorSwing = null;
+}
+// Buy the train ticket at the service desk: 0.1 ZAMA, charged from the
+// balance. In visit mode (not the prologue) no ticket is needed.
+function buyTrainTicket() {
+  if (!homePrologue) { showHomeToast('The desk is staffed, but you already rode the 4 train - no ticket needed.'); return; }
+  if (terminalTicket) { showHomeToast('You already have your ticket. Board the 4 train on Platform 4.'); return; }
+  if (getBalance() < 0.1) { showHomeToast('The ticket costs 0.1 ZAMA - you need 0.1 ZAMA.'); return; }
+  spendMoney(0.1);
+  terminalTicket = true;
+  showHomeToast('Ticket bought - 0.1 ZAMA. Balance: ' + moneyFmt(getBalance()) + '. Board the 4 train on Platform 4.');
+  try { const info = document.getElementById('homeBarInfo'); if (info) info.textContent = 'Ticket bought. Board the 4 train on Platform 4.'; } catch (e) { /* ignore */ }
+}
 function buildTerminal(scene) {
   // Grand Central: a big hall, 24 wide, 30 deep, 8 high. The entrance
   // is at the south end (z = 15), the concourse in the middle, and the
@@ -1981,6 +2246,31 @@ function buildTerminal(scene) {
   for (let i = 0; i < 4; i++) {
     hbox(scene, 0.8, 1.6, 0.6, 0x2e6fb0, 11.4, 0.8, -2 + i * 2.2, null, { roughness: 0.5, metalness: 0.3 });
   }
+  // Staffed train service desk near the entrance (south-east, by the
+  // door the player comes in through). This is where the ticket is
+  // bought in the prologue - 0.1 ZAMA - and it is distinct from the
+  // ticket machines on the east wall, which stay as they are. The
+  // attendant stands behind the counter in a navy uniform and cap.
+  hbox(scene, 3.2, 1.1, 0.9, 0x6b4226, 8, 0.55, 10, null, { roughness: 0.7 });
+  hbox(scene, 3.4, 0.08, 1.0, 0xd8cfc0, 8, 1.14, 10, null, { roughness: 0.5 });
+  const deskSign = textSprite('TRAIN SERVICE DESK', '#2a2118', '#ffd166', 'Tickets - 0.1 ZAMA');
+  deskSign.scale.set(4.2, 1.05, 1); deskSign.position.set(8, 2.3, 10); scene.add(deskSign);
+  const attendant = new THREE.Group(); attendant.position.set(8, 0, 9.2); scene.add(attendant);
+  const navy = mat(0x1a3a5a, { roughness: 0.85 });
+  const skin = mat(0x8a5a3a, { roughness: 0.8 });
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.3), navy);
+  torso.position.set(0, 1.05, 0); torso.castShadow = true; attendant.add(torso);
+  for (const sx of [-0.33, 0.33]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, 0.12), navy);
+    arm.position.set(sx, 1.05, 0); attendant.add(arm);
+  }
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), skin);
+  head.position.set(0, 1.58, 0); head.castShadow = true; attendant.add(head);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.18, 0.09, 12), navy);
+  cap.position.set(0, 1.74, 0); attendant.add(cap);
+  const brim = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.14), mat(0x0a0a0a, { roughness: 0.3 }));
+  brim.position.set(0, 1.7, 0.16); attendant.add(brim);
+  hitBox(scene, 3.4, 1.6, 1.2, 8, 0.8, 10, 'serviceDesk');
   // Big windows on the west wall, with a daylight sky.
   for (const z of [-8, 0, 8]) {
     const win = new THREE.Mesh(new THREE.PlaneGeometry(3, 4), new THREE.MeshStandardMaterial({ map: nightSkyTexture(), roughness: 0.2, metalness: 0.3 }));
@@ -2907,6 +3197,12 @@ export function enterPlace(kind, onLeave, options) {
   sleeping = false; sleepT = 0; sleepRestDone = false;
   try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
   terminalPedestrians = [];
+  // Terminal front: a fresh arrival starts with no ticket and nobody
+  // seated; the seat logic below puts the player in the parked car.
+  terminalSeated = false; terminalFrontCar = null; terminalFrontDoor = null; terminalDoorSwing = null;
+  glassDoor = null; glassDoorToastAt = -100; serviceDeskToastAt = -100;
+  if (kind === 'terminalFront' && homePrologue) terminalTicket = false;
+  hideTerminalGetOutButton();
   const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel' || kind === 'windtunnel' || kind === 'symposium' || kind === 'policestation' || kind === 'navybarracks' || kind === 'sensorvault';
   if (isRoom) {
     homeScene.background = new THREE.Color(0x0a0d10);
@@ -2918,6 +3214,7 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'hospital') { buildHospital(homeScene); homeBounds = { x: [-16, 16], z: [-14, 18] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
   else if (kind === 'industry') { buildIndustry(homeScene); homeBounds = { x: [-16, 16], z: [-12, 16] }; homeStart = { x: 0, y: 1.7, z: 12, yaw: 0 }; }
   else if (kind === 'terminal') { buildTerminal(homeScene); homeBounds = { x: [-11, 11], z: [-9.5, 14] }; homeStart = { x: 0, y: 1.7, z: 12, yaw: 0 }; }
+  else if (kind === 'terminalFront') { buildTerminalFront(homeScene); homeBounds = { x: [-14, 14], z: [-9.5, 14] }; homeStart = { x: 0.4, y: 1.7, z: 3, yaw: 0 }; }
   else if (kind === 'hotel') { buildHotel(homeScene); homeBounds = { x: [-4.4, 4.4], z: [-2.9, 2.9] }; homeStart = { x: 0, y: 1.7, z: 2.5, yaw: 0 }; }
   else if (kind === 'airport') { buildAirport(homeScene); homeBounds = { x: [-20, 20], z: [-16, 20] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
   else if (kind === 'carpark') { buildCarpark(homeScene); homeBounds = { x: [-18, 18], z: [-14, 18] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
@@ -2944,7 +3241,8 @@ export function enterPlace(kind, onLeave, options) {
     safehouse: 'Safe House Apartment - nobody knows this place. Click the bed or the table to save.',
     hospital: 'City Hospital - the tall white tower. Look around, then head back to the map.',
     industry: 'Industrial Area - the water treatment plant. Look around, then head back to the map.',
-    terminal: homePrologue ? 'Grand Central. Walk through the concourse to Platform 4 and board the 4 train.' : 'Train Terminal - Grand Central. The 4 train is on Platform 4. Look around, then head back to the map.',
+    terminal: homePrologue ? 'Grand Central. Buy your ticket at the service desk near the entrance (0.1 ZAMA), then board the 4 train on Platform 4.' : 'Train Terminal - Grand Central. The 4 train is on Platform 4. Look around, then head back to the map.',
+    terminalFront: homePrologue ? 'Grand Central. You are parked in front of the terminal. Get out of the car and walk to the glass doors.' : 'Train Terminal - Grand Central. You are parked in front.',
     hotel: 'Hotel - your suite. Click the bed to sleep.',
     airport: 'Airport - JFK Terminal 4. Look around, then head back to the map.',
     carpark: 'Car Park - rows of parked cars. Look around, then head back to the map.',
@@ -2957,6 +3255,9 @@ export function enterPlace(kind, onLeave, options) {
   showHomeToast(welcomes[kind] || kind);
   if (homeRaf) cancelAnimationFrame(homeRaf);
   homeRaf = requestAnimationFrame(homeAnimate);
+  // Terminal front: the player arrives in his parked car, seated in the
+  // driver's seat. The seat owns the camera until he gets out.
+  if (kind === 'terminalFront') seatTerminalFront();
   // The loading overlay starts visible on page load, and only the acts
   // hide it (in their start functions). A place (Mansion, Terminal,
   // hotel...) is a full scene too, so hide the overlay once the room is
@@ -2985,6 +3286,8 @@ export function leavePlace() {
   try { const a = getAvatar(); setAvatarPose('stand'); detachAvatar(); } catch (e) { /* ignore */ }
   try { const w = document.getElementById('homeWakeBtn'); if (w) w.style.display = 'none'; } catch (e) { /* ignore */ }
   phoneGlow = null; terminalPedestrians = [];
+  terminalSeated = false; terminalFrontCar = null; terminalFrontDoor = null; terminalDoorSwing = null; glassDoor = null;
+  hideTerminalGetOutButton();
   const bar = document.getElementById('homeBar');
   if (bar) bar.classList.add('hidden');
   const cb = homeOnLeave; homeOnLeave = null;
@@ -3000,6 +3303,11 @@ function homeAnimate() {
   // The drive has its own scene and camera; this branch updates it and
   // renders it, instead of the room movement below.
   if (plDriveActive) { updatePrologueDrive(dt, t); return; }
+  // Terminal front: the parked car door and the revolving glass doors
+  // animate on this loop. Both update functions no-op when there is
+  // nothing to animate, so they are safe to call every frame in any room.
+  updateTerminalDoorSwing(dt);
+  updateTerminalGlassDoor(dt);
   // While sleeping, the avatar lies on the bed and the camera watches
   // from the bedside, so the player sees himself sleeping. The rest
   // (save + "You slept") lands after about 4 seconds, and the view
@@ -3068,6 +3376,16 @@ function homeAnimate() {
     homeCamera.lookAt(0.1, 0.78, COUCH_SIT.z);
     renderer.render(homeScene, homeCamera);
     updatePrologueButtons();
+    return;
+  }
+  // Terminal front: seated in the parked car. The seat owns the camera
+  // (a chase view from behind the car, so he sees himself in the
+  // driver's seat) and the car door keeps swinging; movement is paused
+  // until he gets out through the door or the Get out button.
+  if (terminalSeated && homeKind === 'terminalFront' && homeCamera) {
+    updateTerminalSeatView();
+    updateTerminalDoorSwing(dt);
+    renderer.render(homeScene, homeCamera);
     return;
   }
   // In third-person the camera was left behind the avatar last frame;
@@ -3173,15 +3491,39 @@ function homeAnimate() {
   }
   // Walk to the train: in the Terminal, walking up to the 4 train
   // boards it (the prologue path), instead of only a button. Outside
-  // the prologue it just says the train is already ridden.
+  // the prologue it just says the train is already ridden. The trigger
+  // is 3 m because the player is kept off the raised platform (bounds
+  // stop at z -9.5) and the train sits at z -12: a 2.2 m trigger could
+  // never be reached on foot, so walking to the train did nothing.
   if (homeKind === 'terminal' && !sleeping) {
     const dx = homeCamera.position.x - 0, dz = homeCamera.position.z - (-12);
-    if (dx * dx + dz * dz < 2.2 * 2.2) {
+    if (dx * dx + dz * dz < 3.0 * 3.0) {
       if (homePrologue) { boardTrain(); return; }
       else if (t - (homeAnimate.trainToastAt || -10) > 5) {
         homeAnimate.trainToastAt = t;
         showHomeToast('The 4 train - you already rode it. The story is in Act II now.');
       }
+    }
+  }
+  // Terminal front: walk up to the revolving glass doors and they open
+  // on touch (or a click); stepping through once they are open takes
+  // him into the concourse. The door is at z -9.8 and the player can
+  // walk to z -9.5, so the 1.4 m entry trigger is reachable on foot.
+  if (homeKind === 'terminalFront' && !terminalSeated) {
+    const gdx = homeCamera.position.x, gdz = homeCamera.position.z + 9.8;
+    const gd2 = gdx * gdx + gdz * gdz;
+    if (gd2 < 2.2 * 2.2) {
+      if (glassDoor && glassDoor.open < 1) openTerminalGlassDoor();
+      if (glassDoor && glassDoor.open > 0.6 && gd2 < 1.4 * 1.4) { enterTerminalInterior(); return; }
+    }
+  }
+  // Service desk: walking up to it in the prologue points at the ticket
+  // (throttled, so it does not spam); clicking the desk buys it.
+  if (homeKind === 'terminal' && homePrologue && !terminalTicket) {
+    const sdx = homeCamera.position.x - 8, sdz = homeCamera.position.z - 10;
+    if (sdx * sdx + sdz * sdz < 1.8 * 1.8 && t - serviceDeskToastAt > 6) {
+      serviceDeskToastAt = t;
+      showHomeToast('Train service desk - buy your ticket here (0.1 ZAMA). Click the desk.');
     }
   }
   // People cross the terminal concourse, going to work.
@@ -3331,6 +3673,16 @@ function homeHandleTap(clientX, clientY) {
     showNextMissionBriefing();
   } else if (action === 'boardTrain') {
     boardTrain();
+  } else if (action === 'terminalCarDoor') {
+    // The parked car at the terminal front: tap the door to open it and
+    // step out, the same as the mission parking lots.
+    getOutOfTerminalCar();
+  } else if (action === 'terminalGlassDoor') {
+    // The revolving glass doors at the front: tap them to open.
+    openTerminalGlassDoor();
+  } else if (action === 'serviceDesk') {
+    // The staffed service desk: tap it to buy the train ticket.
+    buyTrainTicket();
   } else if (action === 'tunnelPanel') {
     startTunnelRun();
   } else if (action === 'vaultPanel') {

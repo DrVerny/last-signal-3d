@@ -8,7 +8,7 @@ import { initSoundUI, setAmbient, setAmbientLevel, setTension, soundTick, sfxRep
 import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
-import { grantPayout, openStore, getEquippedCarDef } from './economy.js';
+import { grantPayout, openStore, getEquippedCarDef, getBalance, moneyFmt, spendMoney } from './economy.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
@@ -362,8 +362,9 @@ let camBounds = VIEWS[1];
 const ARRIVAL_VIEW = { pos: [-3.9, 1.7, 12.3], yaw: Math.PI };
 let arrivalDone = false; // true once the player has walked off the platform
 let mission1Started = false; // true once startMission1 has run
-// The rental car at Rondout station: a free plain sedan he drives to the
-// water facility. The mission briefing starts only after that drive.
+// The rental car at Rondout station: a plain sedan he rents for 0.05 ZAMA
+// and drives to the water facility. The mission briefing starts only
+// after that drive.
 let stationRental = null; // { group, hit, label } built at the station, removed on take
 let rentalTaken = false; // true once he has taken the rental car
 let arrivedByRental = false; // the rental drive just ended; park the rental at the facility
@@ -690,6 +691,59 @@ function updateDoorSwing(dt) {
   try { doorSwing.group.rotation.y = 1.15 * e; } catch (err) { /* ignore */ }
   if (doorSwing.t >= 1) doorSwing = null;
 }
+// Station door handle turn, then swing. Touching a handle (click, or
+// walking up to the door) turns the lever down over 0.4 s, then the
+// door swings open on its hinge over 0.6 s, and only then does the
+// player enter or leave. The gates are the same as before: the door
+// stays shut before the mission starts and locked without the station
+// key. A door that is already open skips the swing and just turns the
+// lever before the player passes through.
+function tryStationDoor(side) {
+  if (stationDoorAnim) return false;
+  if (side === 'outside') {
+    if (!mission1Started) { toast('Take the rental car to the water facility first - it costs 0.05 ZAMA and is waiting by the platform.'); return false; }
+    if (!hasKey('station')) { toast('Locked - needs the station key. It is on the hook beside the door.'); sfxThud(); return false; }
+    stationDoorAnim = { side, phase: 'lever', t: 0, onDone: enterValveRoom };
+  } else {
+    if (!inValveRoom) return false;
+    stationDoorAnim = { side, phase: 'lever', t: 0, onDone: exitValveRoom };
+  }
+  return true;
+}
+function updateStationDoorAnim(dt) {
+  if (!stationDoorAnim) return;
+  const a = stationDoorAnim;
+  const hinge = a.side === 'outside' ? stationDoorHinge : exitDoorHinge;
+  const pivots = a.side === 'outside' ? stationLeverPivots : [exitLeverPivot];
+  const alreadyOpen = a.side === 'outside' ? stationDoorOpen : exitDoorOpen;
+  a.t += dt;
+  if (a.phase === 'lever') {
+    const e = Math.min(1, a.t / 0.4);
+    const ang = (Math.PI / 2) * (1 - (1 - e) * (1 - e));
+    for (const p of pivots) { if (p) p.rotation.z = ang; }
+    if (e >= 1) {
+      if (alreadyOpen) {
+        // Door is already open: the lever turn is the only feedback,
+        // then the player passes through. The camera moves on entry,
+        // so the lever returning is not seen.
+        const done = a.onDone; stationDoorAnim = null;
+        for (const p of pivots) { if (p) p.rotation.z = 0; }
+        try { done(); } catch (err) { /* ignore */ }
+      } else { a.phase = 'swing'; a.t = 0; }
+    }
+    return;
+  }
+  // Swing: the levers spring back up while the door swings open.
+  const e = Math.min(1, a.t / 0.6);
+  const sw = 1 - (1 - e) * (1 - e);
+  if (hinge) hinge.rotation.y = 1.75 * sw;
+  for (const p of pivots) { if (p) p.rotation.z = (Math.PI / 2) * (1 - sw); }
+  if (e >= 1) {
+    if (a.side === 'outside') stationDoorOpen = true; else exitDoorOpen = true;
+    const done = a.onDone; stationDoorAnim = null;
+    try { done(); } catch (err) { /* ignore */ }
+  }
+}
 // On a drive arrival, seat the player in the mission's parked car
 // instead of standing him beside it. Returns true when he was seated
 // (the mission start should not also move him to the drive spawn).
@@ -808,6 +862,16 @@ function hideArrivalBeat() {
 const VALVE_ROOM_BOUNDS = { pos: [0, 1.7, -2], yaw: 0, x: [-3.4, 3.4], z: [-5.4, -1.4] };
 let inValveRoom = false;
 let stationDoorLockedAt = -10; // throttle for the "locked" toast at the door
+// Station door handle + swing: the outside door and the inside exit door
+// each sit in a hinge group at the door's edge, with lever handles that
+// turn before the door swings. The levers rest horizontal (90 degrees
+// from straight up) and press down to 180 degrees; the door then swings
+// open on its hinge and stays open. stationDoorAnim is the sequence in
+// progress ({ side, phase, t, onDone }) or null; the open flags stop the
+// swing from replaying when the player comes back through an open door.
+let stationDoorHinge = null, stationLeverPivots = [], stationDoorHandleParts = [];
+let exitDoorHinge = null, exitLeverPivot = null, exitDoorHandleParts = [];
+let stationDoorAnim = null, stationDoorOpen = false, exitDoorOpen = false;
 function resetView() {
   if (!actActive) return;
   if (inValveRoom) {
@@ -1023,9 +1087,29 @@ function buildValveRoom() {
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
   sign.scale.set(3.2, 0.8, 1); sign.position.set(0, 2.45, -1.2); room.add(sign);
   // EXIT door in the doorway (click it to go back outside) + green EXIT sign.
+  // Like the outside door it hangs in a hinge group at its edge, with a
+  // brass lever handle on the room side, so leaving works the same way:
+  // touch the handle, it turns down, the door swings open.
+  exitDoorHinge = new THREE.Group();
+  exitDoorHinge.position.set(-0.55, 0, -1.08);
+  room.add(exitDoorHinge);
+  exitLeverPivot = null; exitDoorHandleParts = [];
   const exit = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.1, 0.08), stdMat({ color: 0x2a2118, roughness: 0.7 }));
-  exit.position.set(0, 1.05, -1.08); exit.name = 'valveRoomExit'; exit.userData.clickable = true; room.add(exit);
+  exit.position.set(0.55, 1.05, 0); exit.name = 'valveRoomExit'; exit.userData.clickable = true; exitDoorHinge.add(exit);
   window._valveRoomExit = exit;
+  const exitHandleMat = new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 });
+  const exitPlate = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 16), exitHandleMat);
+  exitPlate.rotation.x = Math.PI / 2;
+  exitPlate.position.set(1.0, 1.05, -0.05);
+  exitPlate.name = 'valveRoomExit'; exitPlate.userData.clickable = true;
+  exitDoorHinge.add(exitPlate); exitDoorHandleParts.push(exitPlate);
+  exitLeverPivot = new THREE.Group();
+  exitLeverPivot.position.set(1.0, 1.05, -0.05);
+  exitDoorHinge.add(exitLeverPivot);
+  const exitLever = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), exitHandleMat);
+  exitLever.position.set(-0.08, 0, -0.03);
+  exitLever.name = 'valveRoomExit'; exitLever.userData.clickable = true;
+  exitLeverPivot.add(exitLever); exitDoorHandleParts.push(exitLever);
   const exitHit = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.4, 0.5), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
   exitHit.position.set(0, 1.2, -1.1); exitHit.name = 'valveRoomExit'; exitHit.userData.clickable = true; room.add(exitHit);
   window._valveRoomExitHit = exitHit;
@@ -1275,22 +1359,36 @@ function buildMission1() {
   // Parking lot in front of the skyscraper lobby, east of the dirt
   // track, so the player's car has a marked space at the facility.
   buildParkingLot(mission1, PARKING[1].cx, PARKING[1].cz, PARKING[1].carX);
-  window._stationDoor = box(mission1, 1.2, 2.2, 0.15, 0x2a2118, 0, 1.1, -0.68, 'stationDoor');
-  // The station door gets a real handle and panels, so it reads as a
-  // door and not a flat black box. Brass lever handle on both faces, at
-  // handle height, plus two raised panels on the front face.
+  // The station door hangs in a hinge group at its left edge, so it can
+  // swing open instead of vanishing when the player enters. The slab,
+  // the raised panels and the brass lever handles on both faces all ride
+  // on the hinge. Each lever sits in its own pivot group at the plate,
+  // so touching a handle turns the lever down (90 to 180 degrees)
+  // before the door swings.
+  stationDoorHinge = new THREE.Group();
+  stationDoorHinge.position.set(-0.6, 0, -0.68);
+  mission1.add(stationDoorHinge);
+  stationLeverPivots = []; stationDoorHandleParts = [];
+  window._stationDoor = box(stationDoorHinge, 1.2, 2.2, 0.15, 0x2a2118, 0.6, 1.1, 0, 'stationDoor');
   const stationHandleMat = new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 });
   for (const sz of [1, -1]) {
     const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 16), stationHandleMat);
     plate.rotation.x = Math.PI / 2;
-    plate.position.set(0.45, 1.05, -0.68 + sz * 0.085); mission1.add(plate);
+    plate.position.set(1.05, 1.05, sz * 0.085);
+    plate.name = 'stationDoor'; plate.userData.clickable = true;
+    stationDoorHinge.add(plate); stationDoorHandleParts.push(plate);
+    const pivot = new THREE.Group();
+    pivot.position.set(1.05, 1.05, sz * 0.085);
+    stationDoorHinge.add(pivot); stationLeverPivots.push(pivot);
     const lever = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), stationHandleMat);
-    lever.position.set(0.37, 1.05, -0.68 + sz * 0.115); mission1.add(lever);
+    lever.position.set(-0.08, 0, sz * 0.03);
+    lever.name = 'stationDoor'; lever.userData.clickable = true;
+    pivot.add(lever); stationDoorHandleParts.push(lever);
   }
   const stationPanelMat = new THREE.MeshStandardMaterial({ color: 0x3a2c1e, roughness: 0.6 });
   for (const py of [1.7, 0.65]) {
     const sp = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.02), stationPanelMat);
-    sp.position.set(0, py, -0.59); mission1.add(sp);
+    sp.position.set(0.6, py, 0.09); stationDoorHinge.add(sp);
   }
   // Generous invisible click target in front of the door: the door itself
   // is a thin dark slab, so a click slightly off it would otherwise miss
@@ -1472,13 +1570,19 @@ function moralChoiceWater() {
   ], () => { setObjectives(OBJ1, 4); toast('Click the small green circuit board on the station wall - it is outside, so leave the valve room first if you are still in it.'); });
 }
 // Act II arrival: the player steps off the train at Rondout station.
-// No briefing, no dialogue yet: he takes the free rental car by the
-// platform and drives it to the facility first, and the mission starts
-// when that drive arrives (see startRentalDrive).
+// No briefing, no dialogue yet: he takes the rental car by the
+// platform (0.05 ZAMA) and drives it to the facility first, and the
+// mission starts when that drive arrives (see startRentalDrive).
 function startArrival() {
   try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
   mission1Started = false; arrivalDone = false;
   rentalTaken = false; arrivedByRental = false; travelRental = false;
+  // Station door: fresh entry, both doors shut again.
+  stationDoorAnim = null; stationDoorOpen = false; exitDoorOpen = false;
+  try { if (stationDoorHinge) stationDoorHinge.rotation.y = 0; } catch (e) { /* ignore */ }
+  try { if (exitDoorHinge) exitDoorHinge.rotation.y = 0; } catch (e) { /* ignore */ }
+  for (const p of stationLeverPivots) { try { if (p) p.rotation.z = 0; } catch (e) { /* ignore */ } }
+  try { if (exitLeverPivot) exitLeverPivot.rotation.z = 0; } catch (e) { /* ignore */ }
   hideTakeRentalButton();
   setTimeOfDay('day'); // Rondout arrival is bright morning.
   currentPlaceKey = 'reservoir';
@@ -1489,14 +1593,20 @@ function startArrival() {
   // The player's car is already parked in the lot in front of the
   // tower, so he sees it as he walks up from the platform.
   parkPlayerCar(1);
-  // A free rental car waits by the platform end: he drives it to the
+  // A rental car waits by the platform end (0.05 ZAMA): he drives it to the
   // facility, parks it, and only then does the mission begin.
   buildStationRental();
-  toast('Rondout station, 6 AM. You step off the train. A free rental car is waiting by the platform - take it to the water facility.');
+  toast('Rondout station, 6 AM. You step off the train. A rental car is waiting by the platform - 0.05 ZAMA. Take it to the water facility.');
 }
 function startMission1() {
   if (mission1Started) return; // the arrival trigger fires exactly once
   mission1Started = true;
+  // The drive hides every mission scene while the road shows; Missions 2
+  // and 3 put their own scene back when they start, but Mission 1 never
+  // did, so after a drive the arrival rendered an empty dark void until
+  // something else restored the scene. Show it here, first, so the
+  // parking scene is visible from the first frame after the drive ends.
+  mission1.visible = true; mission2.visible = false; mission3.visible = false;
   hideTakeRentalButton(); // the rental step is done; the button must not linger
   // Third person on entering the mission, so the player sees himself.
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
@@ -1547,9 +1657,9 @@ function startMission1() {
 }
 
 // ---------- The rental car: Rondout station to the water facility ----------
-// The player steps off the train, takes a free rental car by the platform
-// and drives it to the facility. The rental is a plain light-grey sedan
-// with no brand and no logo; the UI calls it a rental car.
+// The player steps off the train, takes a rental car by the platform
+// (0.05 ZAMA) and drives it to the facility. The rental is a plain
+// light-grey sedan with no brand and no logo; the UI calls it a rental car.
 function buildRentalCar() {
   const car = buildCar(0xcfd4d6, { type: 'sedan' });
   car.userData.carName = 'Rental car';
@@ -1567,7 +1677,7 @@ function buildStationRental() {
   car.position.set(4.5, 0, 9.0);
   g.add(car);
   // Floating label so the player can find it from the platform.
-  const label = makeTextSprite('RENTAL CAR - FREE', '#ffd166');
+  const label = makeTextSprite('RENTAL CAR - 0.05 ZAMA', '#ffd166');
   label.scale.set(4.6, 1.15, 1); label.position.set(4.5, 2.9, 9.0); g.add(label);
   // Generous invisible hit box over the car, so a tap anywhere on it
   // takes the rental.
@@ -1603,6 +1713,7 @@ function hideTakeRentalButton() { if (takeRentalBtnEl) takeRentalBtnEl.style.dis
 // briefing starts only then.
 function startRentalDrive() {
   if (rentalTaken || travelActive || mission1Started) return;
+  if (getBalance() < 0.05) { toast('You need 0.05 ZAMA for the rental car.'); return; }
   rentalTaken = true;
   hideTakeRentalButton();
   // The station rental is the car he drives: take it off the platform
@@ -1615,6 +1726,8 @@ function startRentalDrive() {
       arrivedByRental = true;
       startMission1();
     });
+    spendMoney(0.05);
+    toast('Rental car - 0.05 ZAMA. Balance: ' + moneyFmt(getBalance()) + '.');
   } catch (e) {
     // The drive did not start: put the rental back and let him try again.
     travelRental = false; rentalTaken = false;
@@ -2223,6 +2336,8 @@ function getMiles(a, b) {
 const MISSION_PLACE = { 1: 'reservoir', 2: 'substation', 3: 'bridge' };
 const MISSION_TIME = { 1: 'day', 2: 'dusk', 3: 'night' };
 let travelActive = false, travelT = 0, travelDur = 60, travelOnArrive = null, travelGroup = null, travelCars = [], travelPedestrians = [];
+let travelStartWall = 0; // wall-clock start of the drive (see updateTravelDrive)
+let travelWatchdog = null; // interval that ends the drive on schedule even if rAF is paused
 // Driving the car yourself: gas (W or D, or the on-screen GAS pedal),
 // brake (S, or the BRAKE pedal), and a camera view switch (C, or the
 // View button) between the chase view and the in-car view. The car
@@ -3108,10 +3223,27 @@ function startTravelDrive(toKey, onArrive) {
   travelActive = true; window.__lsTravelActive = true;
   travelT = 0; travelOnArrive = onArrive; travelToKey = toKey;
   travelMiles = getMiles(mapFromKey, toKey);
+  // A same-place leg (the rental hop from the Rondout platform to the
+  // water facility, reservoir to reservoir) is a real short drive, not a
+  // zero drive: 0 miles made the banner read "0 miles to go" from the
+  // start and hid the countdown, so give it a short real distance.
+  if (travelMiles <= 0) travelMiles = 8;
+  travelStartWall = Date.now();
   travelLastMilesShown = -1;
   // The drive takes longer for a far place, so the distance feels real:
   // the 85-mile Reservoir to Substation leg is 60 seconds at full speed.
   travelDur = Math.min(60, Math.max(12, Math.round(travelMiles / 85 * 60)));
+  // Watchdog: the drive must finish even if the frame loop is throttled
+  // or paused (a background tab stops requestAnimationFrame, which froze
+  // the rental drive live - the banner stuck, nothing moved, Skip still
+  // worked because it is a button, not a frame). The interval fires even
+  // when rAF is paused, so the drive ends on schedule either way.
+  try { if (travelWatchdog) clearInterval(travelWatchdog); } catch (e) { /* ignore */ }
+  travelWatchdog = setInterval(() => {
+    try {
+      if (travelActive && Date.now() - travelStartWall >= travelDur * 1000) endTravelDrive();
+    } catch (e) { /* the watchdog must never throw */ }
+  }, 500);
   // The drive matches the time of the mission being driven to.
   if (to.type === 'mission') setTimeOfDay(MISSION_TIME[to.mission]);
   // The player's own car, in the equipped colour, with the driver (the
@@ -3195,6 +3327,8 @@ function updateDriveBanner() {
 function endTravelDrive() {
   if (!travelActive) return;
   travelActive = false; window.__lsTravelActive = false;
+  try { if (travelWatchdog) clearInterval(travelWatchdog); } catch (e) { /* ignore */ }
+  travelWatchdog = null;
   if (travelGroup) travelGroup.visible = false;
   hideDriveHood();
   hideActionBanner();
@@ -3234,7 +3368,13 @@ function endTravelDrive() {
 }
 function updateTravelDrive(dt, t) {
   if (!travelActive) return;
-  travelT += dt;
+  // Drive progress follows the wall clock, not accumulated frame time:
+  // when the tab is throttled the frame delta is clamped to 0.1 s, so
+  // accumulating dt made the drive crawl (or never finish) while the
+  // banner, the car, the traffic and the pedestrians all froze. The wall
+  // clock keeps the 12 s rental drive at 12 s at any frame rate, and the
+  // watchdog in startTravelDrive ends it even if no frame runs at all.
+  travelT = Math.min(travelDur, (Date.now() - travelStartWall) / 1000);
   // The player drives: gas (W or D, or the GAS pedal) speeds the car up
   // toward 12 m/s, brake (S, or the BRAKE pedal) slows it to a stop, and
   // letting go settles back to a 3 m/s creep, so the drive always
@@ -3958,7 +4098,7 @@ function handleTap(clientX, clientY) {
   if (!document.getElementById('valveModal').classList.contains('hidden')) return;
   if (!document.getElementById('scadaModal').classList.contains('hidden')) return;
   const targets = [];
-  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, window._stationDoor, window._stationDoorHit, window._stationKey, window._stationKeyLabel, window._rentalCarHit);
+  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, ...exitDoorHandleParts, window._stationDoor, window._stationDoorHit, ...stationDoorHandleParts, window._stationKey, window._stationKeyLabel, window._rentalCarHit);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
   if (state.mission === 3) targets.push(...chargeMeshes, window._catwalkHit, ...(window._catwalkPlanks || []));
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
@@ -4023,7 +4163,7 @@ function interact(name) {
     // Before the mission starts the door stays shut: he takes the rental
     // car to the facility first. The briefing starts after that drive.
     if (!mission1Started) {
-      toast('Take the rental car to the water facility first - it is free and waiting by the platform.');
+      toast('Take the rental car to the water facility first - it costs 0.05 ZAMA and is waiting by the platform.');
       return;
     }
     // The station door is locked: it needs the station key, which is
@@ -4034,9 +4174,9 @@ function interact(name) {
       sfxThud();
       return;
     }
-    enterValveRoom(); return;
+    tryStationDoor('outside'); return;
   }
-  if (name === 'valveRoomExit') { exitValveRoom(); return; }
+  if (name === 'valveRoomExit') { tryStationDoor('inside'); return; }
   if (name === 'device1' && window._device1.visible) {
     state.inventory.push('RESET device (aqueduct)'); state.evidence.push('RESET device + fingerprint: Derrick Shaw');
     updateHUD(); setObjectives(OBJ1, 5);
@@ -4133,6 +4273,9 @@ function animate() {
   // A car door that was opened keeps swinging even after the player is
   // on foot, so it finishes opening and stays open.
   updateDoorSwing(dt);
+  // The station door handle turn and swing runs on the same frame loop,
+  // so the lever turns and the door opens while the player watches.
+  updateStationDoorAnim(dt);
   // Valve room: walking up to a valve wheel opens the pressure controls,
   // so the puzzle opens when the player reaches the valves.
   if (state.mission === 1 && inValveRoom && !valveOpen && !state.waterStable
@@ -4155,7 +4298,7 @@ function animate() {
       // Walking off the platform leads to the rental car, not straight
       // into the mission: the briefing starts only after the rental drive.
       showTakeRentalButton();
-      toast('Take the rental car to the water facility - it is free. Click the car, or tap Take the rental car.');
+      toast('Take the rental car to the water facility - 0.05 ZAMA. Click the car, or tap Take the rental car.');
     }
   }
   // The rental car by the platform: walking up to it offers the drive,
@@ -4167,7 +4310,7 @@ function animate() {
       showTakeRentalButton();
       if (t - rentalToastAt > 6) {
         rentalToastAt = t;
-        toast('Rental car - free. Take it to the water facility.');
+        toast('Rental car - 0.05 ZAMA. Take it to the water facility.');
       }
     }
   }
@@ -4200,9 +4343,9 @@ function animate() {
       if (!mission1Started) {
         if (t - stationDoorLockedAt > 3) {
           stationDoorLockedAt = t;
-          toast('Take the rental car to the water facility first - it is free and waiting by the platform.');
+          toast('Take the rental car to the water facility first - it costs 0.05 ZAMA and is waiting by the platform.');
         }
-      } else if (hasKey('station')) enterValveRoom();
+      } else if (hasKey('station')) tryStationDoor('outside');
       else if (t - stationDoorLockedAt > 3) {
         stationDoorLockedAt = t;
         toast('Locked - needs the station key. It is on the hook beside the door.');

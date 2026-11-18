@@ -151,6 +151,10 @@
 .store-item button:hover{background:#1d4a5f}
 .store-item button:disabled{opacity:.5;cursor:default}
 .store-msg{font-size:13px;color:#7ac74f;margin-top:12px;min-height:18px}
+.store-lock{background:#241a08;border:1px solid #ffd166;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:#ffe9a8;line-height:1.4}
+.store-lock button{margin-top:8px;background:#ffd166;color:#111;border:none;border-radius:8px;padding:9px 16px;cursor:pointer;font-size:14px;font-weight:bold}
+.store-lock button:disabled{opacity:.6;cursor:default}
+.store-head #storeWallet{font-size:12px;color:#4cc9f0;letter-spacing:0}
 @media (max-width:640px){.store-body{flex-direction:column}.store-look{flex:none;margin:0 auto}.store-items{width:100%}}
 
 /* Home bar (home.js): place name + Sleep / Save / Leave. */
