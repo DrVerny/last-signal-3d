@@ -2322,8 +2322,12 @@ function buildTerminalGlassDoor(scene) {
   // opens it instead of missing.
   const hit = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.7, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
   hit.position.set(0, 1.35, dz); hit.name = 'terminalGlassDoor'; hit.userData.homeAction = 'terminalGlassDoor'; homeTargets.push(hit); scene.add(hit);
+  // The entrance label over the glass door: bigger and further forward
+  // than before, so it reads whole from the car at the lot instead of
+  // clipping at the ends from distance (the old 4.5 m label sat high
+  // and small, and its ends slid under the HUD as the camera moved).
   const label = textSprite('GRAND CENTRAL - ENTRANCE', '#2a2118', '#f2e9d8', 'Push the glass doors');
-  label.scale.set(4.5, 1.1, 1); label.position.set(0, 3.2, dz + 0.4); scene.add(label);
+  label.scale.set(5.5, 1.4, 1); label.position.set(0, 3.1, dz + 0.9); scene.add(label);
   glassDoor = { panels, open: 0, opening: false, z: dz };
 }
 function openTerminalGlassDoor() {
@@ -2518,12 +2522,15 @@ function buildTerminal(scene) {
   // post: the old sign floated high above the desk and the top-left HUD
   // panel covered its left half, so it read "VICE DESK". Shortened to
   // SERVICE DESK so the whole word fits clear of the HUD. It stands at
-  // x 5.0, not 6.0: the attendant at x 8 stood close enough to the
-  // sign's right edge to hide its last letters from the approach angle,
-  // so it read "SERVICE DE" / "Tickets - 0.1 ZAM".
+  // x 5.0, y 2.4, z 10.3 - east enough that its left edge clears the
+  // top-left HUD panel (which ends at screen x 332) from the approach,
+  // and still well west of the attendant at x 8, whose head
+  // (y 1.58-1.74) used to hide the sub-line's "ZAMA" from the approach
+  // angle, and above his head and the counter, so no part of it can be
+  // covered from any approach. The post is tall enough to reach it.
   const deskSign = textSprite('SERVICE DESK', '#2a2118', '#ffd166', 'Tickets - 0.1 ZAMA');
-  deskSign.scale.set(3.2, 0.8, 1); deskSign.position.set(5.0, 1.8, 10); scene.add(deskSign);
-  hbox(scene, 0.08, 1.4, 0.08, 0x2a3a4a, 5.0, 0.7, 10, null, { metalness: 0.6, roughness: 0.4 });
+  deskSign.scale.set(3.6, 0.9, 1); deskSign.position.set(5.0, 2.4, 10.3); scene.add(deskSign);
+  hbox(scene, 0.08, 2.0, 0.08, 0x2a3a4a, 5.0, 1.0, 10.3, null, { metalness: 0.6, roughness: 0.4 });
   const attendant = new THREE.Group(); attendant.position.set(8, 0, 9.2); scene.add(attendant);
   const navy = mat(0x1a3a5a, { roughness: 0.85 });
   const skin = mat(0x8a5a3a, { roughness: 0.8 });
@@ -2565,7 +2572,9 @@ function buildTerminal(scene) {
   const plat = textSprite('PLATFORM 4 - THE 4 TRAIN', '#2a2118', '#ffd166', 'Downtown - board here');
   plat.scale.set(6, 1.5, 1); plat.position.set(0, 6.2, -12.5); scene.add(plat);
   const ent = textSprite('GRAND CENTRAL - ENTRANCE', '#2a2118', '#f2e9d8', '');
-  ent.scale.set(5, 1.25, 1); ent.position.set(0, 6.5, 14.6); ent.rotation.y = Math.PI; scene.add(ent);
+  // Lower than before (y 5.2, not 6.5), so it sits in clear view from
+  // the concourse floor instead of near the top of the screen.
+  ent.scale.set(5.5, 1.4, 1); ent.position.set(0, 5.2, 14.6); ent.rotation.y = Math.PI; scene.add(ent);
   lamp(scene, 0, 7, 0, 0xffe0b0, 1.2, 20);
   lamp(scene, -6, 7, 8, 0xffe0b0, 0.8, 14);
   lamp(scene, 6, 7, -8, 0xffe0b0, 0.8, 14);

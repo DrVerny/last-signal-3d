@@ -563,6 +563,7 @@ let parkedSeat = null;
 let parkedSeatActive = false;
 let doorSwing = null; // { group, t } while a car door is swinging open
 let getOutBtnEl = null;
+let getOutCbTimer = null; // delayed destination action after stepping out (see getOutOfParkedCar)
 function showGetOutButton() {
   if (!getOutBtnEl) {
     getOutBtnEl = document.createElement('div');
@@ -684,7 +685,30 @@ function getOutOfParkedCar() {
     applyPlayerPresence({ scene, camera, x: seat.getOutPos.x, z: seat.getOutPos.z, yaw: state.yaw, pitch: state.pitch, moving: false, moveDx: 0, moveDz: 0, dt: 0.016, t: Date.now() / 1000, eyeY: 1.7 });
   } catch (e) { /* presence is best effort */ }
   const cb = seat.onGetOut;
-  if (cb) { try { cb(); } catch (e) { /* destination action is best effort */ } }
+  if (cb) {
+    // The destination action (briefing, store, interior) waits a beat
+    // after the step-out, so the player sees the door swing open and
+    // himself standing beside the car in the yard before any modal
+    // covers the screen. It used to run in the same frame as the
+    // step-out, so the modal opened instantly and the player never saw
+    // himself get out: it read as the Get out button doing nothing but
+    // opening a popup, and he looked stuck in the car. If a dialogue
+    // opens in the meantime (he walked straight to a guard), the
+    // briefing waits for it to close; after a few tries it is dropped
+    // rather than stacking a modal over a dialogue.
+    if (getOutCbTimer) { clearTimeout(getOutCbTimer); getOutCbTimer = null; }
+    let tries = 0;
+    const runCb = () => {
+      getOutCbTimer = null;
+      if (!actActive) return;
+      if (!document.getElementById('dialogue').classList.contains('hidden')) {
+        if (tries < 5) { tries++; getOutCbTimer = setTimeout(runCb, 1000); }
+        return;
+      }
+      try { cb(); } catch (e) { /* destination action is best effort */ }
+    };
+    getOutCbTimer = setTimeout(runCb, 900);
+  }
 }
 // Chase camera while the player is seated in a parked car: behind and
 // to the driver's side, so he sees himself in the car and the door he
@@ -1105,11 +1129,13 @@ function buildValveRoom() {
   const gl = new THREE.PointLight(0xd8e8ff, 0.8, 7); gl.position.set(0, 3.0, -4.6); room.add(gl);
   const fix = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.3), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, emissive: 0xd8e8ff, emissiveIntensity: 1.2 }));
   fix.position.set(0, 3.15, -3.5); room.add(fix);
-  // VALVE ROOM sign above the door, inside. It hangs below the ceiling
-  // pipe runs (y 2.73 and up) and south of their front ends (z -1.0), so
-  // the sign reads whole instead of hiding behind a pipe.
+  // VALVE ROOM sign above the door, inside. It hangs on the INTERIOR
+  // face of the front wall (z -1.25, north of the wall at z -1), below
+  // the ceiling pipe runs and clear of the door top: it used to sit at
+  // z -0.85, on the OUTSIDE face, so from inside the room the wall hid
+  // it except through the doorway and it read as only "ROOM".
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
-  sign.scale.set(3.2, 0.8, 1); sign.position.set(0, 2.3, -0.85); room.add(sign);
+  sign.scale.set(2.4, 0.6, 1); sign.position.set(0, 2.45, -1.25); room.add(sign);
   // EXIT door in the doorway (click it to go back outside) + green EXIT sign.
   // Like the outside door it hangs in a hinge group at its edge, with a
   // brass lever handle on the room side, so leaving works the same way:
@@ -1138,20 +1164,35 @@ function buildValveRoom() {
   exitHit.position.set(0, 1.2, -1.1); exitHit.name = 'valveRoomExit'; exitHit.userData.clickable = true; room.add(exitHit);
   window._valveRoomExitHit = exitHit;
   const exitSign = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.35), new THREE.MeshStandardMaterial({ color: 0x0a3a0a, emissive: 0x2aff7a, emissiveIntensity: 0.9 }));
-  exitSign.position.set(0, 2.3, -1.05); room.add(exitSign);
+  // On the interior face of the front wall, left of the door, facing
+  // into the room (rotation.y = PI): it used to sit at z -1.05, inside
+  // the wall itself, so it was invisible from both sides.
+  exitSign.position.set(-1.9, 2.3, -1.25); exitSign.rotation.y = Math.PI; room.add(exitSign);
   // Exposed pipes run along the ceiling from the entrance wall to the
   // back wall, then drop down to feed the three valves: the water comes
   // straight from the dam, through the tower, down into this chamber.
+  // The ceiling runs sit in the GAPS between the gauge labels (x -1.5
+  // and 1.5), not over the valves: a run over a valve crossed its label
+  // at the label's own height and split it ("RESI...TIAL"), because the
+  // runs span the whole room at the labels' height. The labels sit at
+  // x -3, 0 and 3, so the gaps between them are the only clear lanes.
+  // A single main along the back wall joins the runs to the drops.
   // The drops sit 0.8 m WEST of each valve (x -3.8, -0.8, 2.2), not
   // on the valve's own x: a drop on the valve's x ran straight down
   // in front of its gauge and wheel and hid them. Off to the side,
   // each drop lands on the west end of its valve's horizontal pipe
   // and the gauge, the wheel, the sight tube and the PSI readout are
-  // all clear of it and clickable.
+  // all clear of it and clickable. The drops and the back-wall main
+  // sit BEHIND the labels (z -5.7, labels at z -5.35), so the labels
+  // draw over them and read whole.
   const chamberPipeMat = stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 });
-  for (const px of [-3.8, -0.8, 2.2]) {
+  for (const px of [-1.5, 1.5]) {
     const run = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 4.7, 12), chamberPipeMat);
     run.rotation.x = Math.PI / 2; run.position.set(px, 2.95, -3.35); run.castShadow = true; room.add(run);
+  }
+  const backMain = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 7.6, 12), chamberPipeMat);
+  backMain.rotation.z = Math.PI / 2; backMain.position.set(0, 2.95, -5.7); backMain.castShadow = true; room.add(backMain);
+  for (const px of [-3.8, -0.8, 2.2]) {
     const drop = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.4, 12), chamberPipeMat);
     drop.position.set(px, 1.75, -5.7); drop.castShadow = true; room.add(drop);
   }
@@ -3668,6 +3709,13 @@ function reparentCast(name, group, x, z, yaw) {
 }
 function startMission2() {
   mission1.visible = false; mission2.visible = true; mission3.visible = false;
+  // The yard is the only scene that may show here: a stale travel, trek
+  // or arrival-lot group left visible would paint its own street over
+  // the yard, so hide them explicitly instead of trusting the drive
+  // teardown alone.
+  if (typeof travelGroup !== 'undefined' && travelGroup) travelGroup.visible = false;
+  if (typeof trekGroup !== 'undefined' && trekGroup) trekGroup.visible = false;
+  if (typeof arrivalGroup !== 'undefined' && arrivalGroup) arrivalGroup.visible = false;
   state.mission = 2; resetView();
   // Third person on entering the mission, so the player sees himself.
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
@@ -4161,6 +4209,7 @@ export function stopAct() {
   try { hideTakeRentalButton(); } catch (e) { /* button is optional */ }
   if (actRaf) { try { cancelAnimationFrame(actRaf); } catch (e) { /* ignore */ } actRaf = 0; }
   try { if (typeof valveTimer !== 'undefined' && valveTimer) { clearInterval(valveTimer); valveTimer = null; } } catch (e) { /* ignore */ }
+  try { if (typeof getOutCbTimer !== 'undefined' && getOutCbTimer) { clearTimeout(getOutCbTimer); getOutCbTimer = null; } } catch (e) { /* ignore */ }
   try { if (typeof bombInterval !== 'undefined' && bombInterval) { clearInterval(bombInterval); bombInterval = null; } } catch (e) { /* ignore */ }
   try { stopSpeaking(); } catch (e) { /* ignore */ }
   try { document.getElementById('dialogue').classList.add('hidden'); } catch (e) { /* ignore */ }
