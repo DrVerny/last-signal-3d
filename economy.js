@@ -90,6 +90,57 @@ function setBalance(n) { try { localStorage.setItem(MONEY_KEY, String(Math.max(0
 export function addMoney(n) { setBalance(getBalance() + n); }
 export function spendMoney(n) { if (getBalance() < n) return false; setBalance(getBalance() - n); return true; }
 
+// ---------- Fuel ----------
+// The player's car has a fuel tank, 0-100%, starting full. A full tank
+// covers 500 miles, so the longest single drive in the game (85 miles,
+// reservoir to substation) uses 17% - a full tank covers it almost six
+// times over. Fuel is a real resource with a real price (0.5 ZAMA for a
+// full tank at a Filling Station), but it is never a trap: an empty
+// tank never stops the car, never slows a drive and never blocks a
+// mission. The car keeps driving, the gauge sits empty, and the game
+// prompts to refuel. The player can always drive to a Filling Station.
+const FUEL_KEY = 'lastSignalFuel';
+export const FUEL_TANK_MILES = 500;
+export const FUEL_PRICE = 0.5;
+export function getFuel() {
+  try {
+    const raw = localStorage.getItem(FUEL_KEY);
+    if (raw === null || raw === undefined) return 100;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 100;
+  } catch (e) { return 100; }
+}
+function setFuel(pct) {
+  const v = Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
+  try { localStorage.setItem(FUEL_KEY, String(v)); } catch (e) { /* ignore */ }
+  updateFuelHUD();
+}
+// Burn fuel for the miles just driven. Called as the drive progresses
+// and once more at the end of the drive for any miles left uncounted.
+export function consumeFuelMiles(miles) {
+  if (!miles || miles <= 0) return;
+  setFuel(getFuel() - (miles / FUEL_TANK_MILES) * 100);
+}
+// Fill the tank to 100% for a flat 0.5 ZAMA, whatever the current
+// level. Returns 'full' (already full, nothing charged), 'broke' (not
+// enough ZAMA) or 'ok'. Like the rental fee and the train ticket, this
+// spends through spendMoney directly - no wallet sign-in needed.
+export function refillFuel() {
+  if (getFuel() >= 100) return 'full';
+  if (getBalance() < FUEL_PRICE) return 'broke';
+  if (!spendMoney(FUEL_PRICE)) return 'broke';
+  setFuel(100);
+  return 'ok';
+}
+export function updateFuelHUD() {
+  const bar = document.getElementById('fuelBar');
+  if (bar) bar.style.width = Math.round(getFuel()) + '%';
+  const val = document.getElementById('fuelVal');
+  if (val) val.textContent = Math.round(getFuel()) + '%';
+  const line = document.getElementById('fuelLine');
+  if (line) line.classList.toggle('low', getFuel() <= 20);
+}
+
 export function updateWalletHUD() {
   const el = document.getElementById('walletBal');
   if (el) el.innerHTML = moneyHTML(getBalance());
@@ -97,6 +148,7 @@ export function updateWalletHUD() {
   if (sb) sb.innerHTML = 'Balance: ' + moneyHTML(getBalance());
   const sw = document.getElementById('storeWallet');
   if (sw) sw.textContent = isWalletSignedIn() ? 'Signed in: ' + shortAddr(getSignedInAddress()) : '';
+  updateFuelHUD();
 }
 
 // A gold toast on the shared #toast element, like the acts use.

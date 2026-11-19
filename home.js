@@ -10,16 +10,17 @@
 
 import * as THREE from 'three';
 import { canvas, renderer, disposeScene } from './core.js';
-import { getBalance, moneyFmt, grantPayout, spendMoney, getEquippedCarDef } from './economy.js';
+import { getBalance, moneyFmt, grantPayout, spendMoney, getEquippedCarDef, getFuel, refillFuel, consumeFuelMiles } from './economy.js';
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson, resolveMove, addBoxCollider } from './player.js';
 import { readingTimeMs, speakLine } from './speak.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
 let homeKind = null, homeOnLeave = null;
 let homeYaw = 0, homePitch = 0;
 let homeBounds = { x: [-6, 6], z: [-4, 4] };
+let homeColliders = []; // wall boxes for the current place, rebuilt by enterPlace
 let homeStart = { x: 0, y: 1.7, z: 4, yaw: 0 };
 // Walkable exit doors: each room has a real, visible door the player
 // walks up to and through to leave, instead of only a UI button. A door
@@ -948,6 +949,9 @@ function endPrologueDrive() {
     detachAvatar();
   } catch (e) { /* ignore */ }
   plDriveCar = null;
+  // Fuel: the prologue drive is 30 miles in his own car, so it burns
+  // 6% of a tank. An empty tank never blocks it - the car still drives.
+  consumeFuelMiles(PL_DRIVE_MILES);
   // The drive ends in the parking lot in front of the terminal, not
   // straight inside it: the player starts seated in his parked car,
   // gets out, and walks through the glass doors.
@@ -1003,7 +1007,9 @@ function showHomeBar(kind) {
     airport: 'AIRPORT - JFK TERMINAL',
     carpark: 'CAR PARK',
     windtunnel: 'WIND TUNNEL LAB - ENGINEERING LAB',
-    symposium: 'SYMPOSIUM HALL - NEW YORK'
+    symposium: 'SYMPOSIUM HALL - NEW YORK',
+    lobby: 'LOBBY',
+    fillingstation: 'FILLING STATION'
   };
   const infos = {
     mansion: homePrologue && !homeCallDone ? (prologueInBed ? 'You are in bed. The phone is ringing - stand up.' : prologueSeated ? 'You are on the couch. The phone is beside you - tap its green button.' : 'The phone is ringing. Walk to the couch, sit down and answer it.') : homePrologue ? 'Jade called. Drive to the Train Terminal and board the 4 train.' : 'Drag to look around - WASD to walk - click the bed to sleep.',
@@ -1016,7 +1022,9 @@ function showHomeBar(kind) {
     airport: 'Drag to look around - WASD to walk - look around, then head back.',
     carpark: 'Drag to look around - WASD to walk - rows of parked cars. Look around, then head back.',
     windtunnel: 'Drag to look around - WASD to walk - run the wind tunnel at the control panel. The phone booth on the wall gives the next mission.',
-    symposium: 'Drag to look around - WASD to walk - take the NYC podium on the stage.'
+    symposium: 'Drag to look around - WASD to walk - take the NYC podium on the stage.',
+    lobby: 'Drag to look around - WASD to walk - walk back out through the EXIT door.',
+    fillingstation: 'Drag to look around - WASD to walk - tap Fill tank to fill up for 0.5 ZAMA.'
   };
   document.getElementById('homeBarTitle').textContent = titles[kind] || kind;
   document.getElementById('homeBarInfo').textContent = infos[kind] || '';
@@ -1055,11 +1063,13 @@ function roomShell(scene, w, d, h, floorColor, wallColor) {
 // leave, the way he walks through the station door into the valve room.
 // The door is a frame, a wood panel with a handle, a gold glow strip and
 // an EXIT sign, so it is easy to find. Clicking it also opens it.
-// opts: { x, z, ry, keyId, keyLabel, action, label }.
+// opts: { x, z, ry, keyId, keyLabel, action, label, lobbyFor }.
 //   keyId/keyLabel: when set, the door is locked until the player has
 //     that key (the key is a pickup inside the room, see addRoomKey).
-//   action: 'leave' (default, leaves the place) or 'terminal' (the
-//     prologue path: go to the Train Terminal).
+//   action: 'leave' (default, leaves the place), 'terminal' (the
+//     prologue path: go to the Train Terminal), or 'lobby' (an entrance
+//     door on an exterior building: walk through it to enter the small
+//     interior lobby for that building, see goToLobby).
 function addExitDoor(scene, opts) {
   const o = opts || {};
   const ry = o.ry || 0;
@@ -1110,15 +1120,53 @@ function addExitDoor(scene, opts) {
   // A gold glow strip above the door, so it is easy to spot across the room.
   const glow = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 0.06), new THREE.MeshBasicMaterial({ color: 0xffd166 }));
   glow.position.set(0, 2.62, 0.05); g.add(glow);
-  const sign = textSprite(o.label || 'EXIT', '#2a2118', '#ffd166', o.keyId ? 'Locked - needs the ' + (o.keyLabel || 'key') : 'Walk through to leave');
+  const sign = textSprite(o.label || 'EXIT', '#2a2118', '#ffd166', o.keyId ? 'Locked - needs the ' + (o.keyLabel || 'key') : (o.action === 'lobby' ? 'Walk through to enter' : 'Walk through to leave'));
   sign.scale.set(2.2, 0.55, 1); sign.position.set(0, 3.0, 0.05); g.add(sign);
   scene.add(g);
-  const door = { x: o.x || 0, z: o.z || 0, ry, keyId: o.keyId || null, keyLabel: o.keyLabel || null, action: o.action || 'leave', panel, hinge, glow, group: g, open: 0 };
+  const door = { x: o.x || 0, z: o.z || 0, ry, keyId: o.keyId || null, keyLabel: o.keyLabel || null, action: o.action || 'leave', lobbyFor: o.lobbyFor || null, panel, hinge, glow, group: g, open: 0 };
   homeDoors.push(door);
   // The panel is clickable, so a click on the door opens it too.
   panel.userData.doorRef = door;
   homeTargets.push(panel);
   return door;
+}
+// Enter a building lobby from its entrance door: the lobby is a small
+// interior scene (see buildLobby) behind the door of an exterior
+// building that has no interior of its own (hospital, industry,
+// airport, car park office, market corner shop, filling station
+// kiosk). The grounds' leave callback must not run here - the lobby
+// returns to the grounds, not to the map - so it is held and handed to
+// the lobby as its way back: leaving the lobby re-enters the grounds,
+// and leaving the grounds runs the original callback.
+function goToLobby(backKind) {
+  const ol = homeOnLeave;
+  homeOnLeave = null;
+  try { enterPlace('lobby', () => { try { enterPlace(backKind, ol); } catch (e) { /* ignore */ } }, { lobbyFor: backKind }); } catch (e) { /* ignore */ }
+}
+// The Fill tank button, shown only at the Filling Station: a flat
+// 0.5 ZAMA for a full tank, whatever the current level. If the tank is
+// already full it says so and charges nothing. The button is hidden
+// again when the player leaves the place.
+let fillBtnEl = null;
+function showFillButton() {
+  if (!fillBtnEl) {
+    fillBtnEl = document.createElement('div');
+    fillBtnEl.id = 'fillTankBtn';
+    fillBtnEl.innerHTML = '<button type="button" id="fillTankBtnInner" style="padding:14px 26px;font-size:17px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:10px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.5);">Fill tank - 0.5 ZAMA</button>';
+    fillBtnEl.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);z-index:56;text-align:center;pointer-events:auto;';
+    document.body.appendChild(fillBtnEl);
+    document.getElementById('fillTankBtnInner').onclick = () => { fillTankHere(); };
+  }
+  const b = document.getElementById('fillTankBtnInner');
+  if (b) b.textContent = getFuel() >= 100 ? 'Tank full' : 'Fill tank - 0.5 ZAMA';
+  fillBtnEl.style.display = 'block';
+}
+function hideFillButton() { if (fillBtnEl) fillBtnEl.style.display = 'none'; }
+function fillTankHere() {
+  const r = refillFuel();
+  if (r === 'full') { showHomeToast('Tank is already full - nothing to pay.'); }
+  else if (r === 'broke') { showHomeToast('Not enough ZAMA - a full tank costs 0.5 ZAMA, you have ' + moneyFmt(getBalance()) + '. Finish a mission to earn more.'); }
+  else { showHomeToast('Tank filled - 0.5 ZAMA. Full tank, 100%.'); showFillButton(); }
 }
 // A small glowing key pickup inside a room, for a locked exit door.
 // Clicking it (or walking up to it) picks it up. The key is always
@@ -1903,10 +1951,12 @@ function buildHospital(scene) {
   const wingMat = whiteFacadeMat(8, 3, 0.1);
   const wing = new THREE.Mesh(new THREE.BoxGeometry(12, 4, 5), wingMat);
   wing.position.set(2, 2, -2); wing.castShadow = true; wing.receiveShadow = true; scene.add(wing);
-  // Glass entrance on the wing, with a canopy.
-  const door = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 2.6), mat(0x1a3a5a, { roughness: 0.1, metalness: 0.5 }));
-  door.position.set(2, 1.3, 0.55); door.name = 'info'; door.userData.homeAction = 'info'; homeTargets.push(door); scene.add(door);
-  hbox(scene, 3.4, 0.15, 1.2, 0xd8d8d8, 2, 2.9, 0.9, null, { roughness: 0.5 });
+  // A real entrance door on the wing, with a canopy over it: frame,
+  // panel, brass handles, glow and an ENTER sign. Walking through it
+  // enters the hospital lobby; the wing wall is split at the doorway
+  // (see registerHomeColliders), so the door is the way through.
+  addExitDoor(scene, { x: 2, z: 0.55, ry: 0, action: 'lobby', label: 'ENTER' });
+  hbox(scene, 3.4, 0.15, 1.2, 0xd8d8d8, 2, 3.4, 0.9, null, { roughness: 0.5 });
   // Red cross on the tower.
   hbox(scene, 1.6, 0.5, 0.1, 0xc0392b, 0, 13.5, -4.95, null, { roughness: 0.6 });
   hbox(scene, 0.5, 1.6, 0.1, 0xc0392b, 0, 13.5, -4.95, null, { roughness: 0.6 });
@@ -1944,6 +1994,11 @@ function buildIndustry(scene) {
   const offMat = whiteFacadeMat(6, 5, 0.15);
   const office = new THREE.Mesh(new THREE.BoxGeometry(8, 7, 6), offMat);
   office.position.set(10, 3.5, -8); office.castShadow = true; office.receiveShadow = true; scene.add(office);
+  // Real entrance doors: one on the treatment hall, one on the office
+  // block. Both lead to the plant office lobby; both walls are split
+  // at their doorways (see registerHomeColliders).
+  addExitDoor(scene, { x: -2, z: -3.45, ry: 0, action: 'lobby', label: 'ENTER' });
+  addExitDoor(scene, { x: 10, z: -4.95, ry: 0, action: 'lobby', label: 'OFFICE' });
   // Smokestacks: white with a red band at the top.
   for (const sx of [-8, -5]) {
     hcyl(scene, 0.7, 0.9, 12, 0xf4f6f8, sx, 6, -12, null, { roughness: 0.7 });
@@ -2088,7 +2143,7 @@ function marketZSignTexture() {
 // One shop facade: w along the street (z), d deep (x), h tall, front
 // facing the street (face +1: front is the +x side, -1: the -x side).
 // The front face carries the canvas facade; the other faces are plain.
-function marketFacade(scene, cx, cz, w, h, d, face, style) {
+function marketFacade(scene, cx, cz, w, h, d, face, style, noDoor) {
   const front = new THREE.MeshStandardMaterial({ map: marketFacadeTexture(style), roughness: 0.9, metalness: 0.02 });
   const baseCol = style === 'brick' ? 0x8a4a38 : style === 'plaster' ? 0xd8b078 : 0xddd5c2;
   const side = mat(baseCol, { roughness: 0.9 });
@@ -2097,12 +2152,16 @@ function marketFacade(scene, cx, cz, w, h, d, face, style) {
   const b = new THREE.Mesh(new THREE.BoxGeometry(d, h, w), mats);
   b.position.set(cx, h / 2, cz); b.castShadow = true; b.receiveShadow = true; scene.add(b);
   // Cornice along the top of the front face, and a real door with a handle.
+  // noDoor skips the decorative slab: that shop gets a real walk-through
+  // door instead (see buildMarketStreet).
   const fx = cx + face * (d / 2 + 0.12);
   hbox(scene, 0.3, 0.18, w + 0.2, 0xe8e2d4, fx, h - 0.09, cz, null, { roughness: 0.8 });
-  const doorCol = style === 'brick' ? 0x2a3a4a : 0x4a3220;
-  hbox(scene, 0.12, 2.2, 1.1, doorCol, fx, 1.1, cz, null, { roughness: 0.6 });
-  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 }));
-  handle.position.set(fx + face * 0.1, 1.05, cz + 0.35); scene.add(handle);
+  if (!noDoor) {
+    const doorCol = style === 'brick' ? 0x2a3a4a : 0x4a3220;
+    hbox(scene, 0.12, 2.2, 1.1, doorCol, fx, 1.1, cz, null, { roughness: 0.6 });
+    const handle = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 }));
+    handle.position.set(fx + face * 0.1, 1.05, cz + 0.35); scene.add(handle);
+  }
   if (style === 'stone') {
     for (const dz of [-1.2, 1.2]) hcyl(scene, 0.16, 0.2, 3, 0xe8e2d4, fx + face * 0.25, 1.5, cz + dz, null, { roughness: 0.8 });
   }
@@ -2163,7 +2222,11 @@ function buildMarketStreet(scene) {
   marketFacade(scene, -10.5, 9, 8, 9.5, 5, 1, 'plaster');
   // Right (east): brick and plaster, with a gap between them for the stalls.
   marketFacade(scene, 10.5, -7, 8, 9, 5, -1, 'brick');
-  marketFacade(scene, 10.5, 9.5, 7, 7.5, 5, -1, 'plaster');
+  // The plaster shop on the east side is enterable: its decorative slab
+  // is skipped and a real door stands in its place, into the shop lobby.
+  // Its wall is split at the doorway (see registerHomeColliders).
+  marketFacade(scene, 10.5, 9.5, 7, 7.5, 5, -1, 'plaster', true);
+  addExitDoor(scene, { x: 7.95, z: 9.5, ry: -Math.PI / 2, action: 'lobby', label: 'SHOP' });
   // Stalls: one on each side, red-and-white striped awnings, goods on
   // the counters, Z signboards on the fronts.
   buildMarketStall(scene, 7.2, 1.5, -1);
@@ -2322,12 +2385,13 @@ function buildTerminalGlassDoor(scene) {
   // opens it instead of missing.
   const hit = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.7, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
   hit.position.set(0, 1.35, dz); hit.name = 'terminalGlassDoor'; hit.userData.homeAction = 'terminalGlassDoor'; homeTargets.push(hit); scene.add(hit);
-  // The entrance label over the glass door: bigger and further forward
-  // than before, so it reads whole from the car at the lot instead of
-  // clipping at the ends from distance (the old 4.5 m label sat high
-  // and small, and its ends slid under the HUD as the camera moved).
+  // The entrance label over the glass door: forward of the door so it
+  // reads whole from the car at the lot. At 5.5 m wide its right end
+  // slid off the frame from the seated car camera ("GRAND CENTRAL -
+  // ENT."), so it is a touch narrower and lower now, which keeps both
+  // ends in frame from the lot and from the street on foot.
   const label = textSprite('GRAND CENTRAL - ENTRANCE', '#2a2118', '#f2e9d8', 'Push the glass doors');
-  label.scale.set(5.5, 1.4, 1); label.position.set(0, 3.1, dz + 0.9); scene.add(label);
+  label.scale.set(4.4, 1.1, 1); label.position.set(0, 2.85, dz + 0.9); scene.add(label);
   glassDoor = { panels, open: 0, opening: false, z: dz };
 }
 function openTerminalGlassDoor() {
@@ -2529,8 +2593,8 @@ function buildTerminal(scene) {
   // angle, and above his head and the counter, so no part of it can be
   // covered from any approach. The post is tall enough to reach it.
   const deskSign = textSprite('SERVICE DESK', '#2a2118', '#ffd166', 'Tickets - 0.1 ZAMA');
-  deskSign.scale.set(3.6, 0.9, 1); deskSign.position.set(5.0, 2.4, 10.3); scene.add(deskSign);
-  hbox(scene, 0.08, 2.0, 0.08, 0x2a3a4a, 5.0, 1.0, 10.3, null, { metalness: 0.6, roughness: 0.4 });
+  deskSign.scale.set(3.0, 0.75, 1); deskSign.position.set(7.0, 2.5, 10.3); scene.add(deskSign);
+  hbox(scene, 0.08, 2.3, 0.08, 0x2a3a4a, 7.0, 1.15, 10.3, null, { metalness: 0.6, roughness: 0.4 });
   const attendant = new THREE.Group(); attendant.position.set(8, 0, 9.2); scene.add(attendant);
   const navy = mat(0x1a3a5a, { roughness: 0.85 });
   const skin = mat(0x8a5a3a, { roughness: 0.8 });
@@ -2572,9 +2636,10 @@ function buildTerminal(scene) {
   const plat = textSprite('PLATFORM 4 - THE 4 TRAIN', '#2a2118', '#ffd166', 'Downtown - board here');
   plat.scale.set(6, 1.5, 1); plat.position.set(0, 6.2, -12.5); scene.add(plat);
   const ent = textSprite('GRAND CENTRAL - ENTRANCE', '#2a2118', '#f2e9d8', '');
-  // Lower than before (y 5.2, not 6.5), so it sits in clear view from
-  // the concourse floor instead of near the top of the screen.
-  ent.scale.set(5.5, 1.4, 1); ent.position.set(0, 5.2, 14.6); ent.rotation.y = Math.PI; scene.add(ent);
+  // Lower and narrower than before (y 4.4, 4.8 m wide): at y 5.2 and
+  // 5.5 m wide it clipped at the top-right of the frame from the
+  // concourse floor ("GRAND CENTRAL - I...").
+  ent.scale.set(4.8, 1.2, 1); ent.position.set(0, 4.4, 14.6); ent.rotation.y = Math.PI; scene.add(ent);
   lamp(scene, 0, 7, 0, 0xffe0b0, 1.2, 20);
   lamp(scene, -6, 7, 8, 0xffe0b0, 0.8, 14);
   lamp(scene, 6, 7, -8, 0xffe0b0, 0.8, 14);
@@ -2649,8 +2714,15 @@ function buildAirport(scene) {
   const termMat = whiteFacadeMat(12, 4, 0.1);
   const term = new THREE.Mesh(new THREE.BoxGeometry(24, 8, 8), termMat);
   term.position.set(0, 4, 6); term.castShadow = true; term.receiveShadow = true; scene.add(term);
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(20, 5), mat(0x1a3a5a, { roughness: 0.1, metalness: 0.5 }));
-  glass.position.set(0, 3, 1.95); scene.add(glass);
+  // Glass front in two segments, with a real entrance door between
+  // them: frame, panel, brass handles, glow and an ENTER sign. Walking
+  // through it enters the airport lobby; the terminal wall is split at
+  // the doorway (see registerHomeColliders).
+  for (const gx of [-5.45, 5.45]) {
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(9.1, 5), mat(0x1a3a5a, { roughness: 0.1, metalness: 0.5 }));
+    glass.position.set(gx, 3, 1.95); scene.add(glass);
+  }
+  addExitDoor(scene, { x: 0, z: 1.95, ry: 0, action: 'lobby', label: 'ENTER' });
   const sign = textSprite('AIRPORT - JFK', '#f4f6f8', '#2a3a4a', 'Terminal 4 - flights out');
   sign.scale.set(7, 1.75, 1); sign.position.set(0, 9.5, 1.8); scene.add(sign);
   // The control tower: a tall white cylinder with a wider top.
@@ -2705,7 +2777,12 @@ function buildCarpark(scene) {
     const rz = r === 0 ? -4 : 4;
     for (let i = 0; i < 7; i++) {
       if (Math.random() < 0.2) continue; // some bays empty
-      homeCar(scene, cols[(r * 7 + i) % cols.length], -12 + i * 4, rz, r === 0 ? Math.PI / 2 : -Math.PI / 2);
+      const cx = -12 + i * 4;
+      homeCar(scene, cols[(r * 7 + i) % cols.length], cx, rz, r === 0 ? Math.PI / 2 : -Math.PI / 2);
+      // The car is solid, registered where it was actually placed (the
+      // empty bays are random, so the list cannot be fixed). ry +-PI/2
+      // puts the 4.4 m length along x.
+      addBoxCollider(homeColliders, cx - 2.2, rz - 0.93, cx + 2.2, rz + 0.93);
     }
   }
   // A few lamp posts and trees around the lot.
@@ -2714,6 +2791,13 @@ function buildCarpark(scene) {
     lamp(scene, lx, 4.5, lz, 0xffe9a8, 0.8, 12);
   }
   addTree(scene, -18, 12); addTree(scene, 18, -10); addTree(scene, 10, 14);
+  // Parking office in the north-east corner, with a real door into the
+  // office lobby. The office wall is split at the doorway (see
+  // registerHomeColliders).
+  hbox(scene, 4, 3, 3, 0xd8b078, 15, 1.5, -10, null, { roughness: 0.9 });
+  addExitDoor(scene, { x: 15, z: -8.45, ry: 0, action: 'lobby', label: 'OFFICE' });
+  const officeSign = textSprite('PARKING OFFICE', '#2a2118', '#ffd166', 'Attendant on duty');
+  officeSign.scale.set(3, 0.75, 1); officeSign.position.set(15, 3.6, -8.4); scene.add(officeSign);
   const sign = textSprite('CAR PARK', '#2a2118', '#ffd166', 'Parking - 2 ZAMA an hour');
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 5, -12); scene.add(sign);
 }
@@ -2938,7 +3022,10 @@ function buildSymposiumAudience(scene) {
     for (let c = 0; c < cols.length; c++) {
       if ((r + c) % 5 === 0) continue; // a few seats stay empty
       const sx = cols[c], sz = rows[r];
-      const p = makeSeatedPerson({ modelIndex: seatIdx, x: sx, z: sz, heading: (Math.random() - 0.5) * 0.2, scale: 0.95 + Math.random() * 0.1 });
+      // Heading PI faces the stage at the north end (-Z); makeSeatedPerson
+      // adds each rig's own faceYaw, so Atlas and Casual sitters alike
+      // end up facing the stage, not the back of the hall.
+      const p = makeSeatedPerson({ modelIndex: seatIdx, x: sx, z: sz, heading: Math.PI + (Math.random() - 0.5) * 0.2, scale: 0.95 + Math.random() * 0.1 });
       seatIdx++;
       if (!p) continue;
       // Centre the hips over the chair: each model's hips sit at a
@@ -3454,6 +3541,245 @@ function buildSensorVault(scene) {
   sign.scale.set(4.5, 1.1, 1); sign.position.set(0, 2.6, -3.8); scene.add(sign);
   addExitDoor(scene, { x: 3.5, z: 3.9, ry: Math.PI, label: 'EXIT - UP THE STAIRS' });
 }
+// ---------- Building lobbies ----------
+// A small interior lobby behind an entrance door: reception desk,
+// chairs, a wall sign naming the building. One lobby serves every
+// exterior building that has no interior of its own (hospital,
+// industry, airport, car park office, market corner shop, filling
+// station kiosk). The lobby's own EXIT door returns to the grounds
+// outside (its onLeave re-enters the place it came from).
+const LOBBY_CONFIG = {
+  hospital: { sign: 'CITY HOSPITAL', sub: 'Reception - emergency, open 24 hours', wall: 0x9fc4e8, floor: 0x8a8a86 },
+  industry: { sign: 'WATER TREATMENT PLANT', sub: 'Authorised personnel - sign in at the desk', wall: 0x8a8a82, floor: 0x6a6a62 },
+  airport: { sign: 'JFK - TERMINAL 4', sub: 'Departures - flights out', wall: 0x9fc4e8, floor: 0x8a8a86 },
+  carpark: { sign: 'CAR PARK OFFICE', sub: 'Parking - 2 ZAMA an hour', wall: 0x8a8a82, floor: 0x3a3d40 },
+  marketstreet: { sign: 'CORNER SHOP', sub: 'Fresh goods - browse the shelves', wall: 0xd8b078, floor: 0x6b4226 },
+  fillingstation: { sign: 'FILLING STATION KIOSK', sub: 'Snacks, oil and air - pay at the counter', wall: 0xd8b078, floor: 0x3a3d40 }
+};
+function buildLobby(scene, lobbyFor) {
+  const cfg = LOBBY_CONFIG[lobbyFor] || LOBBY_CONFIG.hospital;
+  roomShell(scene, 9, 7, 3.2, cfg.floor, cfg.wall);
+  // Reception desk on the north wall, two chairs facing it.
+  hbox(scene, 3.0, 1.1, 0.8, 0x6b4226, 0, 0.55, -2.9, null, { roughness: 0.8 });
+  hbox(scene, 3.2, 0.08, 1.0, 0x8a6a42, 0, 1.14, -2.9, null, { roughness: 0.8 });
+  for (const cx of [-2.5, 2.5]) {
+    hbox(scene, 0.6, 0.08, 0.6, 0x2e6fb0, cx, 0.45, 0.5, null, { roughness: 0.8 });
+    hbox(scene, 0.6, 0.6, 0.08, 0x2e6fb0, cx, 0.75, 0.8, null, { roughness: 0.8 });
+  }
+  const sign = textSprite(cfg.sign, '#f4f6f8', '#2a3a4a', cfg.sub);
+  sign.scale.set(5, 1.25, 1); sign.position.set(0, 2.4, -3.4); scene.add(sign);
+  // The way back out: a real EXIT door on the south wall, back to the grounds.
+  addExitDoor(scene, { x: 0, z: 3.4, ry: Math.PI, label: 'EXIT', action: 'leave' });
+}
+// A filling station forecourt: a canopy over two pumps, a kiosk with a
+// real door, a price sign, and a marked parking bay. The player drives
+// here from the map, gets out in the arrival lot, and walks in. The
+// Fill button (see showFillButton) is the way to buy fuel.
+function buildFillingStation(scene) {
+  scene.background = new THREE.Color(0x7aa0c4);
+  scene.fog = new THREE.Fog(0x9fc4e8, 40, 140);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), mat(0x3a3d40, { roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  const fore = new THREE.Mesh(new THREE.PlaneGeometry(26, 20), mat(0x8a8a86, { roughness: 0.95 }));
+  fore.rotation.x = -Math.PI / 2; fore.position.set(0, 0.02, 0); fore.receiveShadow = true; scene.add(fore);
+  // Canopy on four posts over the pumps.
+  hbox(scene, 12, 0.3, 8, 0x2e6fb0, 0, 4.6, -4, null, { roughness: 0.7 });
+  for (const [px, pz] of [[-5, -7], [5, -7], [-5, -1], [5, -1]]) {
+    hcyl(scene, 0.12, 0.12, 4.6, 0x8a949a, px, 2.3, pz, null, { metalness: 0.7, roughness: 0.4 });
+  }
+  // Two fuel pumps under the canopy.
+  for (const px of [-2, 2]) {
+    hbox(scene, 0.7, 1.5, 0.5, 0xc0392b, px, 0.75, -4, null, { roughness: 0.6 });
+    hbox(scene, 0.8, 0.2, 0.6, 0x2a2a2a, px, 1.6, -4, null, { roughness: 0.6 });
+  }
+  // Kiosk with a real door (leads to the kiosk lobby), and a price sign.
+  hbox(scene, 5, 3, 4, 0xd8b078, -8, 1.5, -6, null, { roughness: 0.9 });
+  addExitDoor(scene, { x: -8, z: -3.95, ry: 0, action: 'lobby', label: 'KIOSK' });
+  const sign = textSprite('FILLING STATION', '#2a2118', '#ffd166', 'Full tank - 0.5 ZAMA');
+  sign.scale.set(6, 1.5, 1); sign.position.set(0, 6, -7.5); scene.add(sign);
+  const price = textSprite('FUEL 0.5 ZAMA', '#f4f6f8', '#2a3a4a', 'Full tank, any level');
+  price.scale.set(3, 0.75, 1); price.position.set(0, 3.2, -3.9); scene.add(price);
+  addTree(scene, 11, 8);
+  lamp(scene, -6, 3.2, 6, 0xfff2c0, 0.7, 10);
+  lamp(scene, 6, 3.2, 10, 0xfff2c0, 0.7, 10);
+}
+
+// ---------- Wall and furniture colliders (see player.js) ----------
+// homeColliders is rebuilt by enterPlace for the current place: the
+// builder runs first, then registerHomeColliders appends the boxes for
+// that place, and the animate loop resolves movement against them.
+// The outer walls of the roomShell places need no collider: the
+// homeBounds clamp already stops the player 0.5-1 m short of every
+// wall face, so the walls are solid through the bounds. The colliders
+// below are the things the player can actually walk through today:
+// interior partitions, beds, couches, tables, counters, desks, stalls
+// and the solid building blocks of the exterior places (hospital
+// tower and wing, industry hall and office and tanks, airport
+// terminal and tower, terminal building, market facades, parked cars).
+// Doorways are never blocked: every addExitDoor gap stays open, and
+// every exterior entrance door gets its wall split at the doorway, so
+// the player can always walk up to the door and through it. A collider
+// never covers a walk-up trigger: the station key, the valve wheels,
+// the service desk, the ticket machines, the phone booth, the SCADA
+// desk, the log book, the vendor and every click target stay reachable
+// from 0.35 m out (the player stops at the face, the click still lands).
+function registerHomeColliders(kind) {
+  const c = homeColliders;
+  const B = (x0, z0, x1, z1) => addBoxCollider(c, x0, z0, x1, z1);
+  if (kind === 'mansion') {
+    B(-2.58, -5.0, -2.42, -2.0); // bedroom partition
+    B(-7.0, 1.94, -4.5, 2.06); // bathroom partition 1
+    B(-3.56, 2.0, -3.44, 5.0); // bathroom partition 2
+    B(-5.7, -4.7, -3.3, -1.7); // bed
+    B(-6.98, -1.9, -6.43, -0.5); // wardrobe
+    B(-6.48, -3.43, -5.93, -2.98); // nightstand
+    B(-1.3, -0.78, 1.9, 0.47); // sofa 1
+    B(1.83, -2.2, 3.07, -0.2); // sofa 2
+    B(6.13, -2.98, 6.88, 2.0); // kitchen counter + fridge
+    B(2.6, 2.5, 5.0, 3.9); // dining table
+    B(-6.9, -0.4, -6.5, 1.4); // bookshelf
+    B(-6.63, 2.9, -5.78, 4.7); // bathtub
+    B(-4.43, 4.15, -3.98, 4.85); // toilet
+    B(-4.18, 2.32, -3.62, 2.88); // bathroom sink
+  } else if (kind === 'safehouse') {
+    B(-0.08, -2.75, 0.08, -0.25); // partition
+    B(-3.2, -2.9, -1.6, 0.1); // bed
+    B(-3.98, -0.2, -3.43, 1.2); // wardrobe
+    B(-1.48, -2.73, -0.93, -2.28); // nightstand
+    B(0.7, -0.98, 2.9, 0.27); // sofa
+    B(-0.7, 2.23, 2.68, 2.98); // kitchen counter + fridge
+    B(-0.8, 1.1, 0.8, 2.1); // save table (the spawn stands on its south edge and can walk out; the table is clicked to save)
+  } else if (kind === 'hospital') {
+    B(-5.0, -11.0, 5.0, -5.0); // main tower
+    B(-6.8, -6.8, -3.2, -3.2); // rounded corner cylinder (square approx)
+    // Lower wing, split at the entrance door (gap x 1.28-2.72).
+    B(-4.0, -4.5, 1.28, 0.5);
+    B(2.72, -4.5, 8.0, 0.5);
+    B(-10.2, 3.05, -4.7, 4.95); // ambulance van
+    B(7.0, 5.75, 9.0, 6.25); // bench
+  } else if (kind === 'industry') {
+    // Treatment hall, split at the entrance door (gap x -2.72 to -1.28).
+    B(-10.0, -12.5, -2.72, -3.5);
+    B(-1.28, -12.5, 6.0, -3.5);
+    // Office block, split at its entrance door (gap x 9.28-10.72).
+    B(6.0, -11.0, 9.28, -5.0);
+    B(10.72, -11.0, 14.0, -5.0);
+    B(-13.6, 2.4, -10.4, 5.6); // storage tank 1
+    B(-9.6, 2.4, -6.4, 5.6); // storage tank 2
+    B(-5.6, 2.4, -2.4, 5.6); // storage tank 3
+    B(11.65, 1.65, 12.35, 2.35); // barrel 1
+    B(12.85, 1.65, 13.55, 2.35); // barrel 2
+    B(14.05, 1.65, 14.75, 2.35); // barrel 3
+    B(11.65, 2.85, 12.35, 3.55); // barrel 4
+    B(12.85, 2.85, 13.55, 3.55); // barrel 5
+  } else if (kind === 'terminal') {
+    B(7.4, -6.6, 8.6, -5.4); // pillar 1
+    B(-8.6, -6.6, -7.4, -5.4); // pillar 2
+    B(7.4, -0.6, 8.6, 0.6); // pillar 3
+    B(-8.6, -0.6, -7.4, 0.6); // pillar 4
+    B(7.4, 5.4, 8.6, 6.6); // pillar 5
+    B(-8.6, 5.4, -7.4, 6.6); // pillar 6
+    B(11.0, -2.3, 11.8, -1.7); // ticket machine 1
+    B(11.0, -0.1, 11.8, 0.5); // ticket machine 2
+    B(11.0, 2.1, 11.8, 2.7); // ticket machine 3
+    B(11.0, 4.3, 11.8, 4.9); // ticket machine 4
+    B(6.4, 9.55, 9.6, 10.45); // service desk counter
+    B(-2.0, -4.4, 2.0, -3.6); // bench (north)
+    B(-2.0, 3.6, 2.0, 4.4); // bench (south)
+  } else if (kind === 'terminalFront') {
+    // Terminal building, split at the revolving glass door (opening x -1.6 to 1.6).
+    B(-13.0, -14.0, -1.6, -10.0);
+    B(1.6, -14.0, 13.0, -10.0);
+    B(-2.33, 0.8, -0.48, 5.2); // the player's parked sedan
+    B(7.08, 5.8, 8.93, 10.2); // parked car 1
+    B(11.08, 3.8, 12.93, 8.2); // parked car 2
+  } else if (kind === 'hotel') {
+    B(-5.0, 1.14, -3.0, 1.26); // bathroom partition 1
+    B(-2.06, 1.2, -1.94, 3.5); // bathroom partition 2
+    B(-3.9, -3.3, -1.7, -0.3); // bed
+    B(-4.98, -1.2, -4.43, 0.2); // wardrobe
+    B(-1.68, -3.03, -1.12, -2.58); // nightstand 1
+    B(-4.48, -3.03, -3.92, -2.58); // nightstand 2
+    B(0.6, -1.18, 3.0, 0.07); // sofa
+    B(2.7, 1.15, 4.5, 2.05); // desk
+    B(4.25, 2.5, 4.95, 3.1); // minibar fridge
+    B(-4.4, 2.58, -2.6, 3.43); // bathtub
+    B(-4.83, 1.45, -4.38, 2.15); // toilet
+    B(-2.68, 1.52, -2.12, 2.08); // bathroom sink
+  } else if (kind === 'airport') {
+    // Terminal building, split at the entrance door (gap x -0.72 to 0.72).
+    B(-12.0, 2.0, -0.72, 10.0);
+    B(0.72, 2.0, 12.0, 10.0);
+    B(14.4, -11.6, 17.6, -8.4); // control tower
+    B(-12.2, 9.8, -7.8, 14.2); // parked car 1
+    B(-8.2, 11.8, -3.8, 16.2); // parked car 2
+    B(5.8, 10.8, 10.2, 15.2); // parked car 3
+  } else if (kind === 'carpark') {
+    // Parked cars are placed at random in buildCarpark (about 20% of
+    // bays stay empty), so each car registers its own collider where it
+    // is placed. The parking office is fixed: split at its door
+    // (gap x 14.28-15.72).
+    B(13.0, -11.5, 14.28, -8.5);
+    B(15.72, -11.5, 17.0, -8.5);
+  } else if (kind === 'fillingstation') {
+    B(-2.35, -4.25, -1.65, -3.75); // fuel pump 1
+    B(1.65, -4.25, 2.35, -3.75); // fuel pump 2
+    // Kiosk, split at its door (gap x -8.72 to -7.28).
+    B(-10.5, -8.0, -8.72, -4.0);
+    B(-7.28, -8.0, -5.5, -4.0);
+  } else if (kind === 'windtunnel') {
+    B(-6.5, -3.1, -2.5, 0.1); // contraction cone (wide end)
+    B(-2.5, -2.19, 4.5, -0.81); // test section frame
+    B(4.5, -2.35, 5.5, -0.65); // fan housing
+    B(5.5, -2.6, 6.3, -0.4); // diffuser
+    B(1.9, 0.5, 3.1, 1.1); // control console
+    B(-6.2, 4.15, -3.8, 5.05); // workbench
+    B(6.0, 4.5, 7.0, 5.1); // tool cabinet
+    B(-7.85, -5.92, -6.55, -5.6); // phone booth
+  } else if (kind === 'symposium') {
+    B(-5.0, -7.0, 5.0, -4.0); // stage (raised 1 m, no climb in code)
+    for (const rz of [-1, 0.6, 2.2, 3.8]) {
+      for (const cx of [-4.8, -2.4, 0, 2.4, 4.8]) {
+        B(cx - 0.28, rz - 0.23, cx + 0.28, rz + 0.32); // one seat (aisles stay open between seats and rows)
+      }
+    }
+  } else if (kind === 'policestation') {
+    B(-2.25, -5.45, 2.25, -4.55); // front desk
+    B(4.8, -5.95, 8.2, -5.65); // holding-cell bars (the cell stays barred off)
+    B(-8.8, 4.2, -7.6, 4.8); // side table
+  } else if (kind === 'navybarracks') {
+    for (const bx of [-8.6, 8.6]) {
+      for (const bz of [-3, 0, 3]) {
+        B(bx - 1.0, bz - 0.45, bx + 1.0, bz + 0.45); // bunk
+        B(bx - 0.35, bz + 0.65, bx + 0.35, bz + 1.15); // footlocker beside it
+      }
+    }
+    for (let i = 0; i < 6; i++) {
+      const cx = -4.5 + i * 1.8;
+      B(cx - 0.45, -5.85, cx + 0.45, -5.35); // wall locker (gaps stay open between lockers)
+    }
+    B(2.7, 4.1, 4.3, 4.9); // duty desk
+  } else if (kind === 'sensorvault') {
+    B(-0.6, 1.4, 0.6, 3.9); // staircase (no climb in code, a solid block in plan)
+    B(3.8, 2.85, 5.2, 3.55); // control console
+  } else if (kind === 'marketstreet') {
+    B(-13.0, -12.0, -8.0, -4.0); // west facade, stone
+    B(-13.0, -3.0, -8.0, 4.0); // west facade, brick
+    B(-13.0, 5.0, -8.0, 13.0); // west facade, plaster
+    B(8.0, -11.0, 13.0, -3.0); // east facade, brick
+    // East facade, plaster, split at the corner-shop door (gap z 8.78-10.22).
+    B(8.0, 6.0, 13.0, 8.78);
+    B(8.0, 10.22, 13.0, 13.0);
+    B(6.75, 0.0, 7.65, 3.0); // east stall counter
+    B(-7.65, -1.0, -6.75, 2.0); // west stall counter
+    B(-5.53, -12.2, -3.68, -7.8); // red car
+    B(3.68, 7.8, 5.53, 12.2); // blue car
+  } else if (kind === 'lobby') {
+    B(-1.5, -3.3, 1.5, -2.5); // reception desk
+    B(-2.8, 0.2, -2.2, 0.8); // chair 1
+    B(2.2, 0.2, 2.8, 0.8); // chair 2
+  }
+}
 export function enterPlace(kind, onLeave, options) {
   if (homeActive) leavePlace();
   const opts = options || {};
@@ -3481,12 +3807,15 @@ export function enterPlace(kind, onLeave, options) {
   glassDoor = null; glassDoorToastAt = -100; serviceDeskToastAt = -100; marketVendorAt = -100;
   if (kind === 'terminalFront' && homePrologue) terminalTicket = false;
   hideTerminalGetOutButton();
-  const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel' || kind === 'windtunnel' || kind === 'symposium' || kind === 'policestation' || kind === 'navybarracks' || kind === 'sensorvault';
+  const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel' || kind === 'windtunnel' || kind === 'symposium' || kind === 'policestation' || kind === 'navybarracks' || kind === 'sensorvault' || kind === 'lobby';
   if (isRoom) {
     homeScene.background = new THREE.Color(0x0a0d10);
     homeScene.fog = new THREE.FogExp2(0x0a0d10, 0.02);
   }
   baseLights(homeScene, !isRoom);
+  // Fresh wall list for this place: the builder below fills it, and the
+  // animate loop resolves movement against it (see player.js).
+  homeColliders = [];
   if (kind === 'mansion') { buildMansion(homeScene); homeBounds = { x: [-6.4, 6.4], z: [-4.4, 4.4] }; homeStart = homePrologue ? { x: -2.9, y: 1.7, z: -1.3, yaw: -1.87 } : { x: 0, y: 1.7, z: 4, yaw: 0 }; }
   else if (kind === 'safehouse') { buildSafehouse(homeScene); homeBounds = { x: [-3.4, 3.4], z: [-2.4, 2.4] }; homeStart = { x: 0, y: 1.7, z: 2, yaw: 0 }; }
   else if (kind === 'hospital') { buildHospital(homeScene); homeBounds = { x: [-16, 16], z: [-14, 18] }; homeStart = { x: 0, y: 1.7, z: 14, yaw: 0 }; }
@@ -3502,7 +3831,14 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'navybarracks') { buildNavyBarracks(homeScene); homeBounds = { x: [-9.4, 9.4], z: [-5.4, 5.4] }; homeStart = { x: 0, y: 1.7, z: 4.5, yaw: 0 }; }
   else if (kind === 'sensorvault') { buildSensorVault(homeScene); homeBounds = { x: [-5.4, 5.4], z: [-3.4, 3.4] }; homeStart = { x: 0, y: 1.7, z: 1.0, yaw: 0 }; }
   else if (kind === 'marketstreet') { buildMarketStreet(homeScene); homeBounds = { x: [-13, 13], z: [-13, 16] }; homeStart = { x: 0, y: 1.7, z: 12, yaw: 0 }; }
+  else if (kind === 'lobby') { buildLobby(homeScene, opts.lobbyFor || 'hospital'); homeBounds = { x: [-3.9, 3.9], z: [-2.9, 2.9] }; homeStart = { x: 0, y: 1.7, z: 2, yaw: 0 }; }
+  else if (kind === 'fillingstation') { buildFillingStation(homeScene); homeBounds = { x: [-13, 13], z: [-10, 14] }; homeStart = { x: 0, y: 1.7, z: 10, yaw: 0 }; }
   else return;
+  // Walls and furniture for this place (see registerHomeColliders).
+  registerHomeColliders(kind);
+  // The Filling Station is where fuel is bought: show the Fill button
+  // while the player is here, and hide it again when he leaves.
+  if (kind === 'fillingstation') showFillButton();
   // Third person on entering any place, so the player sees himself
   // in every room and exterior, not just in the missions.
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
@@ -3530,7 +3866,9 @@ export function enterPlace(kind, onLeave, options) {
     policestation: 'Police Station - NYPD Midtown. The officers are on duty. Look around, then head back to the map.',
     navybarracks: 'Navy Barracks - Brooklyn Navy Yard. The sailors are on duty. Look around, then head back to the map.',
     sensorvault: 'Sensor Vault - underground, under the treatment plant. The pressure sensors read the three water lines. Tap a panel for the readings.',
-    marketstreet: 'Market Street - stalls, shops and a vendor. Look around, then head back to the map.'
+    marketstreet: 'Market Street - stalls, shops and a vendor. Look around, then head back to the map.',
+    lobby: 'Lobby - look around, then walk back out through the EXIT door.',
+    fillingstation: 'Filling Station - full tank for 0.5 ZAMA. Tap the Fill tank button to fill up.'
   };
   showHomeToast(welcomes[kind] || kind);
   if (homeRaf) cancelAnimationFrame(homeRaf);
@@ -3568,6 +3906,7 @@ export function leavePlace() {
   phoneGlow = null; terminalPedestrians = []; marketVendorAt = -100;
   terminalSeated = false; terminalFrontCar = null; terminalFrontDoor = null; terminalDoorSwing = null; glassDoor = null;
   hideTerminalGetOutButton();
+  hideFillButton();
   const bar = document.getElementById('homeBar');
   if (bar) bar.classList.add('hidden');
   const cb = homeOnLeave; homeOnLeave = null;
@@ -3678,7 +4017,8 @@ function homeAnimate() {
   // keep-out below can put them back instead of letting them walk
   // through the bed.
   const prevPX = homeCamera.position.x, prevPZ = homeCamera.position.z;
-  homeCamera.position.x += mv.dx; homeCamera.position.z += mv.dz;
+  const resolved = resolveMove(prevPX, prevPZ, mv.dx, mv.dz, homeColliders);
+  homeCamera.position.x = resolved.x; homeCamera.position.z = resolved.z;
   homeCamera.position.x = Math.max(homeBounds.x[0], Math.min(homeBounds.x[1], homeCamera.position.x));
   homeCamera.position.z = Math.max(homeBounds.z[0], Math.min(homeBounds.z[1], homeCamera.position.z));
   // Bed keep-out: the bed is solid furniture, not a walk-through. If
@@ -3759,6 +4099,7 @@ function homeAnimate() {
       } else {
         d.open = Math.min(1, d.open + dt * 3);
         if (d.open > 0.6) {
+          if (d.action === 'lobby') { goToLobby(homeKind); return; }
           if (homePrologue && homeKind === 'mansion' && homeCallDone) goToTerminal();
           else leavePlace();
           return;
@@ -3918,7 +4259,9 @@ function homeHandleTap(clientX, clientY) {
     // Clicking a walkable exit door opens it. A locked door needs its
     // key first; the key is inside the room. In the prologue the phone
     // comes first: the player cannot leave before answering the call.
+    // An entrance door (action 'lobby') opens into the building's lobby.
     const door = hit.object.userData.doorRef;
+    if (door && door.action === 'lobby') { goToLobby(homeKind); return; }
     if (homePrologue && homeKind === 'mansion' && !homeCallDone) {
       showHomeToast('The phone is ringing - answer it first.');
       return;

@@ -8,8 +8,8 @@ import { initSoundUI, setAmbient, setAmbientLevel, setTension, soundTick, sfxRep
 import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
-import { grantPayout, openStore, getEquippedCarDef, getBalance, moneyFmt, spendMoney } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson } from './player.js';
+import { grantPayout, openStore, getEquippedCarDef, getBalance, moneyFmt, spendMoney, getFuel, consumeFuelMiles } from './economy.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson, resolveMove, addBoxCollider } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
 // no long verbatim copying): 1. The Delaware Line (Rondout Reservoir),
@@ -440,7 +440,9 @@ function disposeCarGroup(g) {
 // south (0) for Missions 1 and 2, west (-PI/2) for Mission 3, where the
 // player stands on the deck to the west of the lot.
 function buildParkingLot(parent, cx, cz, carX, signRotY) {
-  const asphalt = stdMat({ color: 0x3a3d40, roughness: 0.95 });
+  // Lighter than the yard ground (0x3a3f42) so the pad reads as a
+  // marked lot at dusk instead of blending into the dirt around it.
+  const asphalt = stdMat({ color: 0x4a4e54, roughness: 0.95 });
   const pad = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.06, 5.7), asphalt);
   pad.position.set(cx, 0.03, cz); pad.receiveShadow = true; parent.add(pad);
   // White bay lines: west edge, centre divider, east edge, all running
@@ -545,6 +547,9 @@ function applyDriveSpawn(mission) {
   if (!arrivedByDrive || !p || !p.driveSpawn) { arrivedByDrive = false; return; }
   arrivedByDrive = false;
   camera.position.set(p.driveSpawn.x, VIEWS[mission].pos[1], p.driveSpawn.z);
+  // Sync the stored ground position, or the next frame's
+  // beginPlayerFrame snaps the player back to his pre-drive spot.
+  try { setPlayerPos(p.driveSpawn.x, p.driveSpawn.z); } catch (e) { /* ignore */ }
   state.yaw = p.driveSpawn.yaw; state.pitch = 0; camBounds = VIEWS[mission];
 }
 // ---------- Open the car door and step outside ----------
@@ -707,7 +712,7 @@ function getOutOfParkedCar() {
       }
       try { cb(); } catch (e) { /* destination action is best effort */ }
     };
-    getOutCbTimer = setTimeout(runCb, 900);
+    getOutCbTimer = setTimeout(runCb, 1400);
   }
 }
 // Chase camera while the player is seated in a parked car: behind and
@@ -757,9 +762,12 @@ function tryStationDoor(side) {
 function updateStationDoorAnim(dt) {
   if (!stationDoorAnim) return;
   const a = stationDoorAnim;
-  const hinge = a.side === 'outside' ? stationDoorHinge : exitDoorHinge;
-  const pivots = a.side === 'outside' ? stationLeverPivots : [exitLeverPivot];
-  const alreadyOpen = a.side === 'outside' ? stationDoorOpen : exitDoorOpen;
+  // One door, one hinge: the station door slab serves both sides, with
+  // a brass lever on each face. From outside it swings in (into the
+  // room); from inside it swings the other way, out toward the yard.
+  const hinge = stationDoorHinge;
+  const pivots = stationLeverPivots;
+  const alreadyOpen = stationDoorOpen;
   a.t += dt;
   if (a.phase === 'lever') {
     const e = Math.min(1, a.t / 0.4);
@@ -780,10 +788,11 @@ function updateStationDoorAnim(dt) {
   // Swing: the levers spring back up while the door swings open.
   const e = Math.min(1, a.t / 0.6);
   const sw = 1 - (1 - e) * (1 - e);
-  if (hinge) hinge.rotation.y = 1.75 * sw;
+  const dir = a.side === 'outside' ? 1 : -1;
+  if (hinge) hinge.rotation.y = dir * 1.75 * sw;
   for (const p of pivots) { if (p) p.rotation.z = (Math.PI / 2) * (1 - sw); }
   if (e >= 1) {
-    if (a.side === 'outside') stationDoorOpen = true; else exitDoorOpen = true;
+    stationDoorOpen = true;
     const done = a.onDone; stationDoorAnim = null;
     try { done(); } catch (err) { /* ignore */ }
   }
@@ -914,8 +923,7 @@ let stationDoorLockedAt = -10; // throttle for the "locked" toast at the door
 // progress ({ side, phase, t, onDone }) or null; the open flags stop the
 // swing from replaying when the player comes back through an open door.
 let stationDoorHinge = null, stationLeverPivots = [], stationDoorHandleParts = [];
-let exitDoorHinge = null, exitLeverPivot = null, exitDoorHandleParts = [];
-let stationDoorAnim = null, stationDoorOpen = false, exitDoorOpen = false;
+let stationDoorAnim = null, stationDoorOpen = false;
 function resetView() {
   if (!actActive) return;
   if (inValveRoom) {
@@ -1097,8 +1105,9 @@ let waterMesh;
 // building footprint: x -4 to 4, z -6 to -1, 3.2 high). The front wall
 // has a doorway that lines up with the station door outside. The player
 // enters through the door, walks to a valve wheel, and the pressure
-// controls open when he reaches the valves. The EXIT door takes him back
-// outside to find the sabotage device.
+// controls open when he reaches the valves. The same station door takes
+// him back outside, and the sabotage device hides under the staircase
+// inside the room.
 function buildValveRoom() {
   const room = new THREE.Group(); mission1.add(room);
   // Underground chamber beneath the skyscraper: bare concrete walls,
@@ -1129,40 +1138,19 @@ function buildValveRoom() {
   const gl = new THREE.PointLight(0xd8e8ff, 0.8, 7); gl.position.set(0, 3.0, -4.6); room.add(gl);
   const fix = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.3), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, emissive: 0xd8e8ff, emissiveIntensity: 1.2 }));
   fix.position.set(0, 3.15, -3.5); room.add(fix);
-  // VALVE ROOM sign above the door, inside. It hangs on the INTERIOR
-  // face of the front wall (z -1.25, north of the wall at z -1), below
-  // the ceiling pipe runs and clear of the door top: it used to sit at
-  // z -0.85, on the OUTSIDE face, so from inside the room the wall hid
-  // it except through the doorway and it read as only "ROOM".
+  // VALVE ROOM sign on the INTERIOR face of the front wall, centred over
+  // the doorway but small (1.7 m wide): at the old 2.4 m it clipped at
+  // the screen edge, the lintel and the ceiling from every inside
+  // viewpoint and never read whole. Centred and small it reads whole
+  // from the valves, the room centre and the west valve alike. (The
+  // EXIT sign keeps the west wall segment.)
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
-  sign.scale.set(2.4, 0.6, 1); sign.position.set(0, 2.45, -1.25); room.add(sign);
-  // EXIT door in the doorway (click it to go back outside) + green EXIT sign.
-  // Like the outside door it hangs in a hinge group at its edge, with a
-  // brass lever handle on the room side, so leaving works the same way:
-  // touch the handle, it turns down, the door swings open.
-  exitDoorHinge = new THREE.Group();
-  exitDoorHinge.position.set(-0.55, 0, -1.08);
-  room.add(exitDoorHinge);
-  exitLeverPivot = null; exitDoorHandleParts = [];
-  const exit = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.1, 0.08), stdMat({ color: 0x2a2118, roughness: 0.7 }));
-  exit.position.set(0.55, 1.05, 0); exit.name = 'valveRoomExit'; exit.userData.clickable = true; exitDoorHinge.add(exit);
-  window._valveRoomExit = exit;
-  const exitHandleMat = new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 });
-  const exitPlate = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 16), exitHandleMat);
-  exitPlate.rotation.x = Math.PI / 2;
-  exitPlate.position.set(1.0, 1.05, -0.05);
-  exitPlate.name = 'valveRoomExit'; exitPlate.userData.clickable = true;
-  exitDoorHinge.add(exitPlate); exitDoorHandleParts.push(exitPlate);
-  exitLeverPivot = new THREE.Group();
-  exitLeverPivot.position.set(1.0, 1.05, -0.05);
-  exitDoorHinge.add(exitLeverPivot);
-  const exitLever = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), exitHandleMat);
-  exitLever.position.set(-0.08, 0, -0.03);
-  exitLever.name = 'valveRoomExit'; exitLever.userData.clickable = true;
-  exitLeverPivot.add(exitLever); exitDoorHandleParts.push(exitLever);
-  const exitHit = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.4, 0.5), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-  exitHit.position.set(0, 1.2, -1.1); exitHit.name = 'valveRoomExit'; exitHit.userData.clickable = true; room.add(exitHit);
-  window._valveRoomExitHit = exitHit;
+  sign.scale.set(1.7, 0.42, 1); sign.position.set(0, 2.5, -1.25); room.add(sign);
+  // One door only in this doorway: the station door slab outside is the
+  // single front door, and it works both ways (in with the key, out
+  // from inside without it). There used to be a second slab here, the
+  // EXIT door, 0.4 m behind the station door in the same doorway; it
+  // is gone. The green EXIT sign stays, so the way out is still marked.
   const exitSign = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.35), new THREE.MeshStandardMaterial({ color: 0x0a3a0a, emissive: 0x2aff7a, emissiveIntensity: 0.9 }));
   // On the interior face of the front wall, left of the door, facing
   // into the room (rotation.y = PI): it used to sit at z -1.05, inside
@@ -1186,12 +1174,15 @@ function buildValveRoom() {
   // sit BEHIND the labels (z -5.7, labels at z -5.35), so the labels
   // draw over them and read whole.
   const chamberPipeMat = stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 });
+  // The runs and the back main sit high (y 3.08, against the ceiling):
+  // at the old y 2.95 they crossed the gauge labels' tops from the
+  // door view, because the runs span the whole room at label height.
   for (const px of [-1.5, 1.5]) {
     const run = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 4.7, 12), chamberPipeMat);
-    run.rotation.x = Math.PI / 2; run.position.set(px, 2.95, -3.35); run.castShadow = true; room.add(run);
+    run.rotation.x = Math.PI / 2; run.position.set(px, 3.08, -3.35); run.castShadow = true; room.add(run);
   }
   const backMain = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 7.6, 12), chamberPipeMat);
-  backMain.rotation.z = Math.PI / 2; backMain.position.set(0, 2.95, -5.7); backMain.castShadow = true; room.add(backMain);
+  backMain.rotation.z = Math.PI / 2; backMain.position.set(0, 3.08, -5.7); backMain.castShadow = true; room.add(backMain);
   for (const px of [-3.8, -0.8, 2.2]) {
     const drop = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.4, 12), chamberPipeMat);
     drop.position.set(px, 1.75, -5.7); drop.castShadow = true; room.add(drop);
@@ -1209,6 +1200,10 @@ function buildValveRoom() {
   landing.position.set(3.3, 2.42, -1.2); landing.receiveShadow = true; room.add(landing);
   const stairDoor = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 2.1), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 }));
   stairDoor.position.set(3.3, 1.9, -0.93); room.add(stairDoor);
+  // The staircase is solid: the player walks around it, not through the
+  // steps. The device hides under the flight, east of the steps, so this
+  // box stops at the steps' east edge and never covers it.
+  addBoxCollider(valveRoomColliders, 2.75, -4.15, 3.85, -1.3);
 }
 function enterValveRoom() {
   if (inValveRoom) return;
@@ -1216,14 +1211,25 @@ function enterValveRoom() {
   // Third person in the valve room, so the player sees himself at the valves.
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   camera.position.set(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[1], VALVE_ROOM_BOUNDS.pos[2]);
+  // Sync the stored ground position too: without this the next frame's
+  // beginPlayerFrame snaps the camera back to the spot outside the door
+  // and the bounds clamp lands him just inside the doorway instead of
+  // at the room spawn.
+  try { setPlayerPos(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[2]); } catch (e) { /* ignore */ }
   state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
   setObjectives(OBJ1, 2);
-  toast('Down in the valve chamber, under the tower - walk up to a valve wheel to open the pressure controls. Click the green EXIT door to go back outside.');
+  toast('Down in the valve chamber, under the tower - walk up to a valve wheel to open the pressure controls. Click the station door to go back outside.');
 }
 function exitValveRoom() {
   if (!inValveRoom) return;
   inValveRoom = false;
   camera.position.set(0, 1.7, 2);
+  // Sync the stored ground position too: without this the next frame's
+  // beginPlayerFrame snaps the player back to his spot inside the room,
+  // within the door's walk-up radius, and the walk-up trigger sends him
+  // straight back in - an exit loop that read as being trapped in the
+  // valve room with movement dead (only Reset view escaped it).
+  try { setPlayerPos(0, 2); } catch (e) { /* ignore */ }
   state.yaw = 0; state.pitch = 0; camBounds = VIEWS[1];
   toast('Back outside the station.');
 }
@@ -1291,9 +1297,18 @@ function buildWaterTower() {
   // The skyscraper the facility sits under: a solid lobby at ground
   // level with the entrance door, and a setback glass tower above it,
   // 14 m wide and about 40 m tall. The front face stays at z -0.75,
-  // so the entrance door, the key hook and the sabotage board keep
-  // their exact positions on the lobby face.
+  // so the entrance door and the key hook keep their exact positions
+  // on the lobby face.
   box(mission1, 14, 4.5, 12, 0x2e3a44, 0, 2.25, -6.75, null, { color: 0x2e3a44, roughness: 0.6, metalness: 0.3 });
+  // The lobby is a solid box: its front and side faces are walls the
+  // player walks against, not through. The front wall leaves the
+  // 1.2-wide doorway open (the shut station door slab blocks it until
+  // it swings open). The side walls only run over the reachable z
+  // range: the dam side is beyond the view bounds.
+  addBoxCollider(mission1Colliders, -7, -0.95, -0.6, -0.55);
+  addBoxCollider(mission1Colliders, 0.6, -0.95, 7, -0.55);
+  addBoxCollider(mission1Colliders, -7.2, -6, -6.8, -0.75);
+  addBoxCollider(mission1Colliders, 6.8, -6, 7.2, -0.75);
   const palette = skyFacadePalette(0.35, false);
   const tower = makeSkyscraper('setback', 13, 35, 11, palette[0]);
   tower.position.set(0, 4.5, -6.75);
@@ -1328,9 +1343,10 @@ function buildRondoutStation() {
   benchSeat.position.set(-7, 0.62, 12.5); mission1.add(benchSeat);
   const benchBack = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 0.08), stdMat({ color: 0x6a4a30, roughness: 0.9 }));
   benchBack.position.set(-7, 0.9, 12.72); mission1.add(benchBack);
-  // RONDOUT station sign above the platform.
+  // RONDOUT station sign above the platform, near the middle of the
+  // platform sightline so it reads whole from the spawn and the track.
   const stnSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT', '#1a2a44', '#ffd166', 'DELAWARE AQUEDUCT - 6 AM'), transparent: true, depthWrite: false }));
-  stnSign.scale.set(4.5, 1.1, 1); stnSign.position.set(6, 3.4, 12.3); mission1.add(stnSign);
+  stnSign.scale.set(4.6, 1.15, 1); stnSign.position.set(3.5, 3.4, 12.3); mission1.add(stnSign);
   // Track bed, rails and sleepers running east-west.
   const bed = new THREE.Mesh(new THREE.BoxGeometry(34, 0.12, 3.4), stdMat({ color: 0x4a4a48, roughness: 1 }));
   bed.position.set(0, 0.06, 15.3); bed.receiveShadow = true; mission1.add(bed);
@@ -1488,7 +1504,7 @@ function buildMission1() {
     win.position.set(wx, 2, -0.72); mission1.add(win);
   }
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT DAM', '#2a2118', '#ffd166', 'WATER FACILITY'), transparent: true, depthWrite: false }));
-  sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.8, -0.6); mission1.add(sign);
+  sign.scale.set(5.5, 1.35, 1); sign.position.set(0, 4.1, -0.6); mission1.add(sign);
   // The valve room, inside the control station: the player enters through
   // the station door and walks to the valves. The three valve assemblies
   // live on the back wall of the room, not outside on a plinth, so the
@@ -1530,9 +1546,15 @@ function buildMission1() {
     window._valveMeshes[v.key + 'GaugeHit'] = gaugeHit;
     const lbl = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture(v.label, '#111111', '#e8e8e8', ''), transparent: true, depthWrite: false }));
     // The label sits in front of the ceiling pipe drops (which pierce the
-    // label plane at z -5.7): at z -5.35 the first letters no longer hide
-    // behind a pipe, so "RESIDENTIAL" and "INDUSTRIAL" read whole.
-    lbl.scale.set(2.2, 0.55, 1); lbl.position.set(v.x, 2.9, -5.35); mission1.add(lbl);
+    // label plane at z -5.7): at z -5.5 the first letters no longer hide
+    // behind a pipe, so "RESIDENTIAL" and "INDUSTRIAL" read whole. It is
+    // narrower than the old 2.2 m board and the two outer labels sit
+    // 0.2 m inboard of their gauges: at 2.2 m wide on x -3 the HOSPITAL
+    // board ran past the west wall and under the top-left HUD panel, so
+    // it read "SPITAL" from the door. Lower (y 2.78, just above the
+    // gauge rim) also keeps it clear of the ceiling pipe runs.
+    const lx = v.x === 0 ? 0 : v.x - Math.sign(v.x) * 0.3;
+    lbl.scale.set(1.55, 0.39, 1); lbl.position.set(lx, 2.74, -5.5); mission1.add(lbl);
   }
   // A long main pipe along the back wall, joining the three valves.
   const mainPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 7.5, 12), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 }));
@@ -1542,17 +1564,26 @@ function buildMission1() {
   // solid, so it cannot stay where the old building's wall was).
   const panel = box(mission1, 1.6, 2, 0.5, 0x2a2f33, 8.2, 1.2, -1, 'digitalPanel', { color: 0x2a2f33, roughness: 0.5, metalness: 0.4 });
   panel.rotation.y = -0.5;
+  // The panel is a solid free-standing box east of the lobby: the
+  // player walks around it, not through it. It stays clickable from
+  // 0.35 m out (the collider stops him at its face, the click target
+  // is the panel itself).
+  addBoxCollider(mission1Colliders, 7.38, -1.6, 9.02, -0.4);
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.9), new THREE.MeshStandardMaterial({ color: 0x1a0505, emissive: 0xff2222, emissiveIntensity: 0.8, roughness: 0.3 }));
   screen.position.set(8.0, 1.5, -0.72); screen.rotation.y = -0.5; mission1.add(screen);
   const warnGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xff2222, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
   warnGlow.scale.set(1.6, 1.6, 1); warnGlow.position.set(8.0, 2.4, -0.7); mission1.add(warnGlow);
-  // Sabotage device (hidden until the water is stable): small green board on the station wall.
-  const dev = box(mission1, 0.35, 0.25, 0.05, 0x7ac74f, -2.2, 1.4, -0.7, 'device1');
+  // Sabotage device (hidden until the water is stable): small green board
+  // under the staircase inside the valve room, pinned to the east wall
+  // beneath the flight, where the player can see it from the room floor
+  // by looking under the steps. It used to sit outside on the station
+  // wall, so the player had to go back out to find it.
+  const dev = box(mission1, 0.05, 0.25, 0.35, 0x7ac74f, 3.9, 0.8, -2.6, 'device1');
   dev.rotation.y = 0; dev.visible = false;
   window._device1 = dev;
   // Generous invisible click target for the small device, same reason as the valves.
-  const devHit = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 0.8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-  devHit.position.set(-2.2, 1.4, -0.5); devHit.name = 'device1'; devHit.userData.clickable = true; devHit.visible = false; mission1.add(devHit);
+  const devHit = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 1.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  devHit.position.set(3.75, 0.8, -2.6); devHit.name = 'device1'; devHit.userData.clickable = true; devHit.visible = false; mission1.add(devHit);
   window._device1Hit = devHit;
   blobShadow(mission1, -2.8, 6, 0.9, 0.9, 0.55);
   blobShadow(mission1, 2.8, 6, 0.9, 0.9, 0.55);
@@ -1560,6 +1591,7 @@ function buildMission1() {
 // Valve-balance puzzle (Mission 1).
 const pressures = { hospital: 60, residential: 60, industrial: 60 };
 let valveTimer = null, stableHold = 0, valveOpen = false;
+let valveReopenAt = 0; // walk-up reopen cooldown after Close (see valveClose)
 function renderValve() {
   const map = { hospital: 'Hosp', residential: 'Res', industrial: 'Ind' };
   for (const k of Object.keys(pressures)) {
@@ -1601,6 +1633,10 @@ document.querySelectorAll('#valveModal button[data-line]').forEach(b => {
 });
 document.getElementById('valveClose').onclick = () => {
   valveOpen = false;
+  // Give the player a moment to walk away from the wheel: without this
+  // the walk-up trigger reopens the modal on the very next frame while
+  // he is still standing at the valve, so Close appears to do nothing.
+  valveReopenAt = Date.now() + 2500;
   if (valveTimer) { clearInterval(valveTimer); valveTimer = null; }
   document.getElementById('valveModal').classList.add('hidden');
 };
@@ -1618,7 +1654,7 @@ setInterval(() => {
       integrity('Water', 10);
       setObjectives(OBJ1, 3);
       window._device1.visible = true; window._device1Hit.visible = true;
-      toast('Pressure holding - the aqueduct is stable. Head back outside - something on the station wall catches your eye.');
+      toast('Pressure holding - the aqueduct is stable. Something under the staircase catches your eye.');
       moralChoiceWater();
     }
   } else stableHold = 0;
@@ -1645,18 +1681,19 @@ function startArrival() {
   try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
   mission1Started = false; arrivalDone = false;
   rentalTaken = false; arrivedByRental = false; travelRental = false;
-  // Station door: fresh entry, both doors shut again.
-  stationDoorAnim = null; stationDoorOpen = false; exitDoorOpen = false;
+  // Station door: fresh entry, the single door shut again.
+  stationDoorAnim = null; stationDoorOpen = false;
   try { if (stationDoorHinge) stationDoorHinge.rotation.y = 0; } catch (e) { /* ignore */ }
-  try { if (exitDoorHinge) exitDoorHinge.rotation.y = 0; } catch (e) { /* ignore */ }
   for (const p of stationLeverPivots) { try { if (p) p.rotation.z = 0; } catch (e) { /* ignore */ } }
-  try { if (exitLeverPivot) exitLeverPivot.rotation.z = 0; } catch (e) { /* ignore */ }
   hideTakeRentalButton();
   setTimeOfDay('day'); // Rondout arrival is bright morning.
   currentPlaceKey = 'reservoir';
   setObjectives(['Take the rental car to the water facility'], 0);
   updateHUD();
   camera.position.set(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[1], ARRIVAL_VIEW.pos[2]);
+  // Sync the stored ground position: coming from Act I the stored spot
+  // is a train-car position, and beginPlayerFrame would snap him there.
+  try { setPlayerPos(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[2]); } catch (e) { /* ignore */ }
   state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = VIEWS[1];
   // The player's car is already parked in the lot in front of the
   // tower, so he sees it as he walks up from the platform.
@@ -1744,9 +1781,11 @@ function buildStationRental() {
   car.rotation.y = Math.PI; // facing north, up the track toward the facility
   car.position.set(4.5, 0, 9.0);
   g.add(car);
-  // Floating label so the player can find it from the platform.
-  const label = makeTextSprite('RENTAL CAR - 0.05 ZAMA', '#ffd166');
-  label.scale.set(4.6, 1.15, 1); label.position.set(4.5, 2.9, 9.0); g.add(label);
+  // Floating board sign so the player can find it from the platform: a
+  // solid dark board (not bare text on transparency, which vanished
+  // against the sky and trees and never read whole on the live checks).
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RENTAL CAR - 0.05 ZAMA', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
+  label.scale.set(4.8, 1.2, 1); label.position.set(4.5, 3.1, 9.0); g.add(label);
   // Generous invisible hit box over the car, so a tap anywhere on it
   // takes the rental.
   const hit = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.4, 5.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
@@ -1813,14 +1852,23 @@ function buildMission2() {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), stdMat({ color: 0x3a3f42, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; mission2.add(ground);
   // Chain-link fence around the yard: posts + translucent mesh panels.
-  const fenceMat = new THREE.MeshStandardMaterial({ color: 0x8a949a, roughness: 0.4, metalness: 0.7, transparent: true, opacity: 0.35 });
+  // The panels carry a faint emissive so they never render pure black at
+  // dusk (at 0.35 opacity with no emissive the whole fence vanished
+  // against the dark sky on the live checks), and a steel top rail runs
+  // along every side so the yard boundary reads as a line from the lot.
+  const fenceMat = new THREE.MeshStandardMaterial({ color: 0x9aa6ae, roughness: 0.4, metalness: 0.7, transparent: true, opacity: 0.6, emissive: 0x141a20, emissiveIntensity: 1 });
+  const railMat = stdMat({ color: 0x8a949c, metalness: 0.8, roughness: 0.35 });
   for (const z of [-6, 12]) {
     const f = new THREE.Mesh(new THREE.PlaneGeometry(20, 3), fenceMat);
     f.position.set(0, 1.5, z); if (z === 12) f.rotation.y = Math.PI; mission2.add(f);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(20, 0.07, 0.07), railMat);
+    rail.position.set(0, 3.0, z); mission2.add(rail);
   }
   for (const x of [-10, 10]) {
     const f = new THREE.Mesh(new THREE.PlaneGeometry(18, 3), fenceMat);
     f.position.set(x, 1.5, 3); f.rotation.y = Math.PI / 2; mission2.add(f);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 18), railMat);
+    rail.position.set(x, 3.0, 3); mission2.add(rail);
   }
   for (let x = -10; x <= 10; x += 2.5) for (const z of [-6, 12]) {
     const p = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3, 8), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.4 }));
@@ -1828,7 +1876,7 @@ function buildMission2() {
   }
   // Two transformers with insulator stacks.
   for (const tx of [-4, 4]) {
-    box(mission2, 3, 2.6, 2, 0x4a5a3a, tx, 1.3, -2, null, { roughness: 0.7, metalness: 0.4 });
+    box(mission2, 3, 2.6, 2, 0x5d7050, tx, 1.3, -2, null, { roughness: 0.7, metalness: 0.4 });
     for (let i = 0; i < 3; i++) {
       const ins = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 1.1, 10), stdMat({ color: 0xb8b0a0, roughness: 0.6 }));
       ins.position.set(tx - 0.8 + i * 0.8, 3.1, -2); ins.castShadow = true; mission2.add(ins);
@@ -1836,9 +1884,34 @@ function buildMission2() {
     const hum = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffc978, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending, depthWrite: false }));
     hum.scale.set(3, 2, 1); hum.position.set(tx, 2, -2); mission2.add(hum);
   }
-  // Control room building + SCADA terminal + log book.
-  box(mission2, 7, 3.2, 4.5, 0x5a5a55, 0, 1.6, -4.5, null, { roughness: 0.95 });
+  // Control room building + SCADA terminal + log book. The walls are a
+  // lighter warm grey than the old 0x5a5a55 (which rendered as a black
+  // slab at dusk), with lit windows on the yard face and a pale roof
+  // slab, so the building reads as a building from the parking lot.
+  box(mission2, 7, 3.2, 4.5, 0x82827a, 0, 1.6, -4.5, null, { roughness: 0.95 });
+  box(mission2, 7.5, 0.25, 5.0, 0x9c9c94, 0, 3.32, -4.5, null, { roughness: 0.9 });
+  const winMat = new THREE.MeshStandardMaterial({ color: 0x2a2010, emissive: 0xffd9a0, emissiveIntensity: 1.1, roughness: 0.3 });
+  for (const wx of [-0.6, 0.4, 2.7]) {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(1.12, 1.02, 0.04), stdMat({ color: 0x3a3f44, metalness: 0.6, roughness: 0.4 }));
+    frame.position.set(wx, 2.1, -2.23); mission2.add(frame);
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.9), winMat);
+    win.position.set(wx, 2.1, -2.20); mission2.add(win);
+  }
   box(mission2, 1.4, 2.4, 0.15, 0x2a2118, -2, 1.2, -2.2, 'controlDoor');
+  // The control-room door is a real door, not a flat slab: a brass
+  // lever handle on its face and a lit sign over it, so the player can
+  // find it and click it. It stays click-only by design - there is no
+  // interior to walk into; the room is a solid SCADA box, the key card
+  // opens it from the guards, and the terminal, log book and manifesto
+  // are all used from outside.
+  const controlHandleMat = new THREE.MeshStandardMaterial({ color: 0xd8b13a, metalness: 0.9, roughness: 0.25 });
+  const controlPlate = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 16), controlHandleMat);
+  controlPlate.rotation.x = Math.PI / 2;
+  controlPlate.position.set(-1.35, 1.15, -2.1); mission2.add(controlPlate);
+  const controlLever = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), controlHandleMat);
+  controlLever.position.set(-1.43, 1.15, -2.13); mission2.add(controlLever);
+  const controlSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('CONTROL ROOM', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
+  controlSign.scale.set(2.4, 0.6, 1); controlSign.position.set(-2, 2.75, -2.1); mission2.add(controlSign);
   const desk = box(mission2, 2.2, 0.9, 0.8, 0x3a2f24, 2.5, 0.45, 1.5);
   desk.rotation.y = -0.4;
   scadaMesh = box(mission2, 1.1, 0.75, 0.08, 0x111111, 2.5, 1.35, 1.35, 'scada');
@@ -1883,14 +1956,53 @@ function buildMission2() {
   // dark on the first live check, and the road beyond the fence was the
   // only thing that read.
   try { const lotLamp = makeStreetLight(Math.PI, 0.08); lotLamp.group.position.set(-8.5, 0, 5.0); mission2.add(lotLamp.group); } catch (e) { /* lamp is decoration */ }
+  // Real yard floodlights. The street lamps above only fake their light
+  // (emissive head + glow sprite + ground pool) - they never light the
+  // yard surfaces, so at dusk the control room, transformers and guards
+  // rendered near-black and the yard read as empty dark ground with the
+  // lit city street beyond it. These two poles flank the guard line and
+  // carry real point lights, plus one at the lot lamp head, so the whole
+  // yard - lot, guards, transformers, control room - is lit on arrival.
+  const floodPoleMat = stdMat({ color: 0x4a5058, metalness: 0.7, roughness: 0.4 });
+  const floodHeadMat = new THREE.MeshStandardMaterial({ color: 0x8a7a5a, emissive: 0xffd9a0, emissiveIntensity: 1.6, roughness: 0.4 });
+  for (const fx of [-6.5, 6.5]) {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 4.6, 10), floodPoleMat);
+    pole.position.set(fx, 2.3, 4.5); pole.castShadow = true; mission2.add(pole);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.18, 0.35), floodHeadMat);
+    head.position.set(fx, 4.65, 4.5); head.rotation.x = 0.5; mission2.add(head);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+    glow.scale.set(3.2, 3.2, 1); glow.position.set(fx, 4.5, 4.5); mission2.add(glow);
+    const fl = new THREE.PointLight(0xffd9a0, 38, 30, 2);
+    fl.position.set(fx, 4.4, 4.5); mission2.add(fl);
+  }
+  const lotLight = new THREE.PointLight(0xffd9a0, 30, 26, 2);
+  lotLight.position.set(-8.5, 4.1, 6.1); mission2.add(lotLight);
   const subSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('CON EDISON SUBSTATION', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
-  subSign.scale.set(5, 1.25, 1); subSign.position.set(0, 3.1, -2.1); mission2.add(subSign);
+  subSign.scale.set(7, 1.75, 1); subSign.position.set(0, 3.6, -2.1); mission2.add(subSign);
   // The living city around the yard: the substation sits in Long Island
   // City, so beyond the north fence there is a road with moving cars,
   // houses, an elevated train track with a passing train, and the
   // Manhattan skyline. The fence is translucent, so all of it reads
   // from inside the yard and the scene stops feeling like an empty lot.
   buildCityEnvironment();
+  // Wall and furniture colliders (see player.js): the control room is a
+  // solid box with no doorway gap - its door is click-only, the key
+  // card opens it, and everything inside is used from outside - the
+  // transformers are solid, the SCADA desk is solid, and the fence is
+  // solid just outside the walk bounds, so it can never shrink the
+  // yard. Nothing crosses the guard line at z 2 or the walk from the
+  // lot (driveSpawn -1.8, 7) north to the control-room door: the gap
+  // between the transformers is 5 m wide, and the door face stays
+  // reachable (the player stops 0.35 m short of it, well inside click
+  // range for the door, the manifesto and the log book).
+  addBoxCollider(mission2Colliders, -3.5, -6.75, 3.5, -2.25);
+  addBoxCollider(mission2Colliders, -5.5, -3, -2.5, -1);
+  addBoxCollider(mission2Colliders, 2.5, -3, 5.5, -1);
+  addBoxCollider(mission2Colliders, 1.33, 0.7, 3.67, 2.3);
+  addBoxCollider(mission2Colliders, -10, -6.7, 10, -6.35);
+  addBoxCollider(mission2Colliders, -10, 12.35, 10, 12.7);
+  addBoxCollider(mission2Colliders, -10.7, -6, -10.35, 12);
+  addBoxCollider(mission2Colliders, 10.35, -6, 10.7, 12);
 }
 
 // ---------- Living city around the substation (Mission 2) ----------
@@ -2342,6 +2454,7 @@ const TRAVEL_PLACES = {
   bridge: { name: 'Verrazzano Bridge', short: 'Bridge', x: 0.45, y: 0.88, desc: 'Verrazzano-Narrows, tonight', type: 'mission', mission: 3 },
   policestation: { name: 'NYPD Police Station', short: 'Police', x: 0.55, y: 0.38, desc: 'NYPD precinct - Midtown Manhattan', type: 'visit', kind: 'policestation' },
   navybarracks: { name: 'Navy Barracks', short: 'Navy Barracks', x: 0.60, y: 0.60, desc: 'US Naval barracks - Brooklyn Navy Yard', type: 'visit', kind: 'navybarracks' },
+  fillingstation: { name: 'Filling Station', short: 'Fuel', x: 0.34, y: 0.60, desc: 'Fill your tank - 0.5 ZAMA for a full tank', type: 'visit', kind: 'fillingstation' },
   sensorvault: { name: 'Sensor Vault', short: 'Sensor Vault', x: 0.82, y: 0.70, desc: 'Underground water pressure sensors - under the treatment plant', type: 'visit', kind: 'sensorvault' }
 };
 // Miles between every pair of places (symmetric: look up either order).
@@ -2409,7 +2522,14 @@ const DISTANCES = {
   'marketstreet>dealership': 8, 'marketstreet>clothing': 2, 'marketstreet>substation': 9, 'marketstreet>safehouse': 11, 'marketstreet>bridge': 18,
   'marketstreet>airport': 30, 'marketstreet>hotels': 7, 'marketstreet>terminal': 3, 'marketstreet>carpark': 6,
   'marketstreet>windtunnel': 6, 'marketstreet>symposium': 10, 'marketstreet>zama': 4, 'marketstreet>court': 5,
-  'marketstreet>policestation': 5, 'marketstreet>navybarracks': 12, 'marketstreet>sensorvault': 22
+  'marketstreet>policestation': 5, 'marketstreet>navybarracks': 12, 'marketstreet>sensorvault': 22,
+  // Filling Station (west Midtown, on the drive road): close to the
+  // Midtown places, so it is never a long drive away when the tank runs low.
+  'fillingstation>reservoir': 76, 'fillingstation>hospital': 30, 'fillingstation>industry': 22, 'fillingstation>mansion': 28,
+  'fillingstation>dealership': 9, 'fillingstation>clothing': 4, 'fillingstation>substation': 8, 'fillingstation>safehouse': 10, 'fillingstation>bridge': 17,
+  'fillingstation>airport': 32, 'fillingstation>hotels': 8, 'fillingstation>terminal': 4, 'fillingstation>carpark': 7,
+  'fillingstation>windtunnel': 7, 'fillingstation>symposium': 11, 'fillingstation>zama': 5, 'fillingstation>court': 6,
+  'fillingstation>policestation': 6, 'fillingstation>navybarracks': 11, 'fillingstation>sensorvault': 24, 'fillingstation>marketstreet': 5
 };
 function getMiles(a, b) {
   if (a === b) return 0;
@@ -2445,6 +2565,7 @@ let trekActive = false, trekGroup = null, trekPedestrians = [], trekOnArrive = n
 let trekDestX = 0, trekDestZ = -45;
 let travelMapEl = null;
 let travelToKey = null, travelMiles = 0, travelLastMilesShown = -1;
+let travelFuelCounted = 0; // miles of this drive already charged to the tank
 let mapFromKey = 'reservoir', mapSelectedKey = null, pendingMission = null;
 let currentPlaceKey = 'reservoir';
 let missionsDone = { 1: false, 2: false, 3: false };
@@ -3355,6 +3476,10 @@ function startTravelDrive(toKey, onArrive) {
   if (travelMiles <= 0) travelMiles = 8;
   travelStartWall = Date.now();
   travelLastMilesShown = -1;
+  travelFuelCounted = 0;
+  // An empty tank never blocks a drive: the car still drives, the gauge
+  // sits empty, and the game prompts to refuel at a Filling Station.
+  if (!travelRental && getFuel() <= 0) toast('Fuel empty - the car still drives, but stop at a Filling Station to refuel for 0.5 ZAMA.');
   // The drive takes longer for a far place, so the distance feels real:
   // the 85-mile Reservoir to Substation leg is 60 seconds at full speed.
   travelDur = Math.min(60, Math.max(12, Math.round(travelMiles / 85 * 60)));
@@ -3481,6 +3606,17 @@ function endTravelDrive() {
   // destination instead of arriving in first person with no avatar.
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   if (travelToKey) currentPlaceKey = travelToKey;
+  // Fuel: charge the miles not yet counted (a skipped drive or a
+  // watchdog-ended drive still burns its miles). The rental car has its
+  // own tank, so the rental drive burns none of his. An empty tank never
+  // blocks the drive: the car already arrived, the gauge sits empty, and
+  // the game prompts to refuel.
+  if (!travelRental && travelMiles > 0) {
+    const remaining = travelMiles - travelFuelCounted;
+    if (remaining > 0) consumeFuelMiles(remaining);
+    travelFuelCounted = 0;
+    if (getFuel() <= 0) toast('Fuel empty - the car still drives, but stop at a Filling Station to refuel for 0.5 ZAMA.');
+  }
   const cb = travelOnArrive; travelOnArrive = null; travelToKey = null;
   // The arrival that follows knows the player drove in, so a mission
   // start can stand him beside the parked car. The flag is consumed by
@@ -3500,6 +3636,15 @@ function updateTravelDrive(dt, t) {
   // clock keeps the 12 s rental drive at 12 s at any frame rate, and the
   // watchdog in startTravelDrive ends it even if no frame runs at all.
   travelT = Math.min(travelDur, (Date.now() - travelStartWall) / 1000);
+  // Fuel: the player's own car burns fuel by the mile (a full tank
+  // covers 500 miles, so the 85-mile leg uses 17%). The rental car has
+  // its own tank, so the rental drive burns none of his. The gauge drops
+  // as the miles pass; an empty tank never stops the car.
+  if (!travelRental && travelMiles > 0 && travelDur > 0) {
+    const covered = travelMiles * (travelT / travelDur);
+    const delta = covered - travelFuelCounted;
+    if (delta > 0) { consumeFuelMiles(delta); travelFuelCounted = covered; }
+  }
   // The player drives: gas (W or D, or the GAS pedal) speeds the car up
   // toward 12 m/s, brake (S, or the BRAKE pedal) slows it to a stop, and
   // letting go settles back to a 3 m/s creep, so the drive always
@@ -3673,6 +3818,9 @@ function startTrek(toKey, onArrive) {
   trekOnArrive = onArrive; trekToKey = toKey;
   if (to && to.type === 'mission') setTimeOfDay(MISSION_TIME[to.mission]);
   camera.position.set(0, 1.7, 30);
+  // Sync the stored ground position, or beginPlayerFrame snaps him
+  // back to wherever he stood before the trek started.
+  try { setPlayerPos(0, 30); } catch (e) { /* ignore */ }
   state.yaw = 0; state.pitch = 0;
   camBounds = { x: [-4.2, 4.2], z: [-48, 32] };
   showActionBanner('TREK ON FOOT - walk to the ' + (to ? to.name : 'destination') + '. No car - walk with the crowd. Reach the gold BRIDGE marker at the end of the street.');
@@ -3914,6 +4062,14 @@ function buildMission3() {
     box(mission3, 1.2, 14, 1.2, 0x3a4046, -1.6, 7, tz, null, { roughness: 0.8, metalness: 0.3 });
     box(mission3, 1.2, 14, 1.2, 0x3a4046, 1.6, 7, tz, null, { roughness: 0.8, metalness: 0.3 });
     box(mission3, 4.6, 1, 1.2, 0x3a4046, 0, 13.5, tz, null, { roughness: 0.8, metalness: 0.3 });
+    // The tower legs are solid: their inner corners intrude 0.2 m into
+    // the 2.4 m walkable deck, so the player would clip through them
+    // without a collider. The gap between each pair of legs stays 2 m
+    // wide, so the walk north and south stays open, and the catwalk
+    // climb is click-driven (camera placement, not WASD), so the legs
+    // can never strand the climb.
+    addBoxCollider(mission3Colliders, -2.2, tz - 0.6, -1.0, tz + 0.6);
+    addBoxCollider(mission3Colliders, 1.0, tz - 0.6, 2.2, tz + 0.6);
   }
   // Main cable: a catenary curve between the towers, as a tube.
   const cableCurve = new THREE.CatmullRomCurve3([
@@ -4247,7 +4403,7 @@ function handleTap(clientX, clientY) {
   if (!document.getElementById('valveModal').classList.contains('hidden')) return;
   if (!document.getElementById('scadaModal').classList.contains('hidden')) return;
   const targets = [];
-  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._valveRoomExit, window._valveRoomExitHit, ...exitDoorHandleParts, window._stationDoor, window._stationDoorHit, ...stationDoorHandleParts, window._stationKey, window._stationKeyLabel, window._rentalCarHit);
+  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._stationDoor, window._stationDoorHit, ...stationDoorHandleParts, window._stationKey, window._stationKeyLabel, window._rentalCarHit);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
   if (state.mission === 3) targets.push(...chargeMeshes, window._catwalkHit, ...(window._catwalkPlanks || []));
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
@@ -4309,6 +4465,10 @@ function interact(name) {
     return;
   }
   if (name === 'stationDoor') {
+    // One door, two sides: from inside the valve room the same slab
+    // opens without the key; from outside it needs the mission to have
+    // started and the station key on its hook beside the door.
+    if (inValveRoom) { tryStationDoor('inside'); return; }
     // Before the mission starts the door stays shut: he takes the rental
     // car to the facility first. The briefing starts after that drive.
     if (!mission1Started) {
@@ -4325,7 +4485,6 @@ function interact(name) {
     }
     tryStationDoor('outside'); return;
   }
-  if (name === 'valveRoomExit') { tryStationDoor('inside'); return; }
   if (name === 'device1' && window._device1.visible) {
     state.inventory.push('RESET device (aqueduct)'); state.evidence.push('RESET device + fingerprint: Derrick Shaw');
     updateHUD(); setObjectives(OBJ1, 5);
@@ -4394,6 +4553,33 @@ document.getElementById('cinemaBtn').onclick = () => {
   document.getElementById('letterboxTop').classList.toggle('hidden');
   document.getElementById('letterboxBottom').classList.toggle('hidden');
 };
+// ---------- Wall colliders (see player.js) ----------
+// One list per walkable area, filled by the builders below. The animate
+// loop resolves movement against the list for the current view, so the
+// player stops at walls and slides along them instead of walking
+// through. Outer walls that sit beyond the view bounds need no box:
+// the bounds clamp already stops the player before he reaches them.
+// Doorways are left open in the wall lists; a shut door blocks its own
+// doorway with the slab box below until it swings open.
+// The station door slab (hinge at x -0.6, slab 1.2 wide, 0.15 thick at
+// z -0.68): it blocks the lobby doorway while shut. Entry is by the
+// walk-up trigger (1.8 m), which fires before the player reaches the
+// slab, so the closed door never traps him outside.
+const STATION_DOOR_BOX = { x0: -0.6, z0: -0.8, x1: 0.6, z1: -0.55 };
+let mission1Colliders = [];
+let mission2Colliders = [];
+let mission3Colliders = [];
+let valveRoomColliders = [];
+function act2Colliders() {
+  let list;
+  if (inValveRoom) list = valveRoomColliders;
+  else if (state.mission === 2) list = mission2Colliders;
+  else if (state.mission === 1) list = mission1Colliders;
+  else if (state.mission === 3) list = mission3Colliders;
+  else list = mission1Colliders;
+  if (state.mission === 1 && !inValveRoom && !stationDoorOpen) return list.concat([STATION_DOOR_BOX]);
+  return list;
+}
 function animate() {
   if (!actActive) return;
   actRaf = requestAnimationFrame(animate);
@@ -4425,9 +4611,16 @@ function animate() {
   // The station door handle turn and swing runs on the same frame loop,
   // so the lever turns and the door opens while the player watches.
   updateStationDoorAnim(dt);
+  // In third-person the camera was left behind the avatar last frame;
+  // put it back on the player BEFORE the walk-up triggers below read
+  // camera.position as the player position. The triggers used to run
+  // first, so in third person they measured from the camera 4 m behind
+  // him and the key pickup, the station door and the valve walk-ups
+  // never fired in the default view (only clicks worked).
+  beginPlayerFrame(camera, state.mission === 3 ? 1.9 : 1.7);
   // Valve room: walking up to a valve wheel opens the pressure controls,
   // so the puzzle opens when the player reaches the valves.
-  if (state.mission === 1 && inValveRoom && !valveOpen && !state.waterStable
+  if (state.mission === 1 && inValveRoom && !valveOpen && !state.waterStable && Date.now() > valveReopenAt
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
     for (const vx of [-3, 0, 3]) {
@@ -4502,13 +4695,12 @@ function animate() {
       }
     }
   }
-  // In third-person the camera was left behind the avatar last frame;
-  // put it back on the player before moving, or movement starts from
-  // the wrong place.
-  beginPlayerFrame(camera, state.mission === 3 ? 1.9 : 1.7);
+  // (beginPlayerFrame already ran above, before the walk-up triggers,
+  // so the camera is on the player and movement starts from his feet.)
   const sp = 0.05;
   const mv = moveDelta(keys, state.yaw, sp);
-  camera.position.x += mv.dx; camera.position.z += mv.dz;
+  const resolved = resolveMove(camera.position.x, camera.position.z, mv.dx, mv.dz, act2Colliders());
+  camera.position.x = resolved.x; camera.position.z = resolved.z;
   camera.position.x = Math.max(camBounds.x[0], Math.min(camBounds.x[1], camera.position.x));
   camera.position.z = Math.max(camBounds.z[0], Math.min(camBounds.z[1], camera.position.z));
   const moving = keys['w'] || keys['a'] || keys['s'] || keys['d'];

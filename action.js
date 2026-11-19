@@ -356,11 +356,13 @@ export function updatePedestrian(p, dt) {
   p.phase += dt * p.speed * 4.5;
   if (p.rigged) {
     // A rigged person walks with their own Walk clip, not the primitive
-    // limb swing. The models face -z, so add PI to face the movement
-    // direction (the primitive figure faces +z).
+    // limb swing. The Atlas rigs face -z and the Casual rig (Jade)
+    // faces +z, so the rotation adds the rig's own faceYaw (PI for
+    // Atlas, 0 for Jade) to face the movement direction; a rigged
+    // person built without one keeps the old PI.
     updateRiggedPerson(p, dt);
     p.group.position.set(p.x, Math.abs(Math.sin(p.phase)) * 0.03, p.z);
-    p.group.rotation.y = p.heading + Math.PI;
+    p.group.rotation.y = p.heading + (p.faceYaw !== undefined ? p.faceYaw : Math.PI);
     p.group.rotation.z = 0;
     return;
   }

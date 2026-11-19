@@ -1235,6 +1235,54 @@ export function moveDelta(keys, yaw, speed) {
   return { dx: s * speed, dz: -f * speed, f, s };
 }
 
+// ---------- Wall collision ----------
+// Buildings used to be scenery only: the player walked straight through
+// their walls, because the only limits were the outer bounds of each
+// place. Now every walkable scene registers axis-aligned box colliders
+// for its walls, and movement is resolved against them every frame.
+// A collider is a ground-plane rectangle { x0, z0, x1, z1 } in the same
+// coordinates the player walks in. The player is a circle of
+// PLAYER_RADIUS around his ground position. resolveMove tries the full
+// step, then each axis on its own, so walking into a wall stops the
+// player at its face and walking along it slides: the axis that is free
+// still moves. A player who starts inside a box (a bad spawn, or a box
+// added under him) can always walk back out: a step is only blocked
+// when it would carry him INTO a box he is not already in.
+export const PLAYER_RADIUS = 0.35;
+let activeColliders = [];
+export function setColliders(list) { activeColliders = list || []; }
+export function getColliders() { return activeColliders; }
+// Add one box to a list, normalising the corners so the caller never
+// has to mind which corner is which. Returns the list, so a builder can
+// keep pushing into the same module list.
+export function addBoxCollider(list, x0, z0, x1, z1) {
+  list.push({ x0: Math.min(x0, x1), z0: Math.min(z0, z1), x1: Math.max(x0, x1), z1: Math.max(z0, z1) });
+  return list;
+}
+function circleHitsBox(x, z, r, b) {
+  const cx = Math.max(b.x0, Math.min(x, b.x1));
+  const cz = Math.max(b.z0, Math.min(z, b.z1));
+  const dx = x - cx, dz = z - cz;
+  return dx * dx + dz * dz < r * r;
+}
+function hitsAnyBox(x, z, r, list) {
+  for (const b of list) { if (circleHitsBox(x, z, r, b)) return true; }
+  return false;
+}
+// Resolve one movement step against a collider list (defaults to the
+// list set by setColliders). Returns the new ground position.
+export function resolveMove(x, z, dx, dz, colliders) {
+  const list = colliders || activeColliders;
+  if (!list || !list.length || (!dx && !dz)) return { x: x + dx, z: z + dz };
+  const r = PLAYER_RADIUS;
+  const insideNow = hitsAnyBox(x, z, r, list);
+  let nx = x + dx;
+  if (!insideNow && hitsAnyBox(nx, z, r, list)) nx = x;
+  let nz = z + dz;
+  if (!insideNow && hitsAnyBox(nx, nz, r, list)) nz = z;
+  return { x: nx, z: nz };
+}
+
 // ---------- Touch controller (alphabet W/A/S/D) ----------
 // On-screen letter buttons for movement on touch devices. They dispatch
 // synthetic KeyboardEvents on window, so the existing per-act key

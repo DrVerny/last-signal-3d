@@ -670,11 +670,19 @@ export function makeRiggedPerson(opts) {
       speed = traits.speedMin + Math.random() * (traits.speedMax - traits.speedMin);
     }
     if (o.phone) speed *= 0.75;
+    // The rigs face opposite ways in model space: the Atlas rigs
+    // (Matt, Lis, Sam) face -Z, the Casual rig (Jade) faces +Z. A
+    // walker must face the direction they move whichever rig they are,
+    // so the per-frame rotation adds PI for the Atlas rigs and nothing
+    // for Jade (see updatePedestrian in action.js).
+    const faceLayoutKey = CROWD_FACE_LAYOUT_BY_FILE[model.file];
+    const faceLayout = faceLayoutKey ? CROWD_FACE_LAYOUTS[faceLayoutKey] : null;
+    const faceYaw = faceLayout && faceLayout.flipZ ? Math.PI : 0;
     const heading = o.heading !== undefined ? o.heading : Math.random() * Math.PI * 2;
     const bounds = o.bounds || { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };
     const lane = o.lane || null;
     return {
-      group, mixer, rootBone, rootRest, headBone, torsoBone, rigged: true,
+      group, mixer, rootBone, rootRest, headBone, torsoBone, rigged: true, faceYaw,
       phone: !!o.phone, pockets: !!o.pockets, bags: o.bags || 0, age, stoop: traits.stoop,
       heading, bounds, lane, look, body,
       x: o.x !== undefined ? o.x : (lane ? (Math.random() * (lane.max - lane.min) + lane.min) : (Math.random() * (bounds.maxX - bounds.minX) + bounds.minX)),
@@ -799,13 +807,17 @@ export function makeSeatedPerson(opts) {
     group.scale.set(s * body.width, s * sj, s * body.width);
     group.traverse(m => { m.castShadow = true; });
     group.position.set(o.x || 0, 0, o.z || 0);
-    group.rotation.y = o.heading || 0;
+    // The rigs face opposite ways in model space (Atlas -Z, Casual
+    // +Z), so add the rig's own faceYaw to the requested heading, or
+    // half the audience sits facing the back of the hall.
+    const layoutKey = CROWD_FACE_LAYOUT_BY_FILE[model.file];
+    const layout = layoutKey ? CROWD_FACE_LAYOUTS[layoutKey] : null;
+    const faceYaw = layout && layout.flipZ ? Math.PI : 0;
+    group.rotation.y = (o.heading || 0) + faceYaw;
     const posed = applySeatedPose(group, model);
     if (!posed) return null;
     // Face and fingers for everyone, as for walkers.
     try {
-      const layoutKey = CROWD_FACE_LAYOUT_BY_FILE[model.file];
-      const layout = layoutKey ? CROWD_FACE_LAYOUTS[layoutKey] : null;
       if (posed.bones.head && layout) addCrowdFaceFeatures(posed.bones.head, (model.headScale || 0.6) * s, layout, look.skin, model.fitScale || 1);
       addCrowdFingers(group, s, model.fitScale || 1);
     } catch (e) { /* cosmetic; never break the crowd */ }

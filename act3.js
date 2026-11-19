@@ -9,7 +9,7 @@ import { initSoundUI, setAmbient, setTension, soundTick, sfxDoor, sfxBoom, sfxGa
 import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing } from './action.js';
 import { grantPayout } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, resolveMove, addBoxCollider } from './player.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -623,6 +623,10 @@ function buildEscape() {
   const bus = new THREE.Group(); bus.position.set(0, 0, 2); gEscape.add(bus);
   const busBody = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6), stdMat({ color: 0x1a2a4a, roughness: 0.5, metalness: 0.25 }));
   busBody.position.set(0, 1.4, 0); busBody.castShadow = true; busBody.receiveShadow = true; bus.add(busBody);
+  // The bus is solid: the player runs around it to the ladder, not
+  // through it. The ladder marker (-4, -2) sits well west of the bus,
+  // so the run path stays open.
+  addBoxCollider(ch3Colliders, -1.3, -1, 1.3, 5);
   const busBand = new THREE.Mesh(new THREE.BoxGeometry(2.62, 0.55, 6.02), stdMat({ color: 0xe8e8e8, roughness: 0.5 }));
   busBand.position.set(0, 1.55, 0); bus.add(busBand);
   for (const sx of [-1, 1]) {
@@ -1002,6 +1006,10 @@ function buildPress() {
   // Podium with microphones.
   box(gPress, 1.6, 1.2, 0.8, 0x2a2118, 0, 0.6, -2, 'podium', { roughness: 0.8 });
   hitBox(gPress, 2.2, 1.8, 1.4, 0, 0.8, -2, 'podium');
+  // The podium is solid: the player steps up to it and clicks it, he
+  // does not walk through it. Progression is by click, so blocking the
+  // footprint cannot strand him.
+  addBoxCollider(ch5Colliders, -1.1, -2.7, 1.1, -1.3);
   for (const mx of [-0.3, 0, 0.3]) {
     const mic = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.5, 8), stdMat({ color: 0x111111, roughness: 0.4 }));
     mic.position.set(mx, 1.45, -1.9); mic.rotation.x = 0.4; gPress.add(mic);
@@ -1322,6 +1330,24 @@ window.__ls3.interact = interact;
 // chapter group). Filled at boot, after the builders run.
 const chapterTargets = {};
 
+// ---------- Wall colliders (see player.js) ----------
+// Only two Act III obstacles sit inside the walkable bounds and are
+// solid enough to block the player: the police bus in the Ch 3 escape
+// street and the podium in the Ch 5 press hall. Everything else is
+// either beyond the view bounds (the Ch 1/2/4 back walls, the Ch 6
+// parapets), a click target the player must reach (the SUV, whose
+// arrival trigger is a 1.5 m radius around its centre, and the fire
+// escape), or a low rail the player steps over (the press crowd
+// barrier, and the Ch 3 militant van, which drives away). No Act III
+// scene has a doorway: exits are by click, dialogue or timer.
+let ch3Colliders = [];
+let ch5Colliders = [];
+function act3Colliders() {
+  if (state.chapter === 3) return ch3Colliders;
+  if (state.chapter === 5) return ch5Colliders;
+  return [];
+}
+
 // ---------- Animate ----------
 document.getElementById('cinemaBtn').onclick = () => {
   document.getElementById('letterboxTop').classList.toggle('hidden');
@@ -1357,7 +1383,8 @@ function animate() {
     beginPlayerFrame(camera, camY);
     const sp = 0.05;
     const mv = moveDelta(keys, state.yaw, sp);
-    camera.position.x += mv.dx; camera.position.z += mv.dz;
+    const resolved = resolveMove(camera.position.x, camera.position.z, mv.dx, mv.dz, act3Colliders());
+    camera.position.x = resolved.x; camera.position.z = resolved.z;
     camera.position.x = Math.max(camBounds.x[0], Math.min(camBounds.x[1], camera.position.x));
     camera.position.z = Math.max(camBounds.z[0], Math.min(camBounds.z[1], camera.position.z));
     camera.rotation.order = 'YXZ';
