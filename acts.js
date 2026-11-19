@@ -177,7 +177,8 @@ export async function goToAct(n) {
   try { localStorage.setItem(CUR_KEY, String(n)); } catch (e) { /* ignore */ }
   currentAct = n;
   showLoading('Loading ' + ACTS[n].name + '...');
-  // The act import races a 60 s timer: if the module (or one of its
+  // The act import races a 30 s timer (the player's hard rule: the load
+  // must be fast, never a longer wait): if the module (or one of its
   // dependencies) never arrives, the player gets a Retry button instead
   // of an endless loading screen. The ?v= cache-buster forces a fresh
   // fetch of the act module, so a stale cached copy cannot hang the boot.
@@ -185,16 +186,28 @@ export async function goToAct(n) {
   try {
     mod = await Promise.race([
       import(ACTS[n].file + '?v=' + BUILD_VERSION),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('act module load timed out after 60s')), 60000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('act module load timed out after 30s')), 30000))
     ]);
   } catch (e) {
     const t = document.getElementById('loadingText');
     if (t) t.textContent = 'The game took too long to load. Check your connection and try again.';
+    // Show the real reason under the message, so a timeout reads
+    // differently from a load error and a future check can tell them apart.
+    const le = document.getElementById('loadingError');
+    if (le) {
+      le.classList.remove('hidden');
+      le.textContent = 'Load error: ' + (e && e.message ? e.message : String(e));
+    }
     const c = document.getElementById('loadingContinue');
     if (c) {
       c.classList.remove('hidden');
       c.textContent = 'Retry';
-      c.onclick = () => location.reload();
+      // Retry must RESUME this act from its save, never wipe it. A plain
+      // reload keeps ?fresh in the URL when the page was opened that way,
+      // and ?fresh clears every save (money and act progress included).
+      // Navigating to ?act=N drops ?fresh and resumes from the
+      // prerequisite save, the same path replay() uses.
+      c.onclick = () => { location.href = 'index.html' + (n > 1 ? '?act=' + n : ''); };
     }
     return;
   }

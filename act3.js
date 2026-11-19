@@ -277,6 +277,12 @@ canvas.addEventListener('pointermove', e => {
   // Look up and down freely, almost straight up and straight down, so
   // the player can turn his head like a person. Stops just short of
   // straight up/down (1.5 rad = 86 deg) so the view never flips over.
+  // A NaN (a bad event coordinate, a synthetic drag) would pass straight
+  // through Math.min/Math.max and wedge the pitch forever: every later
+  // drag keeps producing NaN and the camera can never be levelled again.
+  // Reset a non-finite angle to level before clamping.
+  if (!isFinite(state.yaw)) state.yaw = 0;
+  if (!isFinite(state.pitch)) state.pitch = 0;
   state.pitch = Math.max(-1.5, Math.min(1.5, state.pitch));
   lx = e.clientX; ly = e.clientY;
 });
@@ -334,32 +340,35 @@ function addDurag(group) {
   wrap.position.set(0, 1.6, 0.1); wrap.castShadow = true; group.add(wrap);
 }
 async function loadHumans() {
-  const loadingText = document.getElementById('loadingText');
-  const loadingError = document.getElementById('loadingError');
-  const loadingContinue = document.getElementById('loadingContinue');
   const loader = new GLTFLoader();
-  const failures = [];
   // Each model load races a 30 s timeout, as in Act I: a network request
   // that hangs (never resolves, never rejects) would otherwise stall this
   // await forever and leave the game stuck on "Loading characters..." with
-  // no way forward. A timed out model is treated as a failed load, so the
-  // game can still start and offer "Continue without the missing characters".
-  const loadWithTimeout = (file) => Promise.race([
+  // no way forward. The models load IN PARALLEL and the act starts right
+  // away: the loading screen no longer waits on the characters, so a slow
+  // fetch can never hold the player past the 30 s rule. A model that
+  // misses its first attempt is retried in the background (the Act I
+  // retryHumanLater pattern) and streams in when it lands; only a model
+  // that fails every attempt is reported, and the game continues without
+  // them.
+  const loadWithTimeoutMs = (file, ms) => Promise.race([
     loader.loadAsync(file),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('load timed out after 30s')), 30000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error('load timed out after 30s')), ms))
   ]);
-  let calebBase = null;
-  try {
-    loadingText.textContent = 'Loading characters... Jade';
-    const jade = await loadWithTimeout('models/jade.glb');
+  // Speaking gestures and jaw morphs use the loaded models: re-register
+  // after each arrival so a late character speaks and moves like the rest.
+  const afterHuman = () => {
+    try { registerHumans(humans); } catch (e) { /* gestures are best effort */ }
+    try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
+  };
+  const addJade = (jade) => {
     const jg = jade.scene; jg.name = 'jade';
     const jb = new THREE.Box3().setFromObject(jg); const js = new THREE.Vector3(); jb.getSize(js);
     const jscale = 1.68 / js.y; jg.scale.setScalar(jscale);
     gControl.add(jg); placeHuman(jg, 'jade', -1.4, 4.5, Math.PI, jscale);
-  } catch (e) { failures.push('jade'); }
-  try {
-    loadingText.textContent = 'Loading characters... Caleb';
-    const caleb = await loadWithTimeout('models/caleb.glb');
+    afterHuman();
+  };
+  const addCaleb = (caleb) => {
     const cg = caleb.scene; cg.name = 'caleb';
     const cb = new THREE.Box3().setFromObject(cg); const cs = new THREE.Vector3(); cb.getSize(cs);
     const cscale = 1.68 / cs.y; cg.scale.setScalar(cscale);
@@ -372,18 +381,8 @@ async function loadHumans() {
     brim.position.set(0, 1.775, 0.13); cg.add(brim);
     const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
     badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.32, 0.17); cg.add(badge);
-    calebBase = { group: cg, scale: cscale };
+    const calebBase = { group: cg, scale: cscale };
     gControl.add(cg); placeHuman(cg, 'caleb', 1.4, 4.5, Math.PI, cscale);
-  } catch (e) { failures.push('caleb'); }
-  try {
-    loadingText.textContent = 'Loading characters... Nurse Adeyemi';
-    const nurse = await loadWithTimeout('models/adeyemi.glb');
-    const ng = nurse.scene; ng.name = 'nurse';
-    const nb = new THREE.Box3().setFromObject(ng); const ns = new THREE.Vector3(); nb.getSize(ns);
-    const nscale = 1.68 / ns.y; ng.scale.setScalar(nscale);
-    gCourt.add(ng); placeHuman(ng, 'nurse', -4.5, 2, 0.5, nscale);
-  } catch (e) { failures.push('nurse'); }
-  if (calebBase) {
     // Stand-ins from Caleb's scan, recoloured: the judge, Owen Marsh, the
     // Attorney General, an MTA official, Derrick in the gallery, and the
     // masked leader of the van ambush.
@@ -411,18 +410,49 @@ async function loadHumans() {
     mil1.position.y = 0.14; addDurag(mil1);
     const mil2 = cloneCaleb(calebBase, 'militant2', 0x111114, gEscape, -4.2, 3.2, 1.2);
     mil2.position.y = 0.14; addDurag(mil2);
-  }
-  registerHumans(humans); // speaking gestures use the loaded models
-  if (failures.length) {
-    loadingError.classList.remove('hidden');
-    loadingError.textContent = 'Could not load: ' + failures.join(', ') + '. The game can still start without them.';
-    loadingContinue.classList.remove('hidden');
-    loadingContinue.onclick = () => { document.getElementById('loading').classList.add('hidden'); startChapter1(); };
-    loadingText.textContent = 'Some characters failed to load.';
-  } else {
-    document.getElementById('loading').classList.add('hidden');
-    startChapter1();
-  }
+    afterHuman();
+  };
+  const addNurse = (nurse) => {
+    const ng = nurse.scene; ng.name = 'nurse';
+    const nb = new THREE.Box3().setFromObject(ng); const ns = new THREE.Vector3(); nb.getSize(ns);
+    const nscale = 1.68 / ns.y; ng.scale.setScalar(nscale);
+    gCourt.add(ng); placeHuman(ng, 'nurse', -4.5, 2, 0.5, nscale);
+    afterHuman();
+  };
+  // Retry a missed model in the background: two more attempts, the first
+  // after 2 s and the second 5 s after that, each with a 60 s race. The
+  // game has already started by then, so a slow retry never blocks the
+  // player. Only if every attempt fails is the player told.
+  const retryLater = (file, addFn, name) => {
+    let attempt = 0;
+    const tryOnce = async () => {
+      attempt++;
+      try {
+        const gltf = await loadWithTimeoutMs(file, 60000);
+        addFn(gltf);
+      } catch (e) {
+        if (attempt < 2) setTimeout(tryOnce, 5000);
+        else { try { toast(name + ' could not be loaded - the game continues without them.'); } catch (e2) { /* toast is best effort */ } }
+      }
+    };
+    setTimeout(tryOnce, 2000);
+  };
+  const loadOne = async (file, addFn, name) => {
+    try {
+      const gltf = await loadWithTimeoutMs(file, 30000);
+      addFn(gltf);
+    } catch (e) {
+      retryLater(file, addFn, name);
+    }
+  };
+  // Start the act now; the characters stream in behind it. Chapter 1
+  // needs the scene, the objectives and the briefing, none of which read
+  // the human groups directly.
+  document.getElementById('loading').classList.add('hidden');
+  startChapter1();
+  loadOne('models/jade.glb', addJade, 'Jade');
+  loadOne('models/caleb.glb', addCaleb, 'Caleb');
+  loadOne('models/adeyemi.glb', addNurse, 'Nurse Adeyemi');
 }
 
 // ---------- Chapter 1: The Control Center ----------

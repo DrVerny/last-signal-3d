@@ -970,6 +970,12 @@ canvas.addEventListener('pointermove', e => {
   // Look up and down freely, almost straight up and straight down, so
   // the player can turn his head like a person. Stops just short of
   // straight up/down (1.5 rad = 86 deg) so the view never flips over.
+  // A NaN (a bad event coordinate, a synthetic drag) would pass straight
+  // through Math.min/Math.max and wedge the pitch forever: every later
+  // drag keeps producing NaN and the camera can never be levelled again.
+  // Reset a non-finite angle to level before clamping.
+  if (!isFinite(state.yaw)) state.yaw = 0;
+  if (!isFinite(state.pitch)) state.pitch = 0;
   state.pitch = Math.max(-1.5, Math.min(1.5, state.pitch));
   lx = e.clientX; ly = e.clientY;
 });
@@ -1009,33 +1015,36 @@ function placeHuman(group, name, x, z, faceYaw, baseScale) {
   return group;
 }
 async function loadHumans() {
-  const loadingText = document.getElementById('loadingText');
-  const loadingError = document.getElementById('loadingError');
-  const loadingContinue = document.getElementById('loadingContinue');
   const loader = new GLTFLoader();
-  const failures = [];
   // Each model load races a 30 s timeout, as in Act I: a network request
   // that hangs (never resolves, never rejects) would otherwise stall this
   // await forever and leave the game stuck on "Loading characters..." with
-  // no way forward. A timed out model is treated as a failed load, so the
-  // game can still start and offer "Continue without the missing characters".
-  const loadWithTimeout = (file) => Promise.race([
+  // no way forward. The models load IN PARALLEL and the act starts right
+  // away: the loading screen no longer waits on the characters, so a slow
+  // fetch can never hold the player past the 30 s rule. A model that
+  // misses its first attempt is retried in the background (the Act I
+  // retryHumanLater pattern) and streams in when it lands; only a model
+  // that fails every attempt is reported, and the game continues without
+  // them.
+  const loadWithTimeoutMs = (file, ms) => Promise.race([
     loader.loadAsync(file),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('load timed out after 30s')), 30000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error('load timed out after 30s')), ms))
   ]);
-  try {
-    loadingText.textContent = 'Loading characters... Jade';
-    const jade = await loadWithTimeout('models/jade.glb');
+  // Speaking gestures and jaw morphs use the loaded models: re-register
+  // after each arrival so a late character speaks and moves like the rest.
+  const afterHuman = () => {
+    try { registerHumans(humans); } catch (e) { /* gestures are best effort */ }
+    try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
+  };
+  const addJade = (jade) => {
     const jg = jade.scene; jg.name = 'jade';
     const jb = new THREE.Box3().setFromObject(jg); const js = new THREE.Vector3(); jb.getSize(js);
     const jscale = 1.68 / js.y; jg.scale.setScalar(jscale);
     const jb2 = new THREE.Box3().setFromObject(jg); jg.position.y = -jb2.min.y;
     mission1.add(jg); placeHuman(jg, 'jade', -2.8, 6, Math.PI, jscale);
-  } catch (e) { failures.push('jade'); }
-  let calebBase = null;
-  try {
-    loadingText.textContent = 'Loading characters... Caleb';
-    const caleb = await loadWithTimeout('models/caleb.glb');
+    afterHuman();
+  };
+  const addCaleb = (caleb) => {
     const cg = caleb.scene; cg.name = 'caleb';
     const cb = new THREE.Box3().setFromObject(cg); const cs = new THREE.Vector3(); cb.getSize(cs);
     const cscale = 1.68 / cs.y; cg.scale.setScalar(cscale);
@@ -1050,13 +1059,11 @@ async function loadHumans() {
     brim.position.set(0, 1.775, 0.13); cg.add(brim);
     const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
     badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.32, 0.17); cg.add(badge);
-    calebBase = { group: cg, scale: cscale };
+    const calebBase = { group: cg, scale: cscale };
     mission1.add(cg); placeHuman(cg, 'caleb', 2.8, 6, Math.PI, cscale);
-  } catch (e) { failures.push('caleb'); }
-  // Derrick Shaw and the two substation guards reuse Caleb's scan with new
-  // coats (cloned groups, recoloured materials) - a prototype stand-in, the
-  // script's Derrick is a man in his 60s in a dark suit.
-  if (calebBase) {
+    // Derrick Shaw and the two substation guards reuse Caleb's scan with
+    // new coats (cloned groups, recoloured materials) - a prototype
+    // stand-in, the script's Derrick is a man in his 60s in a dark suit.
     const grey = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.85, metalness: 0.02 });
     const derrick = calebBase.group.clone(true);
     derrick.name = 'derrick';
@@ -1084,18 +1091,41 @@ async function loadHumans() {
       marker.scale.set(0.8, 0.8, 1); marker.position.set(0, 2.35, 0); marker.name = 'guardMarker';
       g.add(marker); guardMarkers.push(marker);
     }
-  }
-  registerHumans(humans); // speaking gestures use the loaded models
-  if (failures.length) {
-    loadingError.classList.remove('hidden');
-    loadingError.textContent = 'Could not load: ' + failures.join(', ') + '. The game can still start without them.';
-    loadingContinue.classList.remove('hidden');
-    loadingContinue.onclick = () => { document.getElementById('loading').classList.add('hidden'); startArrival(); };
-    loadingText.textContent = 'Some characters failed to load.';
-  } else {
-    document.getElementById('loading').classList.add('hidden');
-    startArrival();
-  }
+    afterHuman();
+  };
+  // Retry a missed model in the background: two more attempts, the first
+  // after 2 s and the second 5 s after that, each with a 60 s race. The
+  // game has already started by then, so a slow retry never blocks the
+  // player. Only if every attempt fails is the player told.
+  const retryLater = (file, addFn, name) => {
+    let attempt = 0;
+    const tryOnce = async () => {
+      attempt++;
+      try {
+        const gltf = await loadWithTimeoutMs(file, 60000);
+        addFn(gltf);
+      } catch (e) {
+        if (attempt < 2) setTimeout(tryOnce, 5000);
+        else { try { toast(name + ' could not be loaded - the game continues without them.'); } catch (e2) { /* toast is best effort */ } }
+      }
+    };
+    setTimeout(tryOnce, 2000);
+  };
+  const loadOne = async (file, addFn, name) => {
+    try {
+      const gltf = await loadWithTimeoutMs(file, 30000);
+      addFn(gltf);
+    } catch (e) {
+      retryLater(file, addFn, name);
+    }
+  };
+  // Start the act now; the characters stream in behind it. The scene,
+  // the rental car and the objectives are all ready without the models,
+  // and nothing in the arrival reads the human groups directly.
+  document.getElementById('loading').classList.add('hidden');
+  startArrival();
+  loadOne('models/jade.glb', addJade, 'Jade');
+  loadOne('models/caleb.glb', addCaleb, 'Caleb');
 }
 
 // ---------- Mission 1: The Delaware Line (Rondout Reservoir) ----------
@@ -3157,19 +3187,34 @@ function drawTravelMap(canvas, fromKey, toKey) {
     const x = p.x * W, y = p.y * H;
     const isFrom = key === fromKey, isTo = key === toKey;
     const st = placeStatus(key);
-    const col = isTo ? '#ffd166' : isFrom ? '#2e6fb0' : st === 'next' ? '#ffd166' : st === 'done' ? '#3a4a58' : st === 'locked' ? '#2a3540' : '#5a6a75';
+    // The Filling Station gets its own marker: a bright orange dot with a
+    // fuel-pump glyph and its full name always drawn. As one more small
+    // grey dot labelled "Fuel" it could not be found on the map at all,
+    // and a player low on fuel has to be able to spot it at a glance.
+    const isFuel = key === 'fillingstation';
+    const col = isTo ? '#ffd166' : isFrom ? '#2e6fb0' : isFuel ? '#ff8c42' : st === 'next' ? '#ffd166' : st === 'done' ? '#3a4a58' : st === 'locked' ? '#2a3540' : '#5a6a75';
     ctx.fillStyle = col;
     if (p.landmark) {
       const r = isTo ? 11 : 8;
       ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill();
     } else {
-      ctx.beginPath(); ctx.arc(x, y, isTo ? 10 : 7, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, isTo ? 10 : isFuel ? 9 : 7, 0, Math.PI * 2); ctx.fill();
     }
-    ctx.strokeStyle = light ? '#ffffff' : '#0d141b'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(x, y, isTo ? 13 : 10, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = isFuel && !isTo ? '#ffffff' : light ? '#ffffff' : '#0d141b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, isTo ? 13 : isFuel ? 12 : 10, 0, Math.PI * 2); ctx.stroke();
+    if (isFuel) {
+      // Fuel-pump glyph on the dot: a white pump body with a dark window
+      // and a hose on the side.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x - 4, y - 5, 6, 10);
+      ctx.fillStyle = '#111111';
+      ctx.fillRect(x - 3, y - 4, 4, 3);
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x + 2, y - 4); ctx.quadraticCurveTo(x + 6, y - 2, x + 5, y + 3); ctx.stroke();
+    }
     const flip = p.x > 0.72;
-    ctx.fillStyle = textCol; ctx.font = 'bold 14px Arial'; ctx.textAlign = flip ? 'right' : 'left';
-    ctx.fillText(p.short, flip ? x - 14 : x + 14, y + 5);
+    ctx.fillStyle = isFuel && !isTo ? '#ff8c42' : textCol; ctx.font = 'bold 14px Arial'; ctx.textAlign = flip ? 'right' : 'left';
+    ctx.fillText(isFuel ? p.name : p.short, flip ? x - 14 : x + 14, y + 5);
     if (isFrom || isTo) {
       ctx.fillStyle = subCol; ctx.font = '11px Arial';
       ctx.fillText(p.desc, flip ? x - 14 : x + 14, y + 20);
@@ -3221,7 +3266,7 @@ export function openCityMap(fromKey, preselectKey) {
       + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;">CITY MAP - New York</div>'
       + '<div id="travelRoute" style="color:#ffd166;margin:6px 0 10px;font-size:15px;"></div>'
       + '<canvas id="travelCanvas" width="600" height="340" style="width:100%;border-radius:8px;display:block;cursor:pointer;"></canvas>'
-      + '<div id="travelHint" style="color:#9fb8c8;font-size:12px;margin-top:8px;">Live map of New York City - click a place, then Drive. Gold = your next mission. The bridge leg is a trek on foot - no car, walk the busy street. The wind tunnel lab is up in Morningside Heights, the symposium hall is in Astoria, and the NYC Court sits by Zama HQ in SoHo.</div>'
+      + '<div id="travelHint" style="color:#9fb8c8;font-size:12px;margin-top:8px;">Live map of New York City - click a place, then Drive. Gold = your next mission. Orange = the Filling Station, refill your tank for 0.5 ZAMA. The bridge leg is a trek on foot - no car, walk the busy street. The wind tunnel lab is up in Morningside Heights, the symposium hall is in Astoria, and the NYC Court sits by Zama HQ in SoHo.</div>'
       + '<div style="display:flex;gap:10px;margin-top:14px;">'
       + '<button id="travelDriveBtn" type="button" style="flex:1;padding:12px;font-size:16px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:8px;cursor:pointer;"></button>'
       + '<button id="travelSkipBtn" type="button" style="padding:12px 18px;font-size:15px;background:#22303a;color:#e8eef2;border:1px solid #3a4a58;border-radius:8px;cursor:pointer;">Skip drive</button>'

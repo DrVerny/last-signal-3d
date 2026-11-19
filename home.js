@@ -4373,6 +4373,12 @@ canvas.addEventListener('pointermove', (e) => {
   homeYaw -= dx * 0.0012; homePitch -= dy * 0.0012;
   if (homeYaw > Math.PI) homeYaw -= Math.PI * 2;
   if (homeYaw < -Math.PI) homeYaw += Math.PI * 2;
+  // A NaN (a bad event coordinate, a synthetic drag) would pass straight
+  // through Math.min/Math.max and wedge the pitch forever: every later
+  // drag keeps producing NaN and the camera can never be levelled again.
+  // Reset a non-finite angle to level before clamping.
+  if (!isFinite(homeYaw)) homeYaw = 0;
+  if (!isFinite(homePitch)) homePitch = 0;
   homePitch = Math.max(-1.5, Math.min(1.5, homePitch));
   homeLx = e.clientX; homeLy = e.clientY;
 });

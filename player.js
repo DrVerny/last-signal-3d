@@ -1202,7 +1202,14 @@ export function applyPlayerPresence(o) {
     camX = Math.max(o.camBounds.x[0] + 0.2, Math.min(o.camBounds.x[1] - 0.2, camX));
     camZ = Math.max(o.camBounds.z[0] + 0.2, Math.min(o.camBounds.z[1] - 0.2, camZ));
   }
-  const camY = (o.eyeY || 1.7) + dist * 0.28;
+  // When the bounds clamp squeezes the camera close to the avatar (the
+  // player standing at a wall or a room edge facing away from it), the
+  // fixed lift would leave the camera almost directly above him, looking
+  // straight down, and no drag could level it. Lower the camera toward
+  // eye level as the horizontal distance shrinks, so the view levels out
+  // instead of tipping over the top of his head.
+  const hDist = Math.hypot(camX - o.x, camZ - o.z);
+  const camY = (o.eyeY || 1.7) + dist * 0.28 * Math.min(1, hDist / dist);
   o.camera.position.set(camX, camY, camZ);
   o.camera.rotation.order = 'YXZ';
   // Look at the avatar's chest, slightly ahead so the view leads
@@ -1354,12 +1361,23 @@ export function buildTouchControls() {
   }
   addEventListener('pointerdown', (e) => {
     if (!pinchOnCanvas(e)) return;
+    // A stale entry (a release the page never saw - a missed pointerup,
+    // a lost focus, a synthetic event from automation) would leave two
+    // phantom fingers "down" forever, and every later pointermove would
+    // be stopped in the capture phase: the look-drag would die for the
+    // rest of the session and the camera could never be dragged back.
+    // A fresh press while the map is already full means the old entries
+    // are stale, so clear them before tracking the new press.
+    if (pinchPointers.size >= 2) pinchPointers.clear();
     pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinchPointers.size === 2) {
       // Keep the second finger from resetting the look-drag origin.
       e.stopPropagation();
     }
   }, true);
+  // Losing focus mid-gesture can swallow the releases: drop the tracked
+  // pointers so the next press starts from a clean map.
+  addEventListener('blur', () => { pinchPointers.clear(); });
   addEventListener('pointermove', (e) => {
     if (!pinchPointers.has(e.pointerId)) return;
     const p = pinchPointers.get(e.pointerId);

@@ -1270,6 +1270,12 @@ function applyDrag(dx, dy) {
   // Look up and down freely, almost straight up and straight down, so
   // the player can turn his head like a person. Stops just short of
   // straight up/down (1.5 rad = 86 deg) so the view never flips over.
+  // A NaN (a bad event coordinate, a synthetic drag) would pass straight
+  // through Math.min/Math.max and wedge the pitch forever: every later
+  // drag keeps producing NaN and the camera can never be levelled again.
+  // Reset a non-finite angle to level before clamping.
+  if (!isFinite(state.yaw)) state.yaw = 0;
+  if (!isFinite(state.pitch)) state.pitch = 0;
   state.pitch = Math.max(-1.5, Math.min(1.5, state.pitch));
 }
 canvas.addEventListener('pointerdown', e => {
