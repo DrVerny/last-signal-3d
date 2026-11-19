@@ -1805,6 +1805,9 @@ function startMission1() {
   // load: mouth estimation must never be able to hold the loading overlay
   // up. The morphs are ready before the first line needs them.
   try { registerLipSyncHumans(humans); } catch (e) { /* lip-sync is best effort */ }
+  // A mission always starts outside the valve room: clear the flag so
+  // resetView below uses this mission's bounds, not the valve room's.
+  inValveRoom = false;
   resetView();
   setTimeOfDay('day'); // Mission 1 (aqueduct) is bright day.
   currentPlaceKey = 'reservoir';
@@ -3572,6 +3575,13 @@ function startTravelDrive(toKey, onArrive) {
   mission1.visible = false; mission2.visible = false; mission3.visible = false;
   travelGroup.visible = true;
   travelActive = true; window.__lsTravelActive = true;
+  // Driving away means he has left the valve room: clear the flag so it
+  // cannot leak into the next scene. Mission 1 ends with the device
+  // click INSIDE the valve room, and the travel starts from there; with
+  // the flag still set, resetView at the next mission kept the valve
+  // room bounds and the get-out clamped the player into that tiny box
+  // at the substation control room (Mission 2 arrival trap).
+  inValveRoom = false;
   travelT = 0; travelOnArrive = onArrive; travelToKey = toKey;
   travelMiles = getMiles(mapFromKey, toKey);
   // A same-place leg (the rental hop from the Rondout platform to the
@@ -3991,6 +4001,9 @@ function startMission2() {
   if (typeof travelGroup !== 'undefined' && travelGroup) travelGroup.visible = false;
   if (typeof trekGroup !== 'undefined' && trekGroup) trekGroup.visible = false;
   if (typeof arrivalGroup !== 'undefined' && arrivalGroup) arrivalGroup.visible = false;
+  // A mission always starts outside the valve room: clear the flag so
+  // resetView below uses this mission's bounds, not the valve room's.
+  inValveRoom = false;
   state.mission = 2; resetView();
   // The guards must exist by arrival: if Caleb's model is still in
   // flight, stand in crowd-rig guards so the yard is never empty.
@@ -4260,6 +4273,9 @@ function buildMission3() {
 }
 function startMission3() {
   mission1.visible = false; mission2.visible = false; mission3.visible = true;
+  // A mission always starts outside the valve room: clear the flag so
+  // resetView below uses this mission's bounds, not the valve room's.
+  inValveRoom = false;
   state.mission = 3; state.climbStep = 0; resetView();
   // Third person on entering the mission, so the player sees himself.
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
