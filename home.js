@@ -114,6 +114,17 @@ let sleeping = false, sleepT = 0, sleepRestDone = false;
 let homeTargets = [];
 let homeDragging = false, homeLx = 0, homeLy = 0, homeDragMoved = 0;
 const homeKeys = {};
+// Held-key suppression, same rule as act2.js: a key already held when
+// the player sits in the terminal-front car (or steps out of it) must
+// not act until it is released and pressed again, or holding W
+// through the end of the prologue drive steps him out in the same
+// frame he sits down and the gold Get out button never reads.
+const homeSuppressedKeys = new Set();
+function homeSuppressHeldKeys() {
+  for (const k in homeKeys) {
+    if (homeKeys[k]) { homeSuppressedKeys.add(k); homeKeys[k] = false; }
+  }
+}
 
 window.__lsHomeActive = false;
 
@@ -2485,6 +2496,9 @@ function seatTerminalFront() {
   driver.scale.set(0.62, 0.62, 0.62);
   terminalFrontCar.add(driver);
   terminalSeated = true;
+  // A key held through the prologue drive end must not step him
+  // straight back out on its next repeat.
+  homeSuppressHeldKeys();
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   showTerminalGetOutButton();
   showHomeToast('You are parked in front of Grand Central. Click the car door, or Get out, to step outside.');
@@ -2496,6 +2510,9 @@ function getOutOfTerminalCar() {
   if (!terminalSeated || !terminalFrontCar) return;
   terminalSeated = false;
   hideTerminalGetOutButton();
+  // The key that stepped him out must not walk him on from the door:
+  // he stands beside the car until he presses a key afresh.
+  homeSuppressHeldKeys();
   terminalDoorSwing = { group: terminalFrontDoor, t: 0 };
   try {
     const driver = getAvatar();
@@ -4408,7 +4425,7 @@ addEventListener('pointerup', homeEndDrag);
 // A keyup lost to a focus change would leave a movement key stuck on
 // forever (W cancelled by a phantom S reads as "cannot move, reload
 // required"): drop every held key when the window loses focus.
-addEventListener('blur', () => { homeEndDrag(); for (const k in homeKeys) homeKeys[k] = false; });
+addEventListener('blur', () => { homeEndDrag(); for (const k in homeKeys) homeKeys[k] = false; homeSuppressedKeys.clear(); });
 canvas.addEventListener('click', (e) => {
   if (!homeActive) return;
   if (homeDragMoved > 6) { homeDragMoved = 0; return; }
@@ -4418,15 +4435,19 @@ canvas.addEventListener('click', (e) => {
 addEventListener('keydown', (e) => {
   if (!homeActive) return;
   const k = e.key.toLowerCase();
+  if (homeSuppressedKeys.has(k)) return;
   homeKeys[k] = true;
   // Seated at the terminal front, the movement keys step him out
-  // first (the key stays held, so he walks on from the door).
+  // first (the key is then suppressed, so he stands beside the car
+  // until he presses it afresh).
   if (terminalSeated && (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'e')) getOutOfTerminalCar();
   if (k === 'r') homeResetView();
 });
 addEventListener('keyup', (e) => {
   if (!homeActive) return;
-  homeKeys[e.key.toLowerCase()] = false;
+  const k = e.key.toLowerCase();
+  homeKeys[k] = false;
+  homeSuppressedKeys.delete(k);
 });
 addEventListener('resize', () => {
   if (!homeActive || !homeCamera) return;

@@ -661,6 +661,10 @@ function seatPlayerInParkedCar(car, getOutPos, onGetOut) {
   car.add(driver);
   parkedSeat = { car, door: door.group, doorHit: door.hit, getOutPos, onGetOut: onGetOut || null, doorOpen: false };
   parkedSeatActive = true;
+  // A key held through the drive end (W is the natural one: he holds
+  // it to drive) must not step him straight back out on its next
+  // repeat: snapshot and clear held keys, so only a fresh press acts.
+  suppressHeldKeys();
   // The seated camera orbits with drags (see updateParkedSeatView):
   // start every seat at the default framing, facing the building.
   state.yaw = 0; state.pitch = 0;
@@ -679,6 +683,11 @@ function getOutOfParkedCar() {
   parkedSeat = null;
   parkedSeatActive = false;
   hideGetOutButton();
+  // The key that stepped him out (or one still held from the drive)
+  // must not walk him on from the door before he has seen where he
+  // is: he stands beside the car until he presses a key afresh, so
+  // the briefing finds him at the car, not halfway to the guards.
+  suppressHeldKeys();
   // Swing the door open (animated in the animate loop) and leave it open.
   doorSwing = { group: seat.door, t: 0 };
   // Step out: out of the car, on his feet, at full size, standing at
@@ -1007,22 +1016,38 @@ canvas.addEventListener('pointercancel', endDrag);
 addEventListener('pointerup', endDrag);
 addEventListener('blur', endDrag);
 const keys = {};
+// Held-key suppression: a key already held when the player sits in a
+// parked car (or steps out of one) must not act until it is released
+// and pressed again. Without this, holding W through the end of a
+// drive made the next key-repeat step him out of the car in the same
+// frame he sat down: the gold Get out button flashed for one frame,
+// the briefing fired while he was already walking, and he walked
+// straight into the guard trigger - the arrival read as "no button,
+// stuck on a street, dialogue auto-fired at the car".
+const suppressedKeys = new Set();
+function suppressHeldKeys() {
+  for (const k in keys) {
+    if (keys[k]) { suppressedKeys.add(k); keys[k] = false; }
+  }
+}
 addEventListener('keydown', e => {
   if (!actActive) return;
   const k = e.key.toLowerCase();
+  if (suppressedKeys.has(k)) return;
   keys[k] = true;
   // Seated in a parked car, the natural "let me move" keys step him
-  // out first (the key stays held, so he walks on from the door):
-  // without this a missed button click left WASD, drags, Reset and C
-  // all dead in the seated branch and the arrival read as frozen.
+  // out first: without this a missed button click left WASD, drags,
+  // Reset and C all dead in the seated branch and the arrival read
+  // as frozen. The key is then suppressed (see getOutOfParkedCar),
+  // so he stands beside the car until he presses it afresh.
   if (parkedSeatActive && (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'e')) getOutOfParkedCar();
   if (k === 'r') resetView();
 });
-addEventListener('keyup', e => { if (!actActive) return; keys[e.key.toLowerCase()] = false; });
+addEventListener('keyup', e => { if (!actActive) return; const k = e.key.toLowerCase(); keys[k] = false; suppressedKeys.delete(k); });
 // A keyup lost to a focus change would leave a movement key stuck on
 // forever (W cancelled by a phantom S reads as "cannot move, reload
 // required"): drop every held key when the window loses focus.
-addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; suppressedKeys.clear(); });
 addEventListener('resize', () => { if (!actActive) return; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
 // ---------- Characters (shared across missions) ----------
@@ -1210,18 +1235,23 @@ function buildValveRoom() {
   const fix = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.3), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, emissive: 0xd8e8ff, emissiveIntensity: 1.2 }));
   fix.position.set(0, 3.15, -3.5); room.add(fix);
   // VALVE ROOM sign on the INTERIOR face of the front wall, centred over
-  // the doorway but small (1.7 m wide): at the old 2.4 m it clipped at
-  // the screen edge, the lintel and the ceiling from every inside
-  // viewpoint and never read whole. Centred and small it reads whole
-  // from the valves, the room centre and the west valve alike. (The
-  // EXIT sign keeps the west wall segment.)
+  // the doorway but small (1.5 m wide) and set 0.65 m into the room
+  // (z -1.65): at the old z -1.25 the wall segment beside the doorway
+  // crossed its text from the oblique valve viewpoints, and at the old
+  // 2.4 m width it clipped at the screen edge, the lintel and the
+  // ceiling from every inside viewpoint. Here the whole text reads
+  // from the valves, the room centre and both corners. (The EXIT sign
+  // keeps the west wall segment.)
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
-  sign.scale.set(1.7, 0.42, 1); sign.position.set(0, 2.5, -1.25); room.add(sign);
+  sign.scale.set(1.5, 0.37, 1); sign.position.set(0, 2.5, -1.65); room.add(sign);
   // A second VALVE ROOM sign on the back wall, above the gauges: the
   // front-wall sign sits behind the entry camera, so the player never
-  // faced it. This one reads whole from the door and from the valves.
+  // faced it. It hangs in FRONT of the back pipe main (the main runs
+  // at z -5.7, y 3.08 and crossed both text bands at the old z -5.85,
+  // so it read "VE ROOM / ROUND") and just above the gauge labels,
+  // clear of the ceiling. It reads whole from the door and the valves.
   const signBack = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
-  signBack.scale.set(1.7, 0.42, 1); signBack.position.set(0, 3.0, -5.85); room.add(signBack);
+  signBack.scale.set(1.5, 0.3, 1); signBack.position.set(0, 2.98, -5.4); room.add(signBack);
   // One door only in this doorway: the station door slab outside is the
   // single front door, and it works both ways (in with the key, out
   // from inside without it). There used to be a second slab here, the
@@ -1588,17 +1618,22 @@ function buildMission1() {
     const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1), new THREE.MeshStandardMaterial({ color: 0x0e1a24, roughness: 0.1, metalness: 0.4 }));
     win.position.set(wx, 2, -0.72); mission1.add(win);
   }
+  // Facility sign on the lobby face, shifted east and narrowed: from
+  // the parked car in the lot (east of the door) the old centred 5.5 m
+  // sign put its R behind the top-left HUD panel. At x 3.8, 3.4 m
+  // wide, the whole text clears the panel from the car, from the lot
+  // and from the platform spawn.
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT DAM', '#2a2118', '#ffd166', 'WATER FACILITY'), transparent: true, depthWrite: false }));
-  sign.scale.set(5.5, 1.35, 1); sign.position.set(0, 4.1, -0.6); mission1.add(sign);
+  sign.scale.set(3.4, 0.83, 1); sign.position.set(3.8, 4.0, -0.6); mission1.add(sign);
   // The valve room, inside the control station: the player enters through
   // the station door and walks to the valves. The three valve assemblies
   // live on the back wall of the room, not outside on a plinth, so the
   // valve puzzle only opens once he has walked in to reach them.
   buildValveRoom();
   const valveDefs = [
-    { key: 'hospital', label: 'HOSPITAL', color: 0x7ac74f, x: -3 },
-    { key: 'residential', label: 'RESIDENTIAL', color: 0x4cc9f0, x: 0 },
-    { key: 'industrial', label: 'INDUSTRIAL', color: 0xffd166, x: 3 }
+    { key: 'hospital', label: 'HOSPITAL', color: 0x7ac74f, x: -3, labelX: -1.35 },
+    { key: 'residential', label: 'RESIDENTIAL', color: 0x4cc9f0, x: 0, labelX: 0 },
+    { key: 'industrial', label: 'INDUSTRIAL', color: 0xffd166, x: 3, labelX: 2.55 }
   ];
   window._valveMeshes = {};
   for (const v of valveDefs) {
@@ -1630,17 +1665,18 @@ function buildMission1() {
     gaugeHit.position.set(v.x, 2.3, -5.8); gaugeHit.name = wheel.name; gaugeHit.userData.clickable = true; mission1.add(gaugeHit);
     window._valveMeshes[v.key + 'GaugeHit'] = gaugeHit;
     const lbl = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture(v.label, '#111111', '#e8e8e8', ''), transparent: true, depthWrite: false }));
-    // The label sits well in front of the ceiling pipe drops: the
-    // drops (radius 0.22 at z -5.7) have their front surface at
-    // z -5.48, which poked through the old label plane at z -5.5 and
-    // hid the first letters ("INDUSTRIAL" read "NDUSTRIAL"). At
-    // z -5.3 the whole board is in front of every pipe. The outer
-    // labels sit 0.45 m inboard of their gauges and the board is
-    // 1.4 m wide, so "HOSPITAL" stays clear of the top-left HUD panel
-    // even when the camera is shifted right. y 2.78 keeps it just
-    // above the gauge rim, clear of the ceiling pipe runs.
-    const lx = v.x === 0 ? 0 : v.x - Math.sign(v.x) * 0.45;
-    lbl.scale.set(1.4, 0.35, 1); lbl.position.set(lx, 2.78, -5.3); mission1.add(lbl);
+    // The label sits in front of the ceiling pipe drops: the drops
+    // (radius 0.22 at z -5.7) have their front surface at z -5.48,
+    // which poked through the old label plane at z -5.5 and hid the
+    // first letters ("INDUSTRIAL" read "NDUSTRIAL"). At z -5.4 the
+    // whole board is in front of every pipe. The HOSPITAL board sits
+    // further inboard (labelX -1.35) and all three are narrower
+    // (1.05 m) and lower (y 2.62, under the back VALVE ROOM sign at
+    // y 2.98), so "HOSPITAL" reads whole from the door, clear of the
+    // top-left HUD panel, and from each valve at close range. The
+    // dial faces carry the line names too, so the offset board still
+    // reads as its line's label.
+    lbl.scale.set(1.05, 0.26, 1); lbl.position.set(v.labelX, 2.62, -5.4); mission1.add(lbl);
   }
   // A long main pipe along the back wall, joining the three valves.
   const mainPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 7.5, 12), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 }));
@@ -4590,6 +4626,19 @@ canvas.addEventListener('pointerup', e => {
   lastTapAt = Date.now();
   handleTap(e.clientX, e.clientY);
 });
+// Distance from the PLAYER (the avatar's ground position) to a point.
+// Click handlers run outside the animate loop, where camera.position
+// is the render camera - up to 4 m behind him in third person - so
+// measuring from the camera would refuse clicks while he stands at
+// the target. (The animate-loop walk-ups measure from the camera
+// only because beginPlayerFrame has just copied his position into
+// it for that frame.)
+const _playerWorldPos = new THREE.Vector3();
+function playerDist2D(x, z) {
+  try { getAvatar().getWorldPosition(_playerWorldPos); }
+  catch (e) { _playerWorldPos.copy(camera.position); }
+  return dist2D(_playerWorldPos.x, _playerWorldPos.z, x, z);
+}
 function interact(name) {
   if (!name) return;
   // The parked car door: open it and step outside. This is how the
@@ -4608,6 +4657,13 @@ function interact(name) {
     // unlocks the station door. Walking up to it also picks it up
     // (see the animate loop), so a missed click is not a dead end.
     if (hasKey('station')) { toast('You already have the station key.'); return; }
+    // The click target is generous, so a click from across the yard
+    // would otherwise pick the key up from metres away: he has to
+    // walk to the hook beside the door.
+    if (playerDist2D(1.5, -0.6) > 2.5) {
+      toast('The station key is on the hook beside the door - walk over to it.');
+      return;
+    }
     giveKey('station', 'station key');
     toast('Picked up the station key. The station door is unlocked.');
     sfxRepair();
@@ -4620,7 +4676,15 @@ function interact(name) {
     // One door, two sides: from inside the valve room the same slab
     // opens without the key; from outside it needs the mission to have
     // started and the station key on its hook beside the door.
-    if (inValveRoom) { tryStationDoor('inside'); return; }
+    if (inValveRoom) {
+      // Exit stays key-free, but he still has to be at the door: the
+      // click target is generous enough to reach from the back wall.
+      if (playerDist2D(0, -0.68) > 3.5) {
+        toast('Walk to the station door to head back outside.');
+        return;
+      }
+      tryStationDoor('inside'); return;
+    }
     // Before the mission starts the door stays shut: he takes the rental
     // car to the facility first. The briefing starts after that drive.
     if (!mission1Started) {
@@ -4633,6 +4697,13 @@ function interact(name) {
     if (!hasKey('station')) {
       toast('Locked - needs the station key. It is on the hook beside the door.');
       sfxThud();
+      return;
+    }
+    // The door's click target is generous: a click from across the
+    // yard would otherwise swing it open and put him inside without
+    // ever walking to it. He has to be at the door.
+    if (playerDist2D(0, -0.68) > 3.5) {
+      toast('The station door is just ahead - walk to it and use the key.');
       return;
     }
     tryStationDoor('outside'); return;
@@ -4772,7 +4843,7 @@ function animate() {
   beginPlayerFrame(camera, state.mission === 3 ? 1.9 : 1.7);
   // Valve room: walking up to a valve wheel opens the pressure controls,
   // so the puzzle opens when the player reaches the valves.
-  if (state.mission === 1 && inValveRoom && !valveOpen && !state.waterStable && Date.now() > valveReopenAt
+  if (state.mission === 1 && mission1.visible && inValveRoom && !valveOpen && !state.waterStable && Date.now() > valveReopenAt
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
     for (const vx of [-3, 0, 3]) {
@@ -4784,7 +4855,7 @@ function animate() {
   // facility: crossing z 7 on the dirt track, past the platform end at
   // z 11. He spawns at z 12.3, so this cannot fire at spawn, and the
   // flag makes it fire exactly once per Act II entry.
-  if (state.mission === 1 && !mission1Started && !arrivalDone
+  if (state.mission === 1 && mission1.visible && !mission1Started && !arrivalDone
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
     if (camera.position.z < 7) {
@@ -4797,7 +4868,7 @@ function animate() {
   }
   // The rental car by the platform: walking up to it offers the drive,
   // so a player who does not think to click still gets the button.
-  if (state.mission === 1 && !mission1Started && !rentalTaken && stationRental
+  if (state.mission === 1 && mission1.visible && !mission1Started && !rentalTaken && stationRental
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
     if (dist2D(camera.position.x, camera.position.z, 4.5, 9.0) < 4) {
@@ -4812,7 +4883,7 @@ function animate() {
   // click is not a dead end. The radius is tight (0.6 m): at 1.2 m the
   // walk to the door itself passed through it, so the key was taken
   // silently on the way in and the door read as needing no key at all.
-  if (state.mission === 1 && !inValveRoom && !hasKey('station')
+  if (state.mission === 1 && mission1.visible && !inValveRoom && !hasKey('station')
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
     if (dist2D(camera.position.x, camera.position.z, 1.5, -0.6) < 0.6) {
@@ -4832,7 +4903,7 @@ function animate() {
   // the door (see buildMission1). Without the key the door shows it is
   // locked instead of opening, so the player is never stuck - the key
   // is right there before he needs the door.
-  if (state.mission === 1 && !inValveRoom
+  if (state.mission === 1 && mission1.visible && !inValveRoom
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
     if (dist2D(camera.position.x, camera.position.z, 0, -0.68) < 1.8) {
@@ -4886,7 +4957,11 @@ function animate() {
   // post and face the direction they walk (the old scan faces +z, so
   // +x is rotation.y = PI/2 and -x is -PI/2). The key card rides on
   // guard1's belt, so it follows him; the "!" markers pulse above them.
-  if (state.mission === 2 && !guardsDown) {
+  // mission2.visible is part of the gate: the shared arrival lot sits
+  // on the same origin coordinates as the yard, so without it the
+  // patrol trigger fired inside the lot (a Symposium arrival put the
+  // player 1.7 m from a guard patrol point) while the yard was hidden.
+  if (state.mission === 2 && mission2.visible && !guardsDown) {
     for (const gp of guardPatrol) {
       const w = Math.sin(t * 0.45 + gp.phase);
       gp.group.position.x = gp.baseX + w * 1.8;
