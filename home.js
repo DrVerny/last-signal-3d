@@ -456,13 +456,27 @@ function lamp(scene, x, y, z, color, intensity, dist) {
   const l = new THREE.PointLight(color || 0xffe0b0, intensity || 0.9, dist || 12);
   l.position.set(x, y, z); scene.add(l); return l;
 }
+// Shrink a sign's font until the text fits its board: the old fixed
+// 44px clipped any text wider than the 512px board, so "GRAND CENTRAL -
+// ENTRANCE" read as "AND CENTRAL - ENTRAN". Every sign drawn through
+// this helper now fits.
+function fitSignFont(ctx, text, maxWidth, startPx, weight) {
+  let px = startPx;
+  ctx.font = weight + px + 'px Arial';
+  while (px > 12 && ctx.measureText(text).width > maxWidth) {
+    px -= 2;
+    ctx.font = weight + px + 'px Arial';
+  }
+  return px;
+}
 function textSprite(text, bg, fg, sub) {
   const c = document.createElement('canvas'); c.width = 512; c.height = 128;
   const ctx = c.getContext('2d');
   ctx.fillStyle = bg; ctx.fillRect(0, 0, 512, 128);
-  ctx.fillStyle = fg; ctx.font = 'bold 44px Arial'; ctx.textAlign = 'center';
+  ctx.fillStyle = fg; ctx.textAlign = 'center';
+  fitSignFont(ctx, text, 512 - 24, 44, 'bold ');
   ctx.fillText(text, 256, sub ? 58 : 74);
-  if (sub) { ctx.font = '28px Arial'; ctx.fillText(sub, 256, 102); }
+  if (sub) { fitSignFont(ctx, sub, 512 - 24, 28, ''); ctx.fillText(sub, 256, 102); }
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   return s;
@@ -2276,7 +2290,7 @@ function buildTerminalGlassDoor(scene) {
   const panels = new THREE.Group();
   panels.position.set(0, 0, dz);
   scene.add(panels);
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.7, side: THREE.DoubleSide });
   const railMat = mat(0x2a3a4a, { metalness: 0.7, roughness: 0.3 });
   for (let i = 0; i < 4; i++) {
     const arm = new THREE.Group();
@@ -2295,6 +2309,13 @@ function buildTerminalGlassDoor(scene) {
     // makes all four read as distinct panels, open or shut.
     const edge = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.3, 0.06), railMat);
     edge.position.set(0, 1.25, 1.42); arm.add(edge);
+    // Inner vertical rail at the post end and a mid horizontal rail, so
+    // every panel has a complete frame and reads as a distinct pane from
+    // any angle, even edge-on or overlapped by the panel in front of it.
+    const inner = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.3, 0.06), railMat);
+    inner.position.set(0, 1.25, 0.08); arm.add(inner);
+    const mid = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 1.35), railMat);
+    mid.position.set(0, 1.25, 0.75); arm.add(mid);
     panels.add(arm);
   }
   // A generous hit box over the whole door, so a tap anywhere on it
@@ -2314,7 +2335,11 @@ function updateTerminalGlassDoor(dt) {
   if (!glassDoor || !glassDoor.opening) return;
   glassDoor.open = Math.min(1, glassDoor.open + dt / 0.8);
   const e = 1 - (1 - glassDoor.open) * (1 - glassDoor.open);
-  glassDoor.panels.rotation.y = (Math.PI / 4) * e;
+  // The door revolves open only 30 degrees (PI/6), not 45: at 45 degrees
+  // the open door read as two panels in a V from the front, with the
+  // other two edge-on and invisible. At 30 degrees the four-panel cross
+  // still reads clearly while the door is open.
+  glassDoor.panels.rotation.y = (Math.PI / 6) * e;
   if (glassDoor.open >= 1) glassDoor.opening = false;
 }
 function enterTerminalInterior() {
@@ -2492,10 +2517,13 @@ function buildTerminal(scene) {
   // The sign stands at the west end of the desk, at eye level, on a
   // post: the old sign floated high above the desk and the top-left HUD
   // panel covered its left half, so it read "VICE DESK". Shortened to
-  // SERVICE DESK so the whole word fits clear of the HUD.
+  // SERVICE DESK so the whole word fits clear of the HUD. It stands at
+  // x 5.0, not 6.0: the attendant at x 8 stood close enough to the
+  // sign's right edge to hide its last letters from the approach angle,
+  // so it read "SERVICE DE" / "Tickets - 0.1 ZAM".
   const deskSign = textSprite('SERVICE DESK', '#2a2118', '#ffd166', 'Tickets - 0.1 ZAMA');
-  deskSign.scale.set(3.2, 0.8, 1); deskSign.position.set(6.0, 1.8, 10); scene.add(deskSign);
-  hbox(scene, 0.08, 1.4, 0.08, 0x2a3a4a, 6.0, 0.7, 10, null, { metalness: 0.6, roughness: 0.4 });
+  deskSign.scale.set(3.2, 0.8, 1); deskSign.position.set(5.0, 1.8, 10); scene.add(deskSign);
+  hbox(scene, 0.08, 1.4, 0.08, 0x2a3a4a, 5.0, 0.7, 10, null, { metalness: 0.6, roughness: 0.4 });
   const attendant = new THREE.Group(); attendant.position.set(8, 0, 9.2); scene.add(attendant);
   const navy = mat(0x1a3a5a, { roughness: 0.85 });
   const skin = mat(0x8a5a3a, { roughness: 0.8 });

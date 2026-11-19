@@ -328,22 +328,35 @@ function posterTexture(kind) {
     }
   });
 }
+// Shrink a sign's font until the text fits its board: the old fixed
+// 52px clipped any text wider than the 512px board. Every sign drawn
+// through this helper now fits.
+function fitSignFont(ctx, text, maxWidth, startPx, weight) {
+  let px = startPx;
+  ctx.font = weight + px + 'px Arial';
+  while (px > 12 && ctx.measureText(text).width > maxWidth) {
+    px -= 2;
+    ctx.font = weight + px + 'px Arial';
+  }
+  return px;
+}
 function signTexture(text, bg, fg, sub) {
   return canvasTexture(512, 128, (ctx, w, h) => {
     ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = fg; ctx.font = 'bold 52px Arial'; ctx.textAlign = 'center';
+    ctx.fillStyle = fg; ctx.textAlign = 'center';
     // The '▼' glyph does not render in Arial on the test browser - every
     // round the testers reported no triangle on the sign, only the separate
     // cone below it. Draw the triangle explicitly as a filled path.
     let drawText = text, tri = false;
     if (text.startsWith('▼')) { tri = true; drawText = text.slice(1).trim(); }
+    fitSignFont(ctx, drawText, w - 24, 52, 'bold ');
     ctx.fillText(drawText, w / 2, 62);
     if (tri) {
       const tw = ctx.measureText(drawText).width;
       const cx = w / 2 - tw / 2 - 38, cy = 46, s = 22;
       ctx.beginPath(); ctx.moveTo(cx, cy + s); ctx.lineTo(cx - s * 0.9, cy - s * 0.7); ctx.lineTo(cx + s * 0.9, cy - s * 0.7); ctx.closePath(); ctx.fill();
     }
-    if (sub) { ctx.font = '26px Arial'; ctx.fillText(sub, w / 2, 102); }
+    if (sub) { fitSignFont(ctx, sub, w - 24, 26, ''); ctx.fillText(sub, w / 2, 102); }
     ctx.textAlign = 'left';
   });
 }

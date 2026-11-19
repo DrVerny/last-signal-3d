@@ -150,11 +150,26 @@ function glowTexture() {
   });
 }
 const GLOW_TEX = glowTexture();
+// Shrink a sign's font until the text fits its board: the old fixed
+// 52px clipped any text wider than the 512px board, so "GRAND CENTRAL -
+// ENTRANCE" read as "AND CENTRAL - ENTRAN" and "RENTAL CAR - 0.05 ZAMA"
+// lost both ends. Every sign drawn through this helper now fits.
+function fitSignFont(ctx, text, maxWidth, startPx, weight) {
+  let px = startPx;
+  ctx.font = weight + px + 'px Arial';
+  while (px > 12 && ctx.measureText(text).width > maxWidth) {
+    px -= 2;
+    ctx.font = weight + px + 'px Arial';
+  }
+  return px;
+}
 function signTexture(text, bg, fg, sub) {
   return canvasTexture(512, 128, (ctx, w, h) => {
     ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = fg; ctx.font = 'bold 52px Arial'; ctx.textAlign = 'center'; ctx.fillText(text, w / 2, 62);
-    if (sub) { ctx.font = '26px Arial'; ctx.fillText(sub, w / 2, 102); }
+    ctx.fillStyle = fg; ctx.textAlign = 'center';
+    fitSignFont(ctx, text, w - 24, 52, 'bold ');
+    ctx.fillText(text, w / 2, 62);
+    if (sub) { fitSignFont(ctx, sub, w - 24, 26, ''); ctx.fillText(sub, w / 2, 102); }
     ctx.textAlign = 'left';
   });
 }
@@ -395,7 +410,12 @@ let lastDamLevel = -1; // last roar level sent to setAmbientLevel
 // normal mission spawn is used).
 const PARKING = {
   1: { cx: 8.3, cz: 4.25, carX: 6.9, carZ: 4.25, carRotY: Math.PI, driveSpawn: { x: 8.3, z: 3.9, yaw: 0 } },
-  2: { cx: -5.7, cz: 9.0, carX: -4.3, carZ: 9.0, carRotY: Math.PI, driveSpawn: { x: -1.8, z: 9.0, yaw: 0 } },
+  // Mission 2 lot: cz is 7.0, not 9.0. The seated camera sits about 4.2 m
+  // behind the parked car, and at cz 9.0 it landed south of the yard's
+  // south fence (z 12), looking through the fence into a dark yard with
+  // no lot, building or guards in view. At cz 7.0 the camera lands at z
+  // about 11.2, inside the yard.
+  2: { cx: -5.7, cz: 7.0, carX: -4.3, carZ: 7.0, carRotY: Math.PI, driveSpawn: { x: -1.8, z: 7.0, yaw: 0 } },
   3: { cx: 6.0, cz: 11.85, carX: 4.6, carZ: 11.85, carRotY: Math.PI, driveSpawn: null }
 };
 let arrivedByDrive = false; // true while the mission start that follows a drive runs
@@ -1027,7 +1047,9 @@ async function loadHumans() {
       // A pulsing gold "!" above each guard until they stand down, so the
       // player can see at a glance that the guards are the way in.
       const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
-      marker.scale.set(0.55, 0.55, 1); marker.position.set(0, 2.35, 0); marker.name = 'guardMarker';
+      // The '!' marker is the only thing that marks a guard at dusk: it was
+      // too small and faint to read at 7-8 m, so it is bigger now.
+      marker.scale.set(0.8, 0.8, 1); marker.position.set(0, 2.35, 0); marker.name = 'guardMarker';
       g.add(marker); guardMarkers.push(marker);
     }
   }
@@ -1083,9 +1105,11 @@ function buildValveRoom() {
   const gl = new THREE.PointLight(0xd8e8ff, 0.8, 7); gl.position.set(0, 3.0, -4.6); room.add(gl);
   const fix = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.3), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, emissive: 0xd8e8ff, emissiveIntensity: 1.2 }));
   fix.position.set(0, 3.15, -3.5); room.add(fix);
-  // VALVE ROOM sign above the door, inside.
+  // VALVE ROOM sign above the door, inside. It hangs below the ceiling
+  // pipe runs (y 2.73 and up) and south of their front ends (z -1.0), so
+  // the sign reads whole instead of hiding behind a pipe.
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
-  sign.scale.set(3.2, 0.8, 1); sign.position.set(0, 2.45, -1.2); room.add(sign);
+  sign.scale.set(3.2, 0.8, 1); sign.position.set(0, 2.3, -0.85); room.add(sign);
   // EXIT door in the doorway (click it to go back outside) + green EXIT sign.
   // Like the outside door it hangs in a hinge group at its edge, with a
   // brass lever handle on the room side, so leaving works the same way:
@@ -1464,7 +1488,10 @@ function buildMission1() {
     gaugeHit.position.set(v.x, 2.3, -5.8); gaugeHit.name = wheel.name; gaugeHit.userData.clickable = true; mission1.add(gaugeHit);
     window._valveMeshes[v.key + 'GaugeHit'] = gaugeHit;
     const lbl = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture(v.label, '#111111', '#e8e8e8', ''), transparent: true, depthWrite: false }));
-    lbl.scale.set(2.2, 0.55, 1); lbl.position.set(v.x, 2.9, -5.7); mission1.add(lbl);
+    // The label sits in front of the ceiling pipe drops (which pierce the
+    // label plane at z -5.7): at z -5.35 the first letters no longer hide
+    // behind a pipe, so "RESIDENTIAL" and "INDUSTRIAL" read whole.
+    lbl.scale.set(2.2, 0.55, 1); lbl.position.set(v.x, 2.9, -5.35); mission1.add(lbl);
   }
   // A long main pipe along the back wall, joining the three valves.
   const mainPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 7.5, 12), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 }));
@@ -1810,6 +1837,13 @@ function buildMission2() {
   // Parking lot in the yard forecourt, west of the spawn, in front of
   // the control room: the player's car pulls in here off the road.
   buildParkingLot(mission2, PARKING[2].cx, PARKING[2].cz, PARKING[2].carX);
+  // A lamp over the lot and a lit sign on the control room, so the yard
+  // reads at dusk: the lot, the P sign and the building were lost in the
+  // dark on the first live check, and the road beyond the fence was the
+  // only thing that read.
+  try { const lotLamp = makeStreetLight(Math.PI, 0.08); lotLamp.group.position.set(-8.5, 0, 5.0); mission2.add(lotLamp.group); } catch (e) { /* lamp is decoration */ }
+  const subSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('CON EDISON SUBSTATION', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
+  subSign.scale.set(5, 1.25, 1); subSign.position.set(0, 3.1, -2.1); mission2.add(subSign);
   // The living city around the yard: the substation sits in Long Island
   // City, so beyond the north fence there is a road with moving cars,
   // houses, an elevated train track with a passing train, and the
@@ -2251,6 +2285,7 @@ const TRAVEL_PLACES = {
   hospital: { name: 'City Hospital', short: 'Hospital', x: 0.45, y: 0.12, desc: 'City hospital - the Bronx', type: 'visit', kind: 'hospital' },
   windtunnel: { name: 'Wind Tunnel Lab', short: 'Wind Tunnel', x: 0.44, y: 0.22, desc: 'Engineering lab - Morningside Heights', type: 'visit', kind: 'windtunnel' },
   hotels: { name: 'Hotels', short: 'Hotels', x: 0.56, y: 0.32, desc: 'A hotel suite - Midtown', type: 'home', kind: 'hotel' },
+  marketstreet: { name: 'Market Street', short: 'Market St', x: 0.66, y: 0.24, desc: 'Market street - stalls and shops, Midtown', type: 'visit', kind: 'marketstreet' },
   symposium: { name: 'Symposium Hall', short: 'Symposium', x: 0.84, y: 0.32, desc: 'Symposium hall - Astoria, Queens', type: 'visit', kind: 'symposium' },
   clothing: { name: 'Clothing Store', short: 'Clothing', x: 0.44, y: 0.44, desc: 'Buy clothes - Manhattan', type: 'store', tab: 'clothes' },
   dealership: { name: 'Car Dealership', short: 'Dealership', x: 0.70, y: 0.42, desc: 'Buy cars - Queens', type: 'store', tab: 'cars' },
@@ -2327,7 +2362,13 @@ const DISTANCES = {
   'sensorvault>reservoir': 85, 'sensorvault>hospital': 36, 'sensorvault>industry': 2, 'sensorvault>mansion': 14,
   'sensorvault>dealership': 15, 'sensorvault>clothing': 22, 'sensorvault>substation': 24, 'sensorvault>safehouse': 12, 'sensorvault>bridge': 30,
   'sensorvault>airport': 34, 'sensorvault>hotels': 26, 'sensorvault>terminal': 28, 'sensorvault>carpark': 24,
-  'sensorvault>windtunnel': 20, 'sensorvault>symposium': 12, 'sensorvault>zama': 20, 'sensorvault>court': 21, 'sensorvault>policestation': 22, 'sensorvault>navybarracks': 10
+  'sensorvault>windtunnel': 20, 'sensorvault>symposium': 12, 'sensorvault>zama': 20, 'sensorvault>court': 21, 'sensorvault>policestation': 22, 'sensorvault>navybarracks': 10,
+  // Market Street (Midtown): close to the Midtown places, far from upstate.
+  'marketstreet>reservoir': 74, 'marketstreet>hospital': 28, 'marketstreet>industry': 20, 'marketstreet>mansion': 26,
+  'marketstreet>dealership': 8, 'marketstreet>clothing': 2, 'marketstreet>substation': 9, 'marketstreet>safehouse': 11, 'marketstreet>bridge': 18,
+  'marketstreet>airport': 30, 'marketstreet>hotels': 7, 'marketstreet>terminal': 3, 'marketstreet>carpark': 6,
+  'marketstreet>windtunnel': 6, 'marketstreet>symposium': 10, 'marketstreet>zama': 4, 'marketstreet>court': 5,
+  'marketstreet>policestation': 5, 'marketstreet>navybarracks': 12, 'marketstreet>sensorvault': 22
 };
 function getMiles(a, b) {
   if (a === b) return 0;
@@ -2516,6 +2557,41 @@ function setTimeOfDay(mode) {
   }
 }
 
+// Low-rise street-front shops lining the left side of the drive road:
+// 2-3 storeys, fronts at x -6.1 just behind the sidewalk, ground-floor
+// shopfronts with glass, doors and striped awnings. Each building is
+// about 20 m along the road with two shopfronts (each 8-12 m wide), so a
+// row of about 290 m holds 12 buildings. Gaps are left at the two gas
+// stations so they stay visible from the road. palette is a shared
+// skyFacadePalette (registered, so the window glow follows the time of day).
+function makeMarketShopRow(zTop, zBottom, palette, startIdx) {
+  const shopNames = ['CAFE', 'DELI', 'BAKERY', 'PHARMACY', 'FLOWERS', 'BOOKS', 'PIZZA', 'MARKET'];
+  const awnCols = [0xc0392b, 0x2e6fb0, 0x2e7a4a, 0xc07a1a, 0x7a2e5a, 0x3a3a3a, 0xd8b13a, 0x2e6a7a];
+  const mats = [palette[2], palette[3], palette[4], palette[5]];
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x2a4a6a, roughness: 0.15, metalness: 0.4 });
+  const doorMat = stdMat({ color: 0x2a2118, roughness: 0.7 });
+  const corniceMat = stdMat({ color: 0xe8ecef, roughness: 0.9 });
+  let n = 0;
+  for (let zc = zTop - 12; zc >= zBottom + 12; zc -= 24) {
+    if (Math.abs(zc + 90) < 16 || Math.abs(zc + 560) < 16) continue; // keep the gas stations visible
+    const h = 6 + (n % 3) * 1.5;
+    const shop = new THREE.Mesh(new THREE.BoxGeometry(5, h, 20), mats[(startIdx + n) % mats.length]);
+    shop.position.set(-8.6, h / 2, zc); shop.castShadow = true; travelGroup.add(shop);
+    const cornice = new THREE.Mesh(new THREE.BoxGeometry(5.3, 0.25, 20.3), corniceMat);
+    cornice.position.set(-8.6, h + 0.1, zc); travelGroup.add(cornice);
+    for (let j = 0; j < 2; j++) {
+      const fz = zc - 5 + j * 10;
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(3.5, 2.2), glassMat);
+      glass.position.set(-6.08, 1.4, fz - 1.5); glass.rotation.y = Math.PI / 2; travelGroup.add(glass);
+      const door = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.2, 1.0), doorMat);
+      door.position.set(-6.05, 1.1, fz + 2.5); travelGroup.add(door);
+      const awn = makeShopAwning(awnCols[(startIdx + n * 2 + j) % awnCols.length], shopNames[(startIdx + n * 2 + j) % shopNames.length]);
+      awn.position.set(-6.0, 0, fz); awn.rotation.y = Math.PI / 2; travelGroup.add(awn);
+    }
+    n++;
+  }
+}
+
 function buildTravelScene() {
   if (travelGroup) return travelGroup;
   travelGroup = new THREE.Group();
@@ -2569,6 +2645,7 @@ function buildTravelScene() {
   for (let z = -18; z >= -700; z -= 24) {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.3) continue;
+      if (side === -1 && ((z <= -10 && z >= -300) || (z <= -360 && z >= -650))) continue; // left trees would stand inside the shop fronts
       const tree = makeStreetTree();
       tree.position.set(side * 6.2, 0, z); travelGroup.add(tree);
     }
@@ -2593,6 +2670,7 @@ function buildTravelScene() {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.25) continue; // gaps so the street breathes
       if (landmarkZ[String(side)].some(lz => Math.abs(z - lz) < 12)) continue;
+      if (side === -1 && ((z <= -10 && z >= -300) || (z <= -360 && z >= -650))) continue; // shop rows line the left side here
       const pick = pickSkyscraper(drivePalette, 0);
       const bx = side * (7.5 + pick.w / 2 + Math.random() * 4);
       const bz = z + (Math.random() * 4 - 2);
@@ -2616,6 +2694,12 @@ function buildTravelScene() {
       lamp.group.position.set(side * 5.2, 0, z); travelGroup.add(lamp.group);
     }
   }
+  // Market Street shop rows on the left side of the drive: row 1 from
+  // the start of the drive, row 2 further along past the 3-mile mark
+  // (z -360 is roughly 3 miles into a typical 6-8 mile drive, since the
+  // 720 m road stands in for the whole trip).
+  makeMarketShopRow(-10, -300, drivePalette, 0);
+  makeMarketShopRow(-360, -650, drivePalette, 2);
   // Landmark on the drive: a tall white hospital tower with a rounded
   // corner and rows of windows, like the photo, plus a lower white wing.
   // It stands out from the other buildings so the city reads as the photo.
@@ -3591,7 +3675,7 @@ function startMission2() {
   // arrival he starts seated in the parked car and opens the door to
   // step out; any other entry just stands him beside it.
   parkPlayerCar(2);
-  if (!seatIfDrove(2)) applyDriveSpawn(2);
+  // Seating happens below, with the briefing as the get-out callback.
   setTimeOfDay('dusk'); // Mission 2 (substation) is dusk/evening.
   currentPlaceKey = 'substation';
   try { localStorage.setItem('lastSignalAct2Mission', '2'); } catch (e) { /* private mode */ }
@@ -3604,18 +3688,27 @@ function startMission2() {
   document.getElementById('timerVal').textContent = 'armed';
   document.getElementById('timerBar').style.width = '100%';
   // The reason for Mission 2: who called, what is wrong, what is at stake.
-  showBriefing({
-    title: 'Mission 2 - The Grid',
-    calledBy: 'Jade Morales and Con Edison - they called you in after the aqueduct.',
-    problem: 'A logic bomb is sitting in the SCADA system at the Con Edison substation. The guards at the gate are private security, hired through a shell company - they do not know what they are protecting.',
-    stakes: 'At 8 PM the bomb cascades: one substation trips, overloads the next, and takes down the Northeast grid. The whole city goes dark.'
-  }, () => {
-  showDialogue([
-    { who: 'Jade Morales', text: 'Six PM. Con Edison substation, Long Island City. A logic bomb is sitting in the SCADA system. At eight it cascades - one substation trips, overloads the next, and takes down the Northeast grid.' },
-    { who: 'Caleb Bishop', text: 'And the guards are not his people. Private security, hired through a shell company. They do not know what they are protecting.' },
-    { who: 'Jade Morales', text: 'So we do not fight them. You walk up as a city inspector. I feed you the jargon through your earpiece. Click a guard to start.' }
-  ], () => { toast('Walk up to a guard (or click one) - Caleb talks his way in.'); });
-  });
+  // The briefing waits until the player is on foot: on a drive arrival he
+  // starts seated in the parked car, and the "walk up to a guard" objective
+  // must never fire while he is still sitting in it (movement and the
+  // camera are locked while seated, so the scene looked frozen and the
+  // player looked stuck in the car). The briefing runs as the get-out
+  // callback; any other entry stands him beside the car and runs it at once.
+  const startBriefing = () => {
+    showBriefing({
+      title: 'Mission 2 - The Grid',
+      calledBy: 'Jade Morales and Con Edison - they called you in after the aqueduct.',
+      problem: 'A logic bomb is sitting in the SCADA system at the Con Edison substation. The guards at the gate are private security, hired through a shell company - they do not know what they are protecting.',
+      stakes: 'At 8 PM the bomb cascades: one substation trips, overloads the next, and takes down the Northeast grid. The whole city goes dark.'
+    }, () => {
+      showDialogue([
+        { who: 'Jade Morales', text: 'Six PM. Con Edison substation, Long Island City. A logic bomb is sitting in the SCADA system. At eight it cascades - one substation trips, overloads the next, and takes down the Northeast grid.' },
+        { who: 'Caleb Bishop', text: 'And the guards are not his people. Private security, hired through a shell company. They do not know what they are protecting.' },
+        { who: 'Jade Morales', text: 'So we do not fight them. You walk up as a city inspector. I feed you the jargon through your earpiece. Click a guard to start.' }
+      ], () => { toast('Walk up to a guard (or click one) - Caleb talks his way in.'); });
+    });
+  };
+  if (!seatIfDrove(2, startBriefing)) { applyDriveSpawn(2); startBriefing(); }
 }
 // Hide the gold "!" markers over the guards once they stand down.
 function hideGuardMarkers() { for (const m of guardMarkers) m.visible = false; }
@@ -4091,6 +4184,13 @@ function handleTap(clientX, clientY) {
   if (parkedSeatActive && parkedSeat && parkedSeat.doorHit) {
     const doorHits = ray.intersectObject(parkedSeat.doorHit, false);
     if (doorHits.length) { interact('carDoor'); return; }
+    // A tap anywhere on the parked car also opens the door: from the
+    // seated view the door sits on one side of the car, and a tap
+    // dead-centre on the car must not miss it entirely.
+    if (parkedSeat.car) {
+      const carHits = ray.intersectObject(parkedSeat.car, true);
+      if (carHits.length) { interact('carDoor'); return; }
+    }
   }
   // While a dialogue or a modal is open the player is reading or choosing:
   // canvas taps must not re-trigger an interaction and reset the queue.
@@ -4398,7 +4498,7 @@ function animate() {
       gp.group.rotation.y = Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2;
     }
     for (const m of guardMarkers) {
-      const s = 0.55 + Math.sin(t * 4) * 0.12;
+      const s = 0.8 + Math.sin(t * 4) * 0.15;
       m.scale.set(s, s, 1);
       m.material.opacity = 0.75 + Math.sin(t * 4) * 0.25;
     }
@@ -4406,12 +4506,18 @@ function animate() {
     // bluff on his own. This is the forgiving path for players who do
     // not think to click - walking up to the police is the natural move.
     // (Only when no dialogue or modal is open, so it never fires over
-    // the intro scene or another interaction.)
+    // the intro scene or another interaction.) The radius is 4 m, not
+    // 2.5: the guards patrol 1.8 m either way along the gate line, so a
+    // 2.5 m radius could be missed by a player walking straight through
+    // the gate while a guard was at the far end of their patrol, and
+    // they would walk on past the gate with nothing firing. At 4 m the
+    // approach to the gate always starts the dialogue, whatever phase
+    // the patrol is in.
     if (document.getElementById('dialogue').classList.contains('hidden')
       && document.getElementById('valveModal').classList.contains('hidden')
       && document.getElementById('scadaModal').classList.contains('hidden')) {
       for (const gp of guardPatrol) {
-        if (dist2D(camera.position.x, camera.position.z, gp.group.position.x, gp.group.position.z) < 2.5) {
+        if (dist2D(camera.position.x, camera.position.z, gp.group.position.x, gp.group.position.z) < 4) {
           guardDialogue();
           break;
         }
