@@ -8,6 +8,7 @@ import { initSoundUI, setAmbient, setAmbientLevel, setTension, soundTick, sfxRep
 import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
+import { makeRiggedPerson, updateRiggedPerson } from './crowd.js';
 import { grantPayout, openStore, getEquippedCarDef, getBalance, moneyFmt, spendMoney, getFuel, consumeFuelMiles } from './economy.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson, resolveMove, addBoxCollider } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
@@ -576,7 +577,14 @@ function showGetOutButton() {
     getOutBtnEl.innerHTML = '<button type="button" id="getOutBtnInner" style="padding:14px 26px;font-size:17px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:10px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.5);">Get out of the car</button>';
     getOutBtnEl.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);z-index:56;text-align:center;pointer-events:auto;';
     document.body.appendChild(getOutBtnEl);
-    document.getElementById('getOutBtnInner').onclick = () => { getOutOfParkedCar(); };
+    const inner = document.getElementById('getOutBtnInner');
+    // Answer both the click and the raw pointerup: a real press that
+    // drifts a few pixels before release can lose its click event, and
+    // a lost click here left the player seated with every other input
+    // (WASD, drags, Reset, C) ignored by the seated camera branch.
+    // getOutOfParkedCar no-ops when not seated, so double-firing is safe.
+    inner.onclick = () => { getOutOfParkedCar(); };
+    inner.addEventListener('pointerup', () => { getOutOfParkedCar(); });
   }
   getOutBtnEl.style.display = 'block';
 }
@@ -653,6 +661,9 @@ function seatPlayerInParkedCar(car, getOutPos, onGetOut) {
   car.add(driver);
   parkedSeat = { car, door: door.group, doorHit: door.hit, getOutPos, onGetOut: onGetOut || null, doorOpen: false };
   parkedSeatActive = true;
+  // The seated camera orbits with drags (see updateParkedSeatView):
+  // start every seat at the default framing, facing the building.
+  state.yaw = 0; state.pitch = 0;
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   showGetOutButton();
   toast('You are parked. Click the car door, or Get out, to step outside.');
@@ -716,8 +727,12 @@ function getOutOfParkedCar() {
   }
 }
 // Chase camera while the player is seated in a parked car: behind and
-// to the driver's side, so he sees himself in the car and the door he
-// can click. The drive's chase view is the same idea.
+// to the driver's side, looking PAST the car toward the building it
+// faces, so the destination (the substation yard, the hospital, the
+// hall) fills the frame instead of the car's roof with the bright
+// street beyond it. Dragging orbits the view around the car (state.yaw
+// is the orbit offset, state.pitch the height; both reset on seating
+// and again on get-out, so the on-foot facing is never affected).
 function updateParkedSeatView() {
   if (!parkedSeat || !parkedSeat.car) return;
   const car = parkedSeat.car;
@@ -727,9 +742,16 @@ function updateParkedSeatView() {
   car.getWorldQuaternion(q);
   const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
   const side = new THREE.Vector3(-1, 0, 0).applyQuaternion(q);
-  camera.position.set(pos.x - fwd.x * 4.2 + side.x * 2.2, 2.0, pos.z - fwd.z * 4.2 + side.z * 2.2);
+  const orbit = state.yaw || 0;
+  const cosO = Math.cos(orbit), sinO = Math.sin(orbit);
+  const dirX = fwd.x * cosO + fwd.z * sinO;
+  const dirZ = -fwd.x * sinO + fwd.z * cosO;
+  const sideX = side.x * cosO + side.z * sinO;
+  const sideZ = -side.x * sinO + side.z * cosO;
+  const camY = Math.max(1.3, Math.min(4.2, 2.0 + (state.pitch || 0) * 1.5));
+  camera.position.set(pos.x - dirX * 4.2 + sideX * 1.2, camY, pos.z - dirZ * 4.2 + sideZ * 1.2);
   camera.rotation.order = 'YXZ';
-  camera.lookAt(pos.x, 1.0, pos.z);
+  camera.lookAt(pos.x + dirX * 7, 1.3, pos.z + dirZ * 7);
 }
 // Advance an opening car door: swings from closed to about 66 degrees
 // over half a second, then stays open.
@@ -985,8 +1007,22 @@ canvas.addEventListener('pointercancel', endDrag);
 addEventListener('pointerup', endDrag);
 addEventListener('blur', endDrag);
 const keys = {};
-addEventListener('keydown', e => { if (!actActive) return; keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); });
+addEventListener('keydown', e => {
+  if (!actActive) return;
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  // Seated in a parked car, the natural "let me move" keys step him
+  // out first (the key stays held, so he walks on from the door):
+  // without this a missed button click left WASD, drags, Reset and C
+  // all dead in the seated branch and the arrival read as frozen.
+  if (parkedSeatActive && (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'e')) getOutOfParkedCar();
+  if (k === 'r') resetView();
+});
 addEventListener('keyup', e => { if (!actActive) return; keys[e.key.toLowerCase()] = false; });
+// A keyup lost to a focus change would leave a movement key stuck on
+// forever (W cancelled by a phantom S reads as "cannot move, reload
+// required"): drop every held key when the window loses focus.
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 addEventListener('resize', () => { if (!actActive) return; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
 // ---------- Characters (shared across missions) ----------
@@ -1072,8 +1108,13 @@ async function loadHumans() {
     // the group, all sitting above y 1.0; the model's own roots sit at y 0).
     derrick.children = derrick.children.filter(c => c.position.y <= 1.0);
     mission3.add(derrick); placeHuman(derrick, 'derrick', 0, -6, 0, calebBase.scale);
-    const dark = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.9, metalness: 0.02 });
-    for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
+    // Slate-blue security uniform, light enough to read against the
+    // dark yard at dusk (the old near-black 0x1c1c22 made the guards
+    // invisible silhouettes on the live checks).
+    const dark = new THREE.MeshStandardMaterial({ color: 0x4a5a74, roughness: 0.85, metalness: 0.02 });
+    // Skip if the crowd-rig fallback already stood guards up (a slow
+    // Caleb fetch must not double the guard line when it lands).
+    if (!guardPatrol.length) for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
       const g = calebBase.group.clone(true);
       g.name = gname;
       g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = dark; });
@@ -1088,7 +1129,7 @@ async function loadHumans() {
       const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
       // The '!' marker is the only thing that marks a guard at dusk: it was
       // too small and faint to read at 7-8 m, so it is bigger now.
-      marker.scale.set(0.8, 0.8, 1); marker.position.set(0, 2.35, 0); marker.name = 'guardMarker';
+      marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
       g.add(marker); guardMarkers.push(marker);
     }
     afterHuman();
@@ -1176,6 +1217,11 @@ function buildValveRoom() {
   // EXIT sign keeps the west wall segment.)
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
   sign.scale.set(1.7, 0.42, 1); sign.position.set(0, 2.5, -1.25); room.add(sign);
+  // A second VALVE ROOM sign on the back wall, above the gauges: the
+  // front-wall sign sits behind the entry camera, so the player never
+  // faced it. This one reads whole from the door and from the valves.
+  const signBack = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('VALVE ROOM', '#2a2118', '#ffd166', 'UNDERGROUND - LEVEL B1'), transparent: true, depthWrite: false }));
+  signBack.scale.set(1.7, 0.42, 1); signBack.position.set(0, 3.0, -5.85); room.add(signBack);
   // One door only in this doorway: the station door slab outside is the
   // single front door, and it works both ways (in with the key, out
   // from inside without it). There used to be a second slab here, the
@@ -1247,7 +1293,11 @@ function enterValveRoom() {
   // at the room spawn.
   try { setPlayerPos(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[2]); } catch (e) { /* ignore */ }
   state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
-  setObjectives(OBJ1, 2);
+  // Objectives only move forward: re-entering after the hold and the
+  // choice must keep the device objective struck through to it, not
+  // reset the list to the balancing step (which read as the mission
+  // un-finishing itself and needing a reload).
+  setObjectives(OBJ1, state.waterStable ? 4 : 2);
   toast('Down in the valve chamber, under the tower - walk up to a valve wheel to open the pressure controls. Click the station door to go back outside.');
 }
 function exitValveRoom() {
@@ -1526,6 +1576,11 @@ function buildMission1() {
   keyGroup.userData.keyId = 'station'; keyGroup.userData.keyLabel = 'station key';
   mission1.add(keyGroup);
   window._stationKey = keyGroup;
+  // Generous invisible click target around the key: the group itself
+  // has no geometry, so a click on the key meshes would miss it.
+  const keyHit = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.7), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  keyHit.position.set(1.5, 1.5, -0.6); keyHit.name = 'stationKey'; keyHit.userData.clickable = true; mission1.add(keyHit);
+  window._stationKeyHit = keyHit;
   const keyLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.28), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.9 }));
   keyLabel.position.set(1.5, 1.95, -0.6); keyLabel.name = 'stationKeyLabel'; mission1.add(keyLabel);
   window._stationKeyLabel = keyLabel;
@@ -1575,16 +1630,17 @@ function buildMission1() {
     gaugeHit.position.set(v.x, 2.3, -5.8); gaugeHit.name = wheel.name; gaugeHit.userData.clickable = true; mission1.add(gaugeHit);
     window._valveMeshes[v.key + 'GaugeHit'] = gaugeHit;
     const lbl = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture(v.label, '#111111', '#e8e8e8', ''), transparent: true, depthWrite: false }));
-    // The label sits in front of the ceiling pipe drops (which pierce the
-    // label plane at z -5.7): at z -5.5 the first letters no longer hide
-    // behind a pipe, so "RESIDENTIAL" and "INDUSTRIAL" read whole. It is
-    // narrower than the old 2.2 m board and the two outer labels sit
-    // 0.2 m inboard of their gauges: at 2.2 m wide on x -3 the HOSPITAL
-    // board ran past the west wall and under the top-left HUD panel, so
-    // it read "SPITAL" from the door. Lower (y 2.78, just above the
-    // gauge rim) also keeps it clear of the ceiling pipe runs.
-    const lx = v.x === 0 ? 0 : v.x - Math.sign(v.x) * 0.3;
-    lbl.scale.set(1.55, 0.39, 1); lbl.position.set(lx, 2.74, -5.5); mission1.add(lbl);
+    // The label sits well in front of the ceiling pipe drops: the
+    // drops (radius 0.22 at z -5.7) have their front surface at
+    // z -5.48, which poked through the old label plane at z -5.5 and
+    // hid the first letters ("INDUSTRIAL" read "NDUSTRIAL"). At
+    // z -5.3 the whole board is in front of every pipe. The outer
+    // labels sit 0.45 m inboard of their gauges and the board is
+    // 1.4 m wide, so "HOSPITAL" stays clear of the top-left HUD panel
+    // even when the camera is shifted right. y 2.78 keeps it just
+    // above the gauge rim, clear of the ceiling pipe runs.
+    const lx = v.x === 0 ? 0 : v.x - Math.sign(v.x) * 0.45;
+    lbl.scale.set(1.4, 0.35, 1); lbl.position.set(lx, 2.78, -5.3); mission1.add(lbl);
   }
   // A long main pipe along the back wall, joining the three valves.
   const mainPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 7.5, 12), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.35 }));
@@ -1701,7 +1757,7 @@ function moralChoiceWater() {
     { who: 'Radio', text: 'Copy, Bishop. We will make it work. Hospitals report pressure coming back up.' },
     { who: 'Caleb', text: 'It does not feel good.' },
     { who: 'Jade', text: 'It is not supposed to. Now - that board on the wall. Click it. It is not MTA issue.' }
-  ], () => { setObjectives(OBJ1, 4); toast('Click the small green circuit board on the station wall - it is outside, so leave the valve room first if you are still in it.'); });
+  ], () => { setObjectives(OBJ1, 4); toast('Click the small green circuit board under the staircase, here in the valve room.'); });
 }
 // Act II arrival: the player steps off the train at Rondout station.
 // No briefing, no dialogue yet: he takes the rental car by the
@@ -1763,6 +1819,7 @@ function startMission1() {
   try {
     const hasIt = hasKey('station');
     if (window._stationKey) window._stationKey.visible = !hasIt;
+    if (window._stationKeyHit) window._stationKeyHit.visible = !hasIt;
     if (window._stationKeyLabel) window._stationKeyLabel.visible = !hasIt;
   } catch (e) { /* ignore */ }
   setObjectives(OBJ1, 0); updateHUD();
@@ -1814,8 +1871,11 @@ function buildStationRental() {
   // Floating board sign so the player can find it from the platform: a
   // solid dark board (not bare text on transparency, which vanished
   // against the sky and trees and never read whole on the live checks).
+  // It stands between the track and the car, north of the pad, so it
+  // reads whole on the walk north from the platform (over the car at
+  // x 4.5 it sat far right of the northward view and was never seen).
   const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RENTAL CAR - 0.05 ZAMA', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
-  label.scale.set(4.8, 1.2, 1); label.position.set(4.5, 3.1, 9.0); g.add(label);
+  label.scale.set(6, 1.5, 1); label.position.set(1.8, 3.0, 8.5); g.add(label);
   // Generous invisible hit box over the car, so a tap anywhere on it
   // takes the rental.
   const hit = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.4, 5.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
@@ -2002,10 +2062,10 @@ function buildMission2() {
     head.position.set(fx, 4.65, 4.5); head.rotation.x = 0.5; mission2.add(head);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
     glow.scale.set(3.2, 3.2, 1); glow.position.set(fx, 4.5, 4.5); mission2.add(glow);
-    const fl = new THREE.PointLight(0xffd9a0, 38, 30, 2);
+    const fl = new THREE.PointLight(0xffd9a0, 140, 34, 2);
     fl.position.set(fx, 4.4, 4.5); mission2.add(fl);
   }
-  const lotLight = new THREE.PointLight(0xffd9a0, 30, 26, 2);
+  const lotLight = new THREE.PointLight(0xffd9a0, 100, 30, 2);
   lotLight.position.set(-8.5, 4.1, 6.1); mission2.add(lotLight);
   const subSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('CON EDISON SUBSTATION', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
   subSign.scale.set(7, 1.75, 1); subSign.position.set(0, 3.6, -2.1); mission2.add(subSign);
@@ -3900,6 +3960,28 @@ function reparentCast(name, group, x, z, yaw) {
   g.position.set(x, 0, z); g.rotation.y = yaw;
   group.add(g);
 }
+// Fallback guards from the crowd rigs, built only if Caleb's model has
+// not landed by Mission 2 (the guards normally clone Caleb in
+// addCaleb). The crowd models load at import time on their own files,
+// so the yard is never left guard-less by one slow fetch. If neither
+// has landed, this does nothing and Caleb's background retries still
+// deliver the guards when they land.
+function buildFallbackGuards() {
+  if (guardPatrol.length) return;
+  for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
+    let person = null;
+    try { person = makeRiggedPerson({ x: gx, z: gz, heading: Math.PI }); } catch (e) { person = null; }
+    if (!person || !person.group) continue;
+    const g = person.group;
+    g.name = gname;
+    mission2.add(g);
+    placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
+    guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person });
+    const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
+    marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
+    g.add(marker); guardMarkers.push(marker);
+  }
+}
 function startMission2() {
   mission1.visible = false; mission2.visible = true; mission3.visible = false;
   // The yard is the only scene that may show here: a stale travel, trek
@@ -3910,6 +3992,9 @@ function startMission2() {
   if (typeof trekGroup !== 'undefined' && trekGroup) trekGroup.visible = false;
   if (typeof arrivalGroup !== 'undefined' && arrivalGroup) arrivalGroup.visible = false;
   state.mission = 2; resetView();
+  // The guards must exist by arrival: if Caleb's model is still in
+  // flight, stand in crowd-rig guards so the yard is never empty.
+  try { buildFallbackGuards(); } catch (e) { /* guards are best effort */ }
   // Third person on entering the mission, so the player sees himself.
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
   // The car pulls into the lot in the yard forecourt. On a drive
@@ -4448,7 +4533,7 @@ function handleTap(clientX, clientY) {
   if (!document.getElementById('valveModal').classList.contains('hidden')) return;
   if (!document.getElementById('scadaModal').classList.contains('hidden')) return;
   const targets = [];
-  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._stationDoor, window._stationDoorHit, ...stationDoorHandleParts, window._stationKey, window._stationKeyLabel, window._rentalCarHit);
+  if (state.mission === 1) targets.push(...Object.values(window._valveMeshes || {}), window._device1, window._device1Hit, window._stationDoor, window._stationDoorHit, ...stationDoorHandleParts, window._stationKey, window._stationKeyHit, window._stationKeyLabel, window._rentalCarHit);
   if (state.mission === 2) targets.push(keycardMesh, window._keycardHit, logbookMesh, window._logbookHit, scadaMesh, manifestoMesh, window._manifestoHit);
   if (state.mission === 3) targets.push(...chargeMeshes, window._catwalkHit, ...(window._catwalkPlanks || []));
   const sceneHits = ray.intersectObjects(targets.filter(t => t && t.visible !== false), false);
@@ -4468,7 +4553,7 @@ function handleTap(clientX, clientY) {
 }
 canvas.addEventListener('click', e => {
   if (!actActive) return;
-  if (dragMoved > 6) { dragMoved = 0; return; }
+  if (dragMoved > 10) { dragMoved = 0; return; }
   dragMoved = 0;
   if (Date.now() - lastTapAt < 400) return; // already handled by pointerup
   lastTapAt = Date.now();
@@ -4478,7 +4563,12 @@ canvas.addEventListener('click', e => {
 // without a click event on the canvas. A tap (not a drag) is a click here.
 canvas.addEventListener('pointerup', e => {
   if (!actActive) return;
-  if (dragMoved > 6) { dragMoved = 0; return; }
+  // A drag must never become a tap: stamp lastTapAt when rejecting, or
+  // the click event that follows every pointerup sees dragMoved reset
+  // to 0 and fires handleTap at the release point - inside the valve
+  // room that phantom tap hit the station door and threw the player
+  // out mid-drag.
+  if (dragMoved > 10) { dragMoved = 0; lastTapAt = Date.now(); return; }
   dragMoved = 0;
   if (Date.now() - lastTapAt < 400) return;
   lastTapAt = Date.now();
@@ -4506,6 +4596,7 @@ function interact(name) {
     toast('Picked up the station key. The station door is unlocked.');
     sfxRepair();
     try { if (window._stationKey) window._stationKey.visible = false; } catch (e) { /* ignore */ }
+    try { if (window._stationKeyHit) window._stationKeyHit.visible = false; } catch (e) { /* ignore */ }
     try { if (window._stationKeyLabel) window._stationKeyLabel.visible = false; } catch (e) { /* ignore */ }
     return;
   }
@@ -4701,17 +4792,19 @@ function animate() {
       }
     }
   }
-  // Station key: walking up to the hook picks it up, so a missed click
-  // is not a dead end. The key is right beside the door, before the
-  // player needs it.
+  // Station key: walking right up to the hook picks it up, so a missed
+  // click is not a dead end. The radius is tight (0.6 m): at 1.2 m the
+  // walk to the door itself passed through it, so the key was taken
+  // silently on the way in and the door read as needing no key at all.
   if (state.mission === 1 && !inValveRoom && !hasKey('station')
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
-    if (dist2D(camera.position.x, camera.position.z, 1.5, -0.6) < 1.2) {
+    if (dist2D(camera.position.x, camera.position.z, 1.5, -0.6) < 0.6) {
       giveKey('station', 'station key');
       toast('Picked up the station key. The station door is unlocked.');
       sfxRepair();
       try { if (window._stationKey) window._stationKey.visible = false; } catch (e) { /* ignore */ }
+      try { if (window._stationKeyHit) window._stationKeyHit.visible = false; } catch (e) { /* ignore */ }
       try { if (window._stationKeyLabel) window._stationKeyLabel.visible = false; } catch (e) { /* ignore */ }
     }
   }
@@ -4782,11 +4875,13 @@ function animate() {
       const w = Math.sin(t * 0.45 + gp.phase);
       gp.group.position.x = gp.baseX + w * 1.8;
       gp.group.rotation.y = Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2;
+      // Fallback crowd-rig guards carry their own walk mixer.
+      if (gp.person) { try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ } }
     }
     for (const m of guardMarkers) {
-      const s = 0.8 + Math.sin(t * 4) * 0.15;
+      const s = 1.15 + Math.sin(t * 4) * 0.18;
       m.scale.set(s, s, 1);
-      m.material.opacity = 0.75 + Math.sin(t * 4) * 0.25;
+      m.material.opacity = 0.85 + Math.sin(t * 4) * 0.15;
     }
     // Walk up to a guard: if the player gets close, Caleb starts the
     // bluff on his own. This is the forgiving path for players who do

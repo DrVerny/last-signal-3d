@@ -1210,6 +1210,11 @@ export function applyPlayerPresence(o) {
   // instead of tipping over the top of his head.
   const hDist = Math.hypot(camX - o.x, camZ - o.z);
   const camY = (o.eyeY || 1.7) + dist * 0.28 * Math.min(1, hDist / dist);
+  // Squeezed against a wall the camera sits almost on top of the
+  // avatar and his head fills the screen (the "overhead, looking
+  // straight down" wedge when walking backward into a wall): hide
+  // him until there is room to see past him again.
+  if (hDist < 0.6) a.visible = false;
   o.camera.position.set(camX, camY, camZ);
   o.camera.rotation.order = 'YXZ';
   // Look at the avatar's chest, slightly ahead so the view leads

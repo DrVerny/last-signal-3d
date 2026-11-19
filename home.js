@@ -2423,7 +2423,11 @@ function showTerminalGetOutButton() {
     terminalGetOutBtnEl.innerHTML = '<button type="button" id="homeGetOutBtnInner" style="padding:14px 26px;font-size:17px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:10px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.5);">Get out of the car</button>';
     terminalGetOutBtnEl.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);z-index:56;text-align:center;pointer-events:auto;';
     document.body.appendChild(terminalGetOutBtnEl);
-    document.getElementById('homeGetOutBtnInner').onclick = () => { getOutOfTerminalCar(); };
+    const inner = document.getElementById('homeGetOutBtnInner');
+    // Answer both the click and the raw pointerup, like the act2
+    // button: a press that drifts before release can lose its click.
+    inner.onclick = () => { getOutOfTerminalCar(); };
+    inner.addEventListener('pointerup', () => { getOutOfTerminalCar(); });
   }
   terminalGetOutBtnEl.style.display = 'block';
 }
@@ -3848,6 +3852,12 @@ export function enterPlace(kind, onLeave, options) {
   homeCamera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 300);
   homeCamera.position.set(homeStart.x, homeStart.y, homeStart.z);
   homeYaw = homeStart.yaw; homePitch = 0;
+  // Sync the stored player position too: without this the first
+  // homeAnimate frame's beginPlayerFrame snaps the camera to wherever
+  // the player last stood in the previous scene (wrong spawn - and at
+  // the symposium a stale spot near the stage even fired the podium
+  // payout on arrival).
+  try { setPlayerPos(homeStart.x, homeStart.z); } catch (e) { /* ignore */ }
   showHomeBar(kind);
   homeActive = true;
   window.__lsHomeActive = true;
@@ -4184,12 +4194,15 @@ function homeAnimate() {
   // standing near the couch before the call.
   updatePrologueButtons();
   // Symposium: the seated audience sways gently, and walking up to the
-  // stage takes the NYC podium (a missed click is not a dead end).
+  // podium on the stage takes it (a missed click is not a dead end).
+  // The trigger is centred on the podium itself (0, -4.6), so the
+  // payout can only fire when the player is actually at the podium,
+  // never on arrival or from the audience rows.
   if (homeKind === 'symposium') {
     for (const p of symposiumAudience) updateSeatedPerson(p, t);
     if (!podiumDone) {
-      const dx = homeCamera.position.x - 0, dz = homeCamera.position.z - (-3.2);
-      if (dx * dx + dz * dz < 1.5 * 1.5) takePodium();
+      const dx = homeCamera.position.x - 0, dz = homeCamera.position.z - (-4.6);
+      if (dx * dx + dz * dz < 1.2 * 1.2) takePodium();
     }
   }
   // Police station / Navy barracks: officers and sailors walk the room.
@@ -4392,7 +4405,10 @@ canvas.addEventListener('pointerup', (e) => {
 });
 canvas.addEventListener('pointercancel', homeEndDrag);
 addEventListener('pointerup', homeEndDrag);
-addEventListener('blur', homeEndDrag);
+// A keyup lost to a focus change would leave a movement key stuck on
+// forever (W cancelled by a phantom S reads as "cannot move, reload
+// required"): drop every held key when the window loses focus.
+addEventListener('blur', () => { homeEndDrag(); for (const k in homeKeys) homeKeys[k] = false; });
 canvas.addEventListener('click', (e) => {
   if (!homeActive) return;
   if (homeDragMoved > 6) { homeDragMoved = 0; return; }
@@ -4401,8 +4417,12 @@ canvas.addEventListener('click', (e) => {
 });
 addEventListener('keydown', (e) => {
   if (!homeActive) return;
-  homeKeys[e.key.toLowerCase()] = true;
-  if (e.key.toLowerCase() === 'r') homeResetView();
+  const k = e.key.toLowerCase();
+  homeKeys[k] = true;
+  // Seated at the terminal front, the movement keys step him out
+  // first (the key stays held, so he walks on from the door).
+  if (terminalSeated && (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'e')) getOutOfTerminalCar();
+  if (k === 'r') homeResetView();
 });
 addEventListener('keyup', (e) => {
   if (!homeActive) return;

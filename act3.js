@@ -294,6 +294,9 @@ addEventListener('blur', endDrag);
 const keys = {};
 addEventListener('keydown', e => { if (!actActive) return; keys[e.key.toLowerCase()] = true; if (e.key.toLowerCase() === 'r') resetView(); });
 addEventListener('keyup', e => { if (!actActive) return; keys[e.key.toLowerCase()] = false; });
+// A keyup lost to a focus change would leave a movement key stuck on
+// forever: drop every held key when the window loses focus.
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 addEventListener('resize', () => { if (!actActive) return; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
 // ---------- Characters ----------
@@ -1306,14 +1309,17 @@ function handleTap(clientX, clientY) {
 }
 canvas.addEventListener('click', e => {
   if (!actActive) return;
-  if (dragMoved > 6) { dragMoved = 0; return; }
+  if (dragMoved > 10) { dragMoved = 0; return; }
   dragMoved = 0;
   if (Date.now() - lastTapAt < 400) return;
   lastTapAt = Date.now();
   handleTap(e.clientX, e.clientY);
 });
 canvas.addEventListener('pointerup', e => {
-  if (dragMoved > 6) { dragMoved = 0; return; }
+  // A drag must never become a tap: stamp lastTapAt when rejecting,
+  // or the click that follows sees dragMoved reset and fires a
+  // phantom tap at the release point (same fix as act2).
+  if (dragMoved > 10) { dragMoved = 0; lastTapAt = Date.now(); return; }
   dragMoved = 0;
   if (Date.now() - lastTapAt < 400) return;
   lastTapAt = Date.now();
