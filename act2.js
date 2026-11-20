@@ -410,12 +410,16 @@ let lastDamLevel = -1; // last roar level sent to setAmbientLevel
 // the player stands after getting out on a drive arrival (null means the
 // normal mission spawn is used).
 const PARKING = {
-  // driveSpawn z 7.0, not 3.9: at 3.9 the get-out spot sat between
-  // the rental (carX 6.9) and his own car parked beside it (cx + 1.4),
-  // inside the overlap of the two car colliders - he stepped out
-  // wedged between the cars with WASD dead. Behind the cars (south
-  // edge of the pad) is open ground.
-  1: { cx: 8.3, cz: 4.25, carX: 6.9, carZ: 4.25, carRotY: Math.PI, driveSpawn: { x: 8.3, z: 7.0, yaw: 0 } },
+  // driveSpawn west of the rental, not between the two cars: the
+  // rental parks at carX 6.9 and his own car beside it at cx + 1.4
+  // (9.7), so the old spots on the centre line (x 8.3) put him in
+  // the 0.9 m gap between them - first inside the overlap of the
+  // two car colliders with WASD dead, then at the gap's south end
+  // still reading as wedged between the cars with the door open
+  // into the gap. West of the rental (x 5.2, clear of its west
+  // face at 5.98 by more than his radius) is open ground with a
+  // straight walk north to the facility door.
+  1: { cx: 8.3, cz: 4.25, carX: 6.9, carZ: 4.25, carRotY: Math.PI, driveSpawn: { x: 5.2, z: 5.6, yaw: 0 } },
   // Mission 2 lot: cz is 7.0, not 9.0. The seated camera sits about 4.2 m
   // behind the parked car, and at cz 9.0 it landed south of the yard's
   // south fence (z 12), looking through the fence into a dark yard with
@@ -1649,8 +1653,15 @@ function buildMission1() {
   keyHit.position.set(1.5, 1.5, -0.6); keyHit.name = 'stationKey'; keyHit.userData.clickable = true; mission1.add(keyHit);
   window._stationKeyHit = keyHit;
   const keyLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('STATION KEY', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
-  keyLabel.scale.set(1.6, 0.4, 1); keyLabel.position.set(1.5, 2.15, -0.6); keyLabel.name = 'stationKeyLabel'; mission1.add(keyLabel);
+  keyLabel.scale.set(2.0, 0.5, 1); keyLabel.position.set(1.5, 2.15, -0.6); keyLabel.name = 'stationKeyLabel'; mission1.add(keyLabel);
   window._stationKeyLabel = keyLabel;
+  // A pulsing gold marker over the hook, like the guards' markers:
+  // the key is small against a big wall and was never visually
+  // located on the live checks, so the hook gets the same "look
+  // here" cue every other objective in the game already has.
+  const keyMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
+  keyMarker.scale.set(0.8, 0.8, 1); keyMarker.position.set(1.5, 2.85, -0.6); keyMarker.name = 'stationKeyMarker'; mission1.add(keyMarker);
+  window._stationKeyMarker = keyMarker;
   for (const wx of [-3, 3]) {
     const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1), new THREE.MeshStandardMaterial({ color: 0x0e1a24, roughness: 0.1, metalness: 0.4 }));
     win.position.set(wx, 2, -0.72); mission1.add(win);
@@ -1897,6 +1908,7 @@ function startMission1() {
     if (window._stationKey) window._stationKey.visible = !hasIt;
     if (window._stationKeyHit) window._stationKeyHit.visible = !hasIt;
     if (window._stationKeyLabel) window._stationKeyLabel.visible = !hasIt;
+    if (window._stationKeyMarker) window._stationKeyMarker.visible = !hasIt;
   } catch (e) { /* ignore */ }
   setObjectives(OBJ1, 0); updateHUD();
   document.getElementById('timerLabel').textContent = 'Water pressure';
@@ -2108,12 +2120,31 @@ function buildMission2() {
     const cone = new THREE.Mesh(new THREE.ConeGeometry(1.4, 4, 20, 1, true), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.06, depthWrite: false, side: THREE.DoubleSide }));
     cone.rotation.x = Math.PI / 2 - 0.5; cone.position.set(cx, 2.6, 2); mission2.add(cone);
   }
-  // Key card on the first guard's belt (hidden until the guards stand down).
-  keycardMesh = box(mission2, 0.16, 0.1, 0.02, 0xf2f2f2, -3.5, 1.0, 2.15, 'keycard');
-  keycardMesh.visible = false;
-  // The card is tiny: a generous invisible hit box around the guard's belt.
-  var keycardHit = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-  keycardHit.position.set(-3.5, 1.1, 2.1); keycardHit.name = 'keycard'; keycardHit.userData.clickable = true; keycardHit.visible = false; mission2.add(keycardHit);
+  // Key card on the first guard's belt (hidden until the guards stand
+  // down). Oversized and unlit bright white with a gold stripe, a glow
+  // and a pulsing marker above it: the old card was a real-size
+  // 0.16 x 0.1 m lit box flush against the guard's waist (z +0.15 from
+  // his centre, inside his torso silhouette and behind his hanging
+  // arm from every approach angle), so on the live check no white
+  // card could be seen on either guard's belt and the chain blocked
+  // at the SCADA terminal. The follow code in the animate loop keeps
+  // it on his front hip once he stands down and turns to face the
+  // player.
+  keycardMesh = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.22, 0.03), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  keycardMesh.position.set(-3.5, 1.02, 2.24); keycardMesh.name = 'keycard'; keycardMesh.userData.clickable = true;
+  keycardMesh.visible = false; mission2.add(keycardMesh);
+  const cardStripe = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.005), new THREE.MeshBasicMaterial({ color: 0xd4af37 }));
+  cardStripe.position.set(0, 0.05, 0.02); keycardMesh.add(cardStripe);
+  const cardGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffffff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+  cardGlow.scale.set(0.85, 0.85, 1); cardGlow.name = 'keycardGlow'; keycardMesh.add(cardGlow);
+  window._keycardGlow = cardGlow;
+  const cardMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffffff, transparent: true, depthWrite: false }));
+  cardMarker.scale.set(0.55, 0.55, 1); cardMarker.position.set(0, 0.62, 0); cardMarker.name = 'keycardMarker'; keycardMesh.add(cardMarker);
+  window._keycardMarker = cardMarker;
+  // A generous invisible hit box around the guard's belt, so a tap
+  // anywhere on his front collects the card.
+  var keycardHit = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.0), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  keycardHit.position.set(-3.5, 1.05, 2.15); keycardHit.name = 'keycard'; keycardHit.userData.clickable = true; keycardHit.visible = false; mission2.add(keycardHit);
   window._keycardHit = keycardHit;
   blobShadow(mission2, -3.5, 2, 0.9, 0.9, 0.55);
   blobShadow(mission2, 3.5, 2, 0.9, 0.9, 0.55);
@@ -4179,8 +4210,14 @@ function guardDialogue() {
       { who: 'Caleb Bishop', text: 'Names. Numbers. Who hired you. And the key card - the terminal needs it.' }
     ], () => {
       guardsDown = true; hideGuardMarkers(); keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(1, 'Caleb talked them down');
+      // The guards turn to face the player they just stood down for,
+      // so the white key card on guard 1's front belt is in plain
+      // sight (he patrolled facing sideways, card hidden behind his
+      // arm - the live check could not find it on either belt).
+      for (const gp of guardPatrol) gp.group.rotation.y = 0;
       // The guard hands over the substation gate key with the key card.
       giveKey('substation', 'substation key');
+      state.inventory.push('Substation key'); updateHUD();
       setObjectives(OBJ2, 1);
       toast('The guards stood down. Guard 1 handed you the substation key. Click the white key card on the guard\u2019s belt, then the red log book on the desk.');
     });
@@ -4191,9 +4228,13 @@ function guardDialogue() {
       { who: 'Jade Morales', text: 'He is not ready for this. Plan B - I slip in through the side gate while they are watching him. It is slower, and it costs us goodwill.' }
     ], () => {
       guardsDown = true; hideGuardMarkers(); keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(-1, 'the bluff failed'); integrity('Power', -5);
+      // Same turn-to-face as the bluff-success path: the key card on
+      // guard 1's front belt must be visible either way.
+      for (const gp of guardPatrol) gp.group.rotation.y = 0;
       // Jade slipped in and took the substation gate key from the guard
       // post on her way through, so the player has it either way.
       giveKey('substation', 'substation key');
+      state.inventory.push('Substation key'); updateHUD();
       setObjectives(OBJ2, 1);
       toast('Jade slipped in through the side gate and left you the substation key. Click the white key card, then the red log book.');
     });
@@ -4721,6 +4762,19 @@ function playerDist2D(x, z) {
   if (p) return dist2D(p.x, p.z, x, z);
   return dist2D(camera.position.x, camera.position.z, x, z);
 }
+// Collect the SCADA key card from guard 1's belt. One helper for
+// every path that can take it - clicking the card itself, its hit
+// box, or either guard after stand-down - so the chain can never
+// soft-block on pixel-hunting a small card (on the live check the
+// card could not be found or clicked on either belt and the SCADA
+// reroute was never reached).
+function collectKeycard() {
+  if (hasKeycard || !keycardMesh || !keycardMesh.visible) return;
+  hasKeycard = true; keycardMesh.visible = false; if (window._keycardHit) window._keycardHit.visible = false;
+  state.inventory.push('SCADA key card'); updateHUD();
+  setObjectives(OBJ2, 2);
+  toast('Key card collected. Now the red log book on the desk - the passphrase is in it.');
+}
 function interact(name) {
   if (!name) return;
   // The parked car door: open it and step outside. This is how the
@@ -4747,11 +4801,17 @@ function interact(name) {
       return;
     }
     giveKey('station', 'station key');
+    // Keys live in localStorage (player.js), not in the HUD
+    // inventory, so a pickup never showed anywhere the player could
+    // check - on the live check the door opened "with no key in
+    // inventory" because the walk-up pickup had already fired.
+    state.inventory.push('Station key'); updateHUD();
     toast('Picked up the station key. The station door is unlocked.');
     sfxRepair();
     try { if (window._stationKey) window._stationKey.visible = false; } catch (e) { /* ignore */ }
     try { if (window._stationKeyHit) window._stationKeyHit.visible = false; } catch (e) { /* ignore */ }
     try { if (window._stationKeyLabel) window._stationKeyLabel.visible = false; } catch (e) { /* ignore */ }
+    try { if (window._stationKeyMarker) window._stationKeyMarker.visible = false; } catch (e) { /* ignore */ }
     return;
   }
   if (name === 'stationDoor') {
@@ -4808,13 +4868,16 @@ function interact(name) {
   }
   if (name === 'jade') { toast('Jade Morales - former MTA signal engineer. She designed the 4 line, and she knows every relay in the city.'); return; }
   if (name === 'caleb') { toast('Caleb Bishop, NYPD Transit. Young, earnest - and getting better at this.'); return; }
-  if (name === 'guard1' || name === 'guard2') { guardDialogue(); return; }
-  if (name === 'keycard' && keycardMesh.visible) {
-    hasKeycard = true; keycardMesh.visible = false; if (window._keycardHit) window._keycardHit.visible = false; state.inventory.push('SCADA key card'); updateHUD();
-    setObjectives(OBJ2, 2);
-    toast('Key card collected. Now the red log book on the desk - the passphrase is in it.');
-    return;
+  if (name === 'guard1' || name === 'guard2') {
+    // After stand-down, tapping either guard hands over the key card:
+    // the card rides on guard 1, but the bluff can trigger at either
+    // guard and nothing said which belt to search - the live check
+    // clicked around both guards and never collected it. A guard is
+    // a big, easy target on a phone; the card hunt must not block.
+    if (guardsDown && !hasKeycard) { collectKeycard(); return; }
+    guardDialogue(); return;
   }
+  if (name === 'keycard' && keycardMesh.visible) { collectKeycard(); return; }
   if (name === 'logbook') {
     if (hasPassphrase) { toast('You already have the passphrase - "Trust the system, but verify the people." The terminal is waiting.'); return; }
     hasPassphrase = true; state.inventory.push('Passphrase'); state.evidence.push('Passphrase: Jade\u2019s own words'); updateHUD();
@@ -5028,11 +5091,13 @@ function animateFrame() {
     && document.getElementById('valveModal').classList.contains('hidden')) {
     if (playerDist2D(1.5, -0.6) < 0.6) {
       giveKey('station', 'station key');
+      state.inventory.push('Station key'); updateHUD();
       toast('Picked up the station key. The station door is unlocked.');
       sfxRepair();
       try { if (window._stationKey) window._stationKey.visible = false; } catch (e) { /* ignore */ }
       try { if (window._stationKeyHit) window._stationKeyHit.visible = false; } catch (e) { /* ignore */ }
       try { if (window._stationKeyLabel) window._stationKeyLabel.visible = false; } catch (e) { /* ignore */ }
+    try { if (window._stationKeyMarker) window._stationKeyMarker.visible = false; } catch (e) { /* ignore */ }
     }
   }
   // Station door: walking up to the entrance enters the valve room, so
@@ -5136,12 +5201,23 @@ function animateFrame() {
       }
     }
   }
-  // The key card sits on guard1's belt: while it is visible, keep it on
-  // him even as he patrols, so the player always finds it where he is.
+  // The key card sits on guard1's front belt: while it is visible,
+  // keep it on him so the player always finds it where he is. He
+  // stands down facing the player (south, +z - see guardDialogue),
+  // so the card rides 0.24 m in front of his centre at belt height,
+  // clear of his torso and arm; the old z +0.15 spot was inside his
+  // waist silhouette and the card could not be seen live. The marker
+  // above it pulses so the player can tell WHICH guard has the card.
   if (state.mission === 2 && keycardMesh && keycardMesh.visible && guardPatrol.length) {
     const g1 = guardPatrol[0].group.position;
-    keycardMesh.position.set(g1.x, 1.0, g1.z + 0.15);
-    if (window._keycardHit) window._keycardHit.position.set(g1.x, 1.1, g1.z + 0.1);
+    keycardMesh.position.set(g1.x + 0.12, 1.02, g1.z + 0.24);
+    if (window._keycardHit) window._keycardHit.position.set(g1.x, 1.05, g1.z + 0.15);
+    if (window._keycardMarker) {
+      const ms = 0.55 + Math.sin(t * 4) * 0.08;
+      window._keycardMarker.scale.set(ms, ms, 1);
+      window._keycardMarker.material.opacity = 0.85 + Math.sin(t * 4) * 0.15;
+    }
+    if (window._keycardGlow) window._keycardGlow.material.opacity = 0.4 + Math.sin(t * 3) * 0.15;
   }
   // Living city traffic (Mission 2 only, not while trekking): cars drive
   // the road in both directions and the train runs the elevated track,
@@ -5170,6 +5246,11 @@ function animateFrame() {
   if (window._stationKey && window._stationKey.visible) {
     window._stationKey.position.y = 1.5 + Math.sin(t * 2) * 0.06;
     window._stationKey.rotation.y = Math.sin(t * 1.2) * 0.4;
+    if (window._stationKeyMarker) {
+      const ks = 0.8 + Math.sin(t * 4) * 0.12;
+      window._stationKeyMarker.scale.set(ks, ks, 1);
+      window._stationKeyMarker.material.opacity = 0.85 + Math.sin(t * 4) * 0.15;
+    }
   }
   updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
   // Sound: footsteps while moving, heartbeat and score tension. The bomb

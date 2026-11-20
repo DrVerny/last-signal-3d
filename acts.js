@@ -23,7 +23,7 @@ const ACTS = {
 // reload, and a stale act module can hang the boot on "Loading
 // characters..." forever. Appending ?v= forces a fresh fetch. Bump this
 // on every push that changes an act module.
-const BUILD_VERSION = 'bootfix-1';
+const BUILD_VERSION = 'bootfix-2';
 const CUR_KEY = 'lastSignalCurrentAct';
 let currentAct = 0;
 const actModules = {};
@@ -264,6 +264,33 @@ export function startPrologue() {
 
 window.__lsActManager = { goToAct, setEndCardButtons, enterHome, leaveHome, startPrologue };
 window.__lsGoToAct = goToAct;
+// ?fresh in the URL starts over from the beginning: it clears the
+// prologue flag and all act saves and money, then boots the prologue
+// (phone ringing in the room). Share the plain link for a normal load;
+// add ?fresh to start again from the phone call. The fuel key is in
+// the list too: without it a fresh player booted with whatever fuel
+// the last session left in the tank (94% on the live check) while
+// his balance correctly reset to 10 ZAMA. The keys key belongs here
+// as well: without it a fresh player kept every key from the last
+// session, so the station key never appeared on its hook (Mission 1
+// hides it when the key is already held) and the locked door opened
+// with no pickup at all.
+// The clear runs BEFORE initEconomy below, not after: initEconomy
+// paints the HUD and grants retroactive payouts from whatever saves
+// it finds, so a clear that ran after it left the first ?fresh load
+// showing the old balance (205,009.35 on the live check) until a
+// second navigate. Clearing first means the first paint already
+// reads the fresh state (10 ZAMA, 100% fuel) and there are no saves
+// left for retroactive payouts to resurrect.
+let freshStart = false;
+try {
+  if (new URLSearchParams(location.search).has('fresh')) {
+    freshStart = true;
+    for (const k of ['lastSignalPrologue', 'lastSignalAct1', 'lastSignalAct2', 'lastSignalAct3', 'lastSignalMoney', 'lastSignalPaid', 'lastSignalOwned', 'lastSignalEquipped', 'lastSignalCurrentAct', 'lastSignalAct2Mission', 'lastSignalFuel', 'lastSignalKeys']) {
+      try { localStorage.removeItem(k); } catch (e) { /* ignore */ }
+    }
+  }
+} catch (e) { /* ignore */ }
 // Game-wide systems: money + store (with retroactive payouts for missions
 // already finished) and the HUD buttons. No wallet needed - demo mode.
 try { initEconomy(); } catch (e) { /* economy is optional */ }
@@ -279,29 +306,12 @@ try {
   prologueDone = localStorage.getItem('lastSignalPrologue') === 'done';
   hasActSave = !!(localStorage.getItem('lastSignalAct1') || localStorage.getItem('lastSignalAct2') || localStorage.getItem('lastSignalAct3'));
 } catch (e) { /* ignore */ }
-// ?fresh in the URL starts over from the beginning: it clears the
-// prologue flag and all act saves and money, then boots the prologue
-// (phone ringing in the room). Share the plain link for a normal load;
-// add ?fresh to start again from the phone call. The fuel key is in
-// the list too: without it a fresh player booted with whatever fuel
-// the last session left in the tank (94% on the live check) while
-// his balance correctly reset to 10 ZAMA. The keys key belongs here
-// as well: without it a fresh player kept every key from the last
-// session, so the station key never appeared on its hook (Mission 1
-// hides it when the key is already held) and the locked door opened
-// with no pickup at all.
-try {
-  if (new URLSearchParams(location.search).has('fresh')) {
-    for (const k of ['lastSignalPrologue', 'lastSignalAct1', 'lastSignalAct2', 'lastSignalAct3', 'lastSignalMoney', 'lastSignalPaid', 'lastSignalOwned', 'lastSignalEquipped', 'lastSignalCurrentAct', 'lastSignalAct2Mission', 'lastSignalFuel', 'lastSignalKeys']) {
-      try { localStorage.removeItem(k); } catch (e) { /* ignore */ }
-    }
-    prologueDone = false; hasActSave = false;
-    // initEconomy ran above and painted the HUD from the pre-clear
-    // saves, so a first ?fresh load showed the old balance until the
-    // next money change. Repaint from the cleared state now.
-    try { updateWalletHUD(); } catch (e) { /* ignore */ }
-    try { updateFuelHUD(); } catch (e) { /* ignore */ }
-  }
-} catch (e) { /* ignore */ }
+if (freshStart) {
+  prologueDone = false; hasActSave = false;
+  // Belt and suspenders: repaint from the cleared state in case any
+  // init step above painted from a save it read before the clear.
+  try { updateWalletHUD(); } catch (e) { /* ignore */ }
+  try { updateFuelHUD(); } catch (e) { /* ignore */ }
+}
 if (!prologueDone && !hasActSave) startPrologue();
 else goToAct(startActFromURL());
