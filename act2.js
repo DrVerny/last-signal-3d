@@ -430,6 +430,15 @@ const PARKING = {
 };
 let arrivedByDrive = false; // true while the mission start that follows a drive runs
 const parkedCars = {}; // mission number -> parked car group in that mission's scene
+// Where the player's car is parked, by place key: a mission place
+// (reservoir / substation / bridge, set by parkPlayerCar) or the
+// destination of a drive arrival (set by arriveAt / showArrivalBeat).
+// lotCarPlaceKey is the place whose car waits in the shared arrival
+// lot; atParkedLot is true while the player stands in that lot beside
+// his car after coming out of an interior (the return beat).
+let parkedPlaceKey = null;
+let lotCarPlaceKey = null;
+let atParkedLot = false;
 function disposeCarGroup(g) {
   if (!g) return;
   try { if (g.parent) g.parent.remove(g); } catch (e) { /* ignore */ }
@@ -507,6 +516,9 @@ function buildBridgeGarden(parent) {
 function parkPlayerCar(mission) {
   const p = PARKING[mission];
   if (!p) return;
+  // The car now waits at this mission's lot: the next drive leaves
+  // from here (see the map Drive handler).
+  parkedPlaceKey = MISSION_PLACE[mission];
   const group = mission === 1 ? mission1 : mission === 2 ? mission2 : mission3;
   // Rental arrival at the facility: the rental parks in the player's bay
   // and his own car takes the second bay, so seatIfDrove seats him in
@@ -655,7 +667,9 @@ function buildCarDoor(car) {
 // car is the parked car group (already placed in its lot). getOutPos is
 // { x, z, yaw } where he ends up standing. onGetOut runs once he is out
 // (the destination action for an arrival beat, null for a mission).
-function seatPlayerInParkedCar(car, getOutPos, onGetOut) {
+// opts.quiet seats him without the Get out button and the parked toast:
+// the departure beat, where he is about to drive away from the lot.
+function seatPlayerInParkedCar(car, getOutPos, onGetOut, opts) {
   if (!car || !getOutPos) return false;
   const door = buildCarDoor(car);
   const driver = getAvatar();
@@ -678,8 +692,10 @@ function seatPlayerInParkedCar(car, getOutPos, onGetOut) {
   // start every seat at the default framing, facing the building.
   state.yaw = 0; state.pitch = 0;
   try { setThirdPerson(true); } catch (e) { /* camera is best effort */ }
-  showGetOutButton();
-  toast('You are parked. Click the car door, or Get out, to step outside.');
+  if (!(opts && opts.quiet)) {
+    showGetOutButton();
+    toast('You are parked. Click the car door, or Get out, to step outside.');
+  }
   return true;
 }
 // Open the driver's door and step outside. The door swings open and
@@ -873,6 +889,7 @@ let arrivalCar = null;
 let arrivalSignSprite = null;
 let arrivalSavedMissionVis = null;
 let arrivalPendingAction = null;
+let arrivalFacadeGroup = null; // the destination building, rebuilt per place
 // The name over the arrival lot building: a fresh text sprite each time,
 // so the building is named for the destination just driven to.
 function setArrivalSign(name) {
@@ -889,7 +906,8 @@ function setArrivalSign(name) {
   arrivalSignSprite = sprite;
 }
 // One shared exterior for every non-mission drive arrival: a ground
-// plane, a building facade at the north with the destination name over
+// plane, the destination building at the north (its own distinct build
+// per place, see buildArrivalFacade) with the destination name over
 // the entrance, a marked two-bay lot (reusing buildParkingLot) with the
 // car in the west bay facing the building, a street lamp and a tree.
 function buildArrivalLot() {
@@ -899,20 +917,11 @@ function buildArrivalLot() {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ color: 0x3a3d40, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
   arrivalGroup.add(ground);
-  // The destination building: a facade at the north, an entrance door
-  // and lit windows, so the lot reads as the front of a building.
-  const facade = new THREE.Mesh(new THREE.BoxGeometry(16, 6, 2), stdMat({ color: 0x8a7a68, roughness: 0.9 }));
-  facade.position.set(0, 3, -8); facade.castShadow = true; facade.receiveShadow = true;
-  arrivalGroup.add(facade);
-  const door = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.6, 0.12), stdMat({ color: 0x2a3a4a, roughness: 0.6 }));
-  door.position.set(0, 1.3, -6.95);
-  arrivalGroup.add(door);
-  const winMat = new THREE.MeshStandardMaterial({ color: 0xffd88a, emissive: 0xffc860, emissiveIntensity: 0.5, roughness: 0.4 });
-  for (const wx of [-5.5, -3.5, 3.5, 5.5]) {
-    const win = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), winMat);
-    win.position.set(wx, 3.6, -6.95);
-    arrivalGroup.add(win);
-  }
+  // The destination building lives in its own group, rebuilt for each
+  // place so every arrival reads as its own building.
+  arrivalFacadeGroup = new THREE.Group();
+  arrivalFacadeGroup.name = 'arrivalFacade';
+  arrivalGroup.add(arrivalFacadeGroup);
   // The marked lot: the car parks in the west bay, facing the building.
   buildParkingLot(arrivalGroup, 0, 2, -1.4);
   // A street lamp over the lot and a tree beside it, for life.
@@ -920,17 +929,165 @@ function buildArrivalLot() {
   try { const tree = makeStreetTree(); tree.position.set(-4.5, 0, 0.5); arrivalGroup.add(tree); } catch (e) { /* tree is decoration */ }
   scene.add(arrivalGroup);
 }
+// Build the destination building for the arrival lot: each place gets
+// its own distinct exterior (the symposium a skyscraper, the wind
+// tunnel an industrial lab block, and so on - varied height, facade
+// material and roofline). Every variant keeps the same contract with
+// the verified arrival beat: the front face sits at z -7 and the
+// entrance door at (0, 1.3, -6.95), so the destination sign at
+// (0, 5.0, -6.0) stays whole and clear of the facade edge, and the
+// car parks in the same marked lot in front of it.
+function buildArrivalFacade(key) {
+  if (!arrivalFacadeGroup) return;
+  const g = arrivalFacadeGroup;
+  // Clear the previous place's building.
+  for (let i = g.children.length - 1; i >= 0; i--) {
+    const c = g.children[i];
+    g.remove(c);
+    try {
+      c.traverse(m => {
+        try { if (m.geometry) m.geometry.dispose(); } catch (e) { /* ignore */ }
+        try {
+          const mats = Array.isArray(m.material) ? m.material : (m.material ? [m.material] : []);
+          for (const mm of mats) { try { if (mm.map) mm.map.dispose(); mm.dispose(); } catch (e) { /* ignore */ } }
+        } catch (e) { /* ignore */ }
+      });
+    } catch (e) { /* ignore */ }
+  }
+  const box = (w, h, d, color, x, y, z, opts) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), (opts && opts.mat) || stdMat({ color, roughness: (opts && opts.roughness) || 0.9 }));
+    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m); return m;
+  };
+  const texMat = (base, cols, rows, lit) => {
+    const tex = skyscraperFacadeTexture(base, cols, rows, lit);
+    return new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.25, roughness: 0.85 });
+  };
+  const door = (w, h, color) => box(w || 1.6, h || 2.6, 0.12, color || 0x2a3a4a, 0, (h || 2.6) / 2, -6.95, { roughness: 0.6 });
+  const winMat = new THREE.MeshStandardMaterial({ color: 0xffd88a, emissive: 0xffc860, emissiveIntensity: 0.5, roughness: 0.4 });
+  const wins = (list) => { for (const [wx, wy] of list) { const w = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), winMat); w.position.set(wx, wy, -6.95); g.add(w); } };
+  if (key === 'symposium') {
+    // A tall skyscraper tower in blue glass.
+    box(8, 22, 6, 0, 0, 11, -10, { mat: texMat('#2e4a66', 6, 20, 0.35) });
+    box(3, 0.3, 1.2, 0x2a3a4a, 0, 3.2, -6.6, { roughness: 0.6 }); // entrance canopy
+    door();
+  } else if (key === 'windtunnel') {
+    // A wide industrial lab block: shed roof, roof vents, big doors.
+    box(20, 5, 6, 0x8a8a82, 0, 2.5, -10);
+    const roof = box(20, 0.3, 6.5, 0x6a6a62, 0, 5.2, -10); roof.rotation.x = 0.12;
+    for (const vx of [-6, 0, 6]) {
+      const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.2, 10), stdMat({ color: 0x9aa2a8, roughness: 0.5 }));
+      vent.position.set(vx, 5.8, -10); vent.castShadow = true; g.add(vent);
+    }
+    box(2.2, 3, 0.12, 0x4a5a6a, -3.5, 1.5, -6.95, { roughness: 0.6 });
+    box(2.2, 3, 0.12, 0x4a5a6a, 3.5, 1.5, -6.95, { roughness: 0.6 });
+    door();
+  } else if (key === 'hospital') {
+    // A multi-storey white block with a red cross over the entrance.
+    box(12, 12, 6, 0, 0, 6, -10, { mat: texMat('#e8ecef', 6, 12, 0.3) });
+    box(0.5, 1.6, 0.1, 0xc0392b, 0, 9.5, -6.9, { roughness: 0.6 });
+    box(1.6, 0.5, 0.1, 0xc0392b, 0, 9.5, -6.9, { roughness: 0.6 });
+    door();
+  } else if (key === 'fillingstation') {
+    // A forecourt: canopy on posts over two pumps, kiosk behind.
+    box(8, 3.5, 4, 0xd8b078, 0, 1.75, -9);
+    box(12, 0.3, 6, 0x2e6fb0, 0, 4.2, -4.5, { roughness: 0.7 });
+    for (const [px, pz] of [[-5, -6.5], [5, -6.5], [-5, -2.5], [5, -2.5]]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 4.2, 10), stdMat({ color: 0x8a949a, roughness: 0.4 }));
+      post.position.set(px, 2.1, pz); post.castShadow = true; g.add(post);
+    }
+    for (const px of [-2, 2]) box(0.7, 1.5, 0.5, 0xc0392b, px, 0.75, -4, { roughness: 0.6 });
+    door();
+  } else if (key === 'hotels') {
+    // A taller limestone slab with many windows.
+    box(10, 14, 6, 0, 0, 7, -10, { mat: texMat('#b8a888', 5, 14, 0.35) });
+    box(3, 0.3, 1.2, 0x4a3220, 0, 3.2, -6.6, { roughness: 0.6 });
+    door();
+  } else if (key === 'airport') {
+    // A wide low terminal with a control tower beside it.
+    box(22, 5, 6, 0, 0, 2.5, -10, { mat: texMat('#e8ecef', 12, 4, 0.3) });
+    const tower = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.6, 14, 12), stdMat({ color: 0xf4f6f8, roughness: 0.7 }));
+    tower.position.set(8, 7, -10); tower.castShadow = true; g.add(tower);
+    const cab = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 2, 12), stdMat({ color: 0x2a3a4a, roughness: 0.4 }));
+    cab.position.set(8, 15, -10); cab.castShadow = true; g.add(cab);
+    door();
+  } else if (key === 'carpark') {
+    // An open-deck parking structure: stacked slabs on columns.
+    for (const sy of [0.2, 3.2, 6.2]) box(16, 0.4, 7, 0x9a9a94, 0, sy, -10.5, { roughness: 0.95 });
+    for (const cx of [-7.5, -2.5, 2.5, 7.5]) for (const cz of [-7.5, -13.5]) box(0.4, 6.4, 0.4, 0x8a8a84, cx, 3.2, cz, { roughness: 0.95 });
+    for (const py of [3.6, 6.6]) box(16, 0.8, 0.2, 0x8a8a84, 0, py, -7.1, { roughness: 0.95 });
+    box(3, 3, 2, 0xd8b078, 0, 1.5, -8, { roughness: 0.9 }); // office at the entrance
+    door();
+  } else if (key === 'industry') {
+    // A brick factory block with two chimneys.
+    box(14, 7, 6, 0, 0, 3.5, -10, { mat: texMat('#7a4636', 6, 6, 0.25) });
+    for (const cx of [-4.5, 4.5]) {
+      const ch = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.9, 11, 12), stdMat({ color: 0xf4f6f8, roughness: 0.7 }));
+      ch.position.set(cx, 5.5, -11); ch.castShadow = true; g.add(ch);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.82, 1.2, 12), stdMat({ color: 0xc0392b, roughness: 0.7 }));
+      band.position.set(cx, 10.2, -11); g.add(band);
+    }
+    door();
+  } else if (key === 'policestation') {
+    // A civic stone block with a columned portico.
+    box(12, 8, 6, 0, 0, 4, -10, { mat: texMat('#cfc4ae', 6, 8, 0.3) });
+    for (const cx of [-1.6, 1.6]) {
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 3.2, 10), stdMat({ color: 0xe8e2d4, roughness: 0.8 }));
+      col.position.set(cx, 1.6, -6.5); col.castShadow = true; g.add(col);
+    }
+    box(4.2, 0.4, 1.0, 0xe8e2d4, 0, 3.4, -6.5, { roughness: 0.8 });
+    door();
+  } else if (key === 'navybarracks') {
+    // A long low barracks block under a flat roof.
+    box(20, 4, 6, 0x6a6a5a, 0, 2, -10);
+    box(20.5, 0.3, 6.5, 0x4a4a48, 0, 4.15, -10, { roughness: 0.95 });
+    wins([[-7, 2.2], [-4, 2.2], [4, 2.2], [7, 2.2]]);
+    door();
+  } else if (key === 'sensorvault') {
+    // A squat dark secure block with a heavy door.
+    box(10, 4, 6, 0x3a3a38, 0, 2, -10, { roughness: 0.95 });
+    const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.9, 10), stdMat({ color: 0x6a6a66, roughness: 0.6 }));
+    vent.position.set(3, 4.4, -10); g.add(vent);
+    door(2.2, 2.8, 0x2a2e33);
+  } else if (key === 'clothing' || key === 'dealership') {
+    // A shopfront with an awning and big glass windows.
+    box(12, 5, 5, 0x8a7a68, 0, 2.5, -9.5);
+    const awn = box(8, 0.15, 1.6, key === 'clothing' ? 0xc0392b : 0x2e6fb0, 0, 3.0, -6.6, { roughness: 0.8 });
+    awn.rotation.x = -0.3;
+    wins([[-3, 1.8], [3, 1.8]]);
+    door();
+  } else if (key === 'zama' || key === 'court') {
+    // A dark glass office tower (the landmarks).
+    box(9, 16, 6, 0, 0, 8, -10, { mat: texMat('#232c33', 8, 16, 0.4) });
+    door();
+  } else if (key === 'mansion' || key === 'safehouse') {
+    // A house: cream walls under a pitched roof.
+    box(10, 5, 5, 0xd8cfc0, 0, 2.5, -9.5);
+    const r1 = box(10.6, 0.25, 3.4, 0x6a4a30, 0, 5.6, -8.6, { roughness: 0.9 }); r1.rotation.x = 0.5;
+    const r2 = box(10.6, 0.25, 3.4, 0x6a4a30, 0, 5.6, -10.4, { roughness: 0.9 }); r2.rotation.x = -0.5;
+    wins([[-3.5, 2.4], [3.5, 2.4]]);
+    door();
+  } else {
+    // The original shared facade (terminal, Market Street, anything else).
+    box(16, 6, 2, 0x8a7a68, 0, 3, -8);
+    wins([[-5.5, 3.6], [-3.5, 3.6], [3.5, 3.6], [5.5, 3.6]]);
+    door();
+  }
+}
 // Show the arrival beat for a destination just driven to. The mission
 // scene hides while the beat runs; the car parks in the lot; the player
 // starts seated in it. On get-out the lot hides, the mission scene
 // comes back, the view resets, and the destination action runs (the
 // store opens, the interior loads, or the landmark card shows).
-function showArrivalBeat(name, onGetOut) {
+function showArrivalBeat(name, onGetOut, key) {
   if (!arrivalGroup) buildArrivalLot();
   arrivalSavedMissionVis = [mission1.visible, mission2.visible, mission3.visible];
   mission1.visible = false; mission2.visible = false; mission3.visible = false;
   if (travelGroup) travelGroup.visible = false;
   if (trekGroup) trekGroup.visible = false;
+  // The car now waits in this lot at this place: coming back out of
+  // the interior returns him here, beside it (see returnToParkedCar).
+  if (key) { lotCarPlaceKey = key; parkedPlaceKey = key; }
+  buildArrivalFacade(key);
   setArrivalSign(name);
   try { disposeCarGroup(arrivalCar); } catch (e) { /* ignore */ }
   arrivalCar = null;
@@ -959,6 +1116,60 @@ function hideArrivalBeat() {
     mission3.visible = arrivalSavedMissionVis[2];
     arrivalSavedMissionVis = null;
   }
+}
+// ---------- Back to the parked car ----------
+// Coming out of an interior (or closing the store or a landmark card)
+// puts him back in the arrival lot BESIDE his parked car, with a gold
+// Get in the car button: the journey continues from where the car is
+// parked, never from a reset spawn. Getting in seats him in the car
+// and opens the map; closing the map while seated steps him back out
+// beside the car; closing it while standing puts the mission scene
+// back, as before. When there is no lot car (a Skip arrival), the
+// map opens directly, exactly as it used to.
+let getInBtnEl = null;
+function showGetInButton() {
+  if (!getInBtnEl) {
+    getInBtnEl = document.createElement('div');
+    getInBtnEl.id = 'getInBtn';
+    getInBtnEl.innerHTML = '<button type="button" id="getInBtnInner" style="padding:14px 26px;font-size:17px;font-weight:bold;background:#ffd166;color:#111;border:none;border-radius:10px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.5);">Get in the car</button>';
+    getInBtnEl.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);z-index:56;text-align:center;pointer-events:auto;';
+    document.body.appendChild(getInBtnEl);
+    const inner = document.getElementById('getInBtnInner');
+    inner.onclick = () => { getInParkedCar(); };
+    inner.addEventListener('pointerup', () => { getInParkedCar(); });
+  }
+  getInBtnEl.style.display = 'block';
+}
+function hideGetInButton() { if (getInBtnEl) getInBtnEl.style.display = 'none'; }
+function getInParkedCar() {
+  if (!arrivalCar || parkedSeatActive) return;
+  hideGetInButton();
+  const seated = seatPlayerInParkedCar(arrivalCar, { x: 0.1, z: 2, yaw: 0 }, () => {
+    // Stepped back out (the map was closed while seated): he is
+    // beside the car again, so the way back in is offered again.
+    if (atParkedLot) showGetInButton();
+  });
+  if (seated) openCityMap(lotCarPlaceKey || undefined);
+  else showGetInButton();
+}
+export function returnToParkedCar() {
+  if (lotCarPlaceKey && arrivalCar && arrivalGroup && !travelActive) {
+    atParkedLot = true;
+    arrivalSavedMissionVis = [mission1.visible, mission2.visible, mission3.visible];
+    mission1.visible = false; mission2.visible = false; mission3.visible = false;
+    if (travelGroup) travelGroup.visible = false;
+    if (trekGroup) trekGroup.visible = false;
+    arrivalGroup.visible = true;
+    try {
+      camera.position.set(0.1, 1.7, 2);
+      state.yaw = 0; state.pitch = 0;
+      setPlayerPos(0.1, 2);
+    } catch (e) { /* ignore */ }
+    showGetInButton();
+    toast('Your car is parked here. Get in to drive on.');
+    return;
+  }
+  openCityMap(parkedPlaceKey || undefined);
 }
 // The valve room inside the control station: the player enters through
 // the station door and walks to the valves. A separate bounds box, so
@@ -1184,7 +1395,10 @@ async function loadHumans() {
       // Patrol data: the guards walk the gate line so the yard feels alive
       // and the player can see they are interactive. They patrol in x
       // around their post; after they stand down they stop where they are.
-      guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6 });
+      // faceYaw 0: the static Caleb scan faces +Z in its own space
+      // (measured from the GLB: the face parts sit at +z), so a plain
+      // atan2 yaw points him at his target with no offset.
+      guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, faceYaw: 0 });
       // A pulsing gold "!" above each guard until they stand down, so the
       // player can see at a glance that the guards are the way in.
       const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
@@ -1346,6 +1560,14 @@ function buildValveRoom() {
   // steps. The device hides under the flight, east of the steps, so this
   // box stops at the steps' east edge and never covers it.
   addBoxCollider(valveRoomColliders, 2.75, -4.15, 3.85, -1.3);
+  // The back-wall pipework is solid too: the drops, valve wheels and
+  // gauges all sit at z -5.7 (front surfaces at -5.48), but the walk
+  // bounds let the player reach z -5.4, so in first person his eye
+  // sat 0.08 m from the pipes and the near plane clipped into them
+  // (the door was not even visible from the gauges). This strip stops
+  // him at z -5.15, a third of a metre clear of every pipe, in first
+  // and third person alike; the valves stay clickable from there.
+  addBoxCollider(valveRoomColliders, -3.9, -6.05, 3.9, -5.5);
 }
 function enterValveRoom() {
   if (inValveRoom) return;
@@ -2027,7 +2249,12 @@ function startRentalDrive() {
 // ---------- Mission 2: The Grid (Con Edison substation) ----------
 let keycardMesh, logbookMesh, scadaMesh, manifestoMesh, bombInterval = null, bombTime = 90;
 let scadaQteDone = false; // the surge quick-time fires once per SCADA open
-const feeders = { A: 33, B: 33, C: 34 };
+// The feeders start OFF target (total 115, feeder A over the 60 cap),
+// so the reroute is a real puzzle and the surge quick-time at 20 s
+// fires while the player is still working. 33/33/34 stays a valid
+// solution, as does any split totalling exactly 100 with none over 60.
+const FEEDER_START = { A: 70, B: 25, C: 20 };
+const feeders = { A: FEEDER_START.A, B: FEEDER_START.B, C: FEEDER_START.C };
 let hasKeycard = false, hasPassphrase = false, guardsDown = false;
 function buildMission2() {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), stdMat({ color: 0x3a3f42, roughness: 1 }));
@@ -2164,18 +2391,21 @@ function buildMission2() {
   // carry real point lights, plus one at the lot lamp head, so the whole
   // yard - lot, guards, transformers, control room - is lit on arrival.
   const floodPoleMat = stdMat({ color: 0x4a5058, metalness: 0.7, roughness: 0.4 });
-  const floodHeadMat = new THREE.MeshStandardMaterial({ color: 0x8a7a5a, emissive: 0xffd9a0, emissiveIntensity: 1.6, roughness: 0.4 });
+  const floodHeadMat = new THREE.MeshStandardMaterial({ color: 0x8a7a5a, emissive: 0xffd9a0, emissiveIntensity: 1.25, roughness: 0.4 });
   for (const fx of [-6.5, 6.5]) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 4.6, 10), floodPoleMat);
     pole.position.set(fx, 2.3, 4.5); pole.castShadow = true; mission2.add(pole);
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.18, 0.35), floodHeadMat);
     head.position.set(fx, 4.65, 4.5); head.rotation.x = 0.5; mission2.add(head);
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false }));
     glow.scale.set(3.2, 3.2, 1); glow.position.set(fx, 4.5, 4.5); mission2.add(glow);
-    const fl = new THREE.PointLight(0xffd9a0, 180, 36, 2);
+    // Toned down from 180: at full strength the yard read bright and
+    // daylike for dusk on the live check. 130 keeps every surface
+    // readable (guards, sign, lot, control room) under a dusk sky.
+    const fl = new THREE.PointLight(0xffd9a0, 130, 36, 2);
     fl.position.set(fx, 4.4, 4.5); mission2.add(fl);
   }
-  const lotLight = new THREE.PointLight(0xffd9a0, 140, 32, 2);
+  const lotLight = new THREE.PointLight(0xffd9a0, 100, 32, 2);
   lotLight.position.set(-8.5, 4.1, 6.1); mission2.add(lotLight);
   const subSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('CON EDISON SUBSTATION', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
   subSign.scale.set(8, 2, 1); subSign.position.set(0, 3.7, -2.1); mission2.add(subSign);
@@ -2905,14 +3135,16 @@ function setTimeOfDay(mode) {
   } else if (mode === 'dusk') {
     scene.background.set(0x2a1e33); // dusky purple-orange evening
     scene.fog.color.set(0x2a1e33); scene.fog.density = 0.012;
-    sun.intensity = 0.65; sun.color.set(0xff8a3c); sun.position.set(-14, 6, 8);
+    sun.intensity = 0.58; sun.color.set(0xff8a3c); sun.position.set(-14, 6, 8);
     moon.intensity = 0.15;
     // Dusk stays dusky, but the fill light is high enough that the
     // substation yard (lot, fence, control room, guards) reads from
     // the seated arrival view instead of sinking into silhouette
-    // against the lit shops beyond it.
-    hemi.intensity = 0.4; hemi.color.set(0x8a6a9a); hemi.groundColor.set(0x3a2a22);
-    ambient.intensity = 0.4;
+    // against the lit shops beyond it. Toned down a touch from
+    // 0.65/0.4/0.4: the yard read bright and daylike on the live
+    // check; the floodlights carry the yard, the fill just lifts it.
+    hemi.intensity = 0.36; hemi.color.set(0x8a6a9a); hemi.groundColor.set(0x3a2a22);
+    ambient.intensity = 0.36;
   } else { // night
     scene.background.set(0x05070a);
     scene.fog.color.set(0x05070a); scene.fog.density = 0.012;
@@ -3464,7 +3696,25 @@ export function openCityMap(fromKey, preselectKey) {
       const key = mapSelectedKey;
       travelMapEl.style.display = 'none';
       if (isTrekLeg(key)) startTrek(key, arriveAt(key));
-      else startTravelDrive(key, arriveAt(key));
+      else {
+        // The drive starts where the car is parked: at a mission lot
+        // he is seated in the parked car first and the drive leaves
+        // from the lot, instead of the car vanishing and the drive
+        // starting from nowhere. (At the arrival lot he is already
+        // seated in the car - see getInParkedCar.)
+        const lotCar = departureLotCar();
+        if (lotCar) {
+          // He may be inside the valve room (Mission 1 ends there):
+          // stepping out to the car leaves the room behind, and the
+          // drive clears the flag anyway - clear it now so a get-out
+          // during the beat cannot clamp him into the room's bounds.
+          inValveRoom = false;
+          const p = PARKING[state.mission];
+          const out = (p && p.driveSpawn) || { x: lotCar.position.x - 1.5, z: lotCar.position.z, yaw: 0 };
+          seatPlayerInParkedCar(lotCar, out, null, { quiet: true });
+          setTimeout(() => { if (!travelActive) startTravelDrive(key, arriveAt(key)); }, 900);
+        } else startTravelDrive(key, arriveAt(key));
+      }
     };
     document.getElementById('travelSkipBtn').onclick = () => {
       if (!pendingMission) return;
@@ -3540,7 +3790,9 @@ function showLandmarkCard(key) {
   landmarkEl.style.display = 'flex';
   document.getElementById('landmarkBackBtn').onclick = () => {
     landmarkEl.style.display = 'none';
-    openCityMap(key);
+    // Back to the parked car first (or straight to the map after a
+    // Skip, when there is no lot car).
+    returnToParkedCar();
   };
 }
 // What happens when the drive arrives at a place.
@@ -3555,25 +3807,27 @@ function arriveAt(key) {
     // of the landmark first; the card shows after he steps out of the
     // car. A Skip goes straight to the card, as before.
     return () => {
-      currentPlaceKey = key;
-      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, () => showLandmarkCard(key)); }
+      currentPlaceKey = key; parkedPlaceKey = key;
+      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, () => showLandmarkCard(key), key); }
       else showLandmarkCard(key);
     };
   }
   if (p.type === 'mission') {
     if (pendingMission && pendingMission.key === key) {
       const fn = pendingMission.fn; pendingMission = null;
-      return () => { currentPlaceKey = key; fn(); };
+      return () => { currentPlaceKey = key; parkedPlaceKey = key; fn(); };
     }
     return () => restoreMissionScene();
   }
   if (p.type === 'store') {
     // A drive arrival parks in front of the shop first; the store opens
     // after he steps out of the car. A Skip goes straight to the store.
+    // Closing the store returns him to his parked car (or, with no lot
+    // car after a Skip, straight to the map, as before).
     return () => {
-      currentPlaceKey = key;
-      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, () => openStore(p.tab, () => openCityMap(key))); }
-      else openStore(p.tab, () => openCityMap(key));
+      currentPlaceKey = key; parkedPlaceKey = key;
+      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, () => openStore(p.tab, () => returnToParkedCar()), key); }
+      else openStore(p.tab, () => returnToParkedCar());
     };
   }
   if (p.type === 'home' || p.type === 'visit') {
@@ -3581,9 +3835,9 @@ function arriveAt(key) {
     // interior loads after he steps out of the car. A Skip goes
     // straight inside, as before.
     return () => {
-      currentPlaceKey = key;
+      currentPlaceKey = key; parkedPlaceKey = key;
       const go = () => { if (window.__lsActManager && typeof window.__lsActManager.enterHome === 'function') window.__lsActManager.enterHome(p.kind, 'map'); };
-      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, go); }
+      if (arrivedByDrive) { arrivedByDrive = false; showArrivalBeat(p.name, go, key); }
       else go();
     };
   }
@@ -3598,6 +3852,15 @@ function beginTravel(fromKey, toKey, onArrive) {
 }
 function closeCityMap() {
   if (travelMapEl) travelMapEl.style.display = 'none';
+  // At the parked car (the return beat): closing the map while seated
+  // steps him back out beside the car; closing it while standing
+  // beside the car puts the mission scene back, as before.
+  if (atParkedLot) {
+    if (parkedSeatActive) { getOutOfParkedCar(); return; }
+    atParkedLot = false;
+    hideGetInButton();
+    hideArrivalBeat();
+  }
   restoreMissionScene();
 }
 function restoreMissionScene() {
@@ -3680,8 +3943,33 @@ function hideDriveControls() {
 // camera forward through the city in the player's own car. The banner
 // names the car and counts the miles down. The drive takes longer for a
 // far place, so the distance feels real. Any key or click skips to arrival.
+// The car waiting in the current mission's lot, when the player is
+// standing in that mission's scene and the car is parked there: the
+// drive he is about to take leaves from that car. Null when he is
+// already seated in a parked car, standing at the arrival lot, or
+// anywhere the mission lot car is not (the drive then starts the
+// usual way). At the water facility his own car (beside the rental)
+// is the one he drives away in.
+function departureLotCar() {
+  if (parkedSeatActive || atParkedLot) return null;
+  const m = state.mission;
+  const group = m === 1 ? mission1 : m === 2 ? mission2 : mission3;
+  if (!group || !group.visible) return null;
+  if (parkedPlaceKey !== MISSION_PLACE[m]) return null;
+  if (m === 1 && rentalExtraCar) return rentalExtraCar;
+  return parkedCars[m] || null;
+}
 function startTravelDrive(toKey, onArrive) {
+  if (travelActive) return;
   const to = TRAVEL_PLACES[toKey];
+  // Leaving from a parked seat (the departure beat seated him in the
+  // lot car, or he got in at the arrival lot): clear the seat state
+  // and the arrival lot before the drive takes over. The drive car
+  // build below reparents the avatar out of the parked car.
+  if (parkedSeatActive) { parkedSeatActive = false; parkedSeat = null; hideGetOutButton(); }
+  if (arrivalGroup) arrivalGroup.visible = false;
+  atParkedLot = false;
+  hideGetInButton();
   buildTravelScene();
   mission1.visible = false; mission2.visible = false; mission3.visible = false;
   travelGroup.visible = true;
@@ -4133,7 +4421,11 @@ function buildFallbackGuards() {
     g.name = gname;
     mission2.add(g);
     placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
-    guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person });
+    // faceYaw rides on the rig: the Atlas crowd rigs face -Z in their
+    // own space (faceYaw PI), the Casual rig faces +Z (0). Without it
+    // a fallback guard patrolled backwards and stood down facing away
+    // from the player (guard 1 faced east/away on the live check).
+    guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person, faceYaw: person.faceYaw || 0 });
     const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
     marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
     g.add(marker); guardMarkers.push(marker);
@@ -4198,6 +4490,19 @@ function startMission2() {
 }
 // Hide the gold "!" markers over the guards once they stand down.
 function hideGuardMarkers() { for (const m of guardMarkers) m.visible = false; }
+// Face both guards at the player. The model-space forward differs by
+// rig: the Caleb scan faces +Z (faceYaw 0 on its patrol entry), the
+// Atlas crowd rigs face -Z (faceYaw PI). The atan2 yaw to the player
+// plus the rig's own faceYaw points either rig at him. camera.position
+// is the player position at the point in the frame this runs (the
+// presence hook moves the camera behind the avatar only at frame end).
+function faceGuardsAtPlayer() {
+  for (const gp of guardPatrol) {
+    const dx = camera.position.x - gp.group.position.x;
+    const dz = camera.position.z - gp.group.position.z;
+    if (dx * dx + dz * dz > 0.04) gp.group.rotation.y = Math.atan2(dx, dz) + (gp.faceYaw || 0);
+  }
+}
 function guardDialogue() {
   if (guardsDown) { toast('The guards have stood down. The SCADA terminal is yours.'); return; }
   if (state.trust >= 6) {
@@ -4213,8 +4518,9 @@ function guardDialogue() {
       // The guards turn to face the player they just stood down for,
       // so the white key card on guard 1's front belt is in plain
       // sight (he patrolled facing sideways, card hidden behind his
-      // arm - the live check could not find it on either belt).
-      for (const gp of guardPatrol) gp.group.rotation.y = 0;
+      // arm - the live check could not find it on either belt). The
+      // per-frame block keeps them facing him after this.
+      faceGuardsAtPlayer();
       // The guard hands over the substation gate key with the key card.
       giveKey('substation', 'substation key');
       state.inventory.push('Substation key'); updateHUD();
@@ -4230,7 +4536,7 @@ function guardDialogue() {
       guardsDown = true; hideGuardMarkers(); keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(-1, 'the bluff failed'); integrity('Power', -5);
       // Same turn-to-face as the bluff-success path: the key card on
       // guard 1's front belt must be visible either way.
-      for (const gp of guardPatrol) gp.group.rotation.y = 0;
+      faceGuardsAtPlayer();
       // Jade slipped in and took the substation gate key from the guard
       // post on her way through, so the player has it either way.
       giveKey('substation', 'substation key');
@@ -4255,6 +4561,10 @@ function renderScada() {
 function openScadaModal() {
   if (!hasKeycard) { toast('The SCADA terminal needs the key card first - it is on the guard\u2019s belt.'); return; }
   if (!hasPassphrase) { toast('Two-factor: the terminal also needs a passphrase. It is in the maintenance log - the red book on the desk.'); return; }
+  // Every open starts from the same off-target load, like the bomb
+  // timer restarting at 90: a half-finished reroute never carries
+  // over, and the puzzle is never already solved on entry.
+  feeders.A = FEEDER_START.A; feeders.B = FEEDER_START.B; feeders.C = FEEDER_START.C;
   bombTime = 90;
   scadaQteDone = false;
   document.getElementById('scadaModal').classList.remove('hidden');
@@ -5159,8 +5469,9 @@ function animateFrame() {
   // Guards patrol the gate line while Mission 2 is active and they have
   // not stood down, so the yard feels alive and the player can see the
   // guards are the way in. They walk back and forth in x around their
-  // post and face the direction they walk (the old scan faces +z, so
-  // +x is rotation.y = PI/2 and -x is -PI/2). The key card rides on
+  // post and face the direction they walk (the Caleb scan faces +z, so
+  // +x is rotation.y = PI/2 and -x is -PI/2; a fallback crowd rig adds
+  // its own faceYaw, PI for the -Z Atlas rigs). The key card rides on
   // guard1's belt, so it follows him; the "!" markers pulse above them.
   // mission2.visible is part of the gate: the shared arrival lot sits
   // on the same origin coordinates as the yard, so without it the
@@ -5170,7 +5481,7 @@ function animateFrame() {
     for (const gp of guardPatrol) {
       const w = Math.sin(t * 0.45 + gp.phase);
       gp.group.position.x = gp.baseX + w * 1.8;
-      gp.group.rotation.y = Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2;
+      gp.group.rotation.y = (Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2) + (gp.faceYaw || 0);
       // Fallback crowd-rig guards carry their own walk mixer.
       if (gp.person) { try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ } }
     }
@@ -5201,17 +5512,30 @@ function animateFrame() {
       }
     }
   }
+  // Stood down: both guards stay facing the player (the patrol no
+  // longer overwrites their facing, and a fallback rig keeps its idle
+  // animation alive instead of freezing mid-stride).
+  if (state.mission === 2 && mission2.visible && guardsDown) {
+    faceGuardsAtPlayer();
+    for (const gp of guardPatrol) {
+      if (gp.person) { try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ } }
+    }
+  }
   // The key card sits on guard1's front belt: while it is visible,
   // keep it on him so the player always finds it where he is. He
-  // stands down facing the player (south, +z - see guardDialogue),
-  // so the card rides 0.24 m in front of his centre at belt height,
-  // clear of his torso and arm; the old z +0.15 spot was inside his
-  // waist silhouette and the card could not be seen live. The marker
-  // above it pulses so the player can tell WHICH guard has the card.
+  // stands down facing the player (see guardDialogue), so the card
+  // rides 0.24 m in front of his centre at belt height, offset to
+  // his right hand side, clear of his torso and arm; the old fixed
+  // z +0.24 spot only worked while he faced south. The marker above
+  // it pulses so the player can tell WHICH guard has the card.
   if (state.mission === 2 && keycardMesh && keycardMesh.visible && guardPatrol.length) {
     const g1 = guardPatrol[0].group.position;
-    keycardMesh.position.set(g1.x + 0.12, 1.02, g1.z + 0.24);
-    if (window._keycardHit) window._keycardHit.position.set(g1.x, 1.05, g1.z + 0.15);
+    let fdx = camera.position.x - g1.x, fdz = camera.position.z - g1.z;
+    const fl = Math.hypot(fdx, fdz);
+    if (fl > 0.01) { fdx /= fl; fdz /= fl; } else { fdx = 0; fdz = 1; }
+    keycardMesh.position.set(g1.x + fdx * 0.24 + fdz * 0.12, 1.02, g1.z + fdz * 0.24 - fdx * 0.12);
+    keycardMesh.rotation.y = Math.atan2(fdx, fdz); // card face toward the player
+    if (window._keycardHit) window._keycardHit.position.set(g1.x + fdx * 0.15, 1.05, g1.z + fdz * 0.15);
     if (window._keycardMarker) {
       const ms = 0.55 + Math.sin(t * 4) * 0.08;
       window._keycardMarker.scale.set(ms, ms, 1);

@@ -12,8 +12,8 @@ import * as THREE from 'three';
 import { canvas, renderer, disposeScene, showFrameErrorBanner } from './core.js';
 import { getBalance, moneyFmt, grantPayout, spendMoney, getEquippedCarDef, getFuel, refillFuel, consumeFuelMiles } from './economy.js';
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
-import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson, resolveMove, addBoxCollider, clearPinchPointers } from './player.js';
+import { makeSeatedPerson, updateSeatedPerson, onCrowdReady, pickLook } from './crowd.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, getPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson, resolveMove, addBoxCollider, clearPinchPointers } from './player.js';
 import { readingTimeMs, speakLine } from './speak.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
@@ -55,11 +55,14 @@ let vaultReadAt = -100;
 // and badge sit on the front of the body: rigged models face -z, the
 // primitive figure faces +z. The uniform is tracked on the person, so
 // if the crowd upgrade swaps the body for a rigged one later, the
-// uniform can be re-applied (see updateOfficer).
+// uniform can be re-applied (see updateOfficer). The rigged facing
+// differs by model: the Atlas rigs face -z (faceYaw PI), the Casual
+// rig faces +z (faceYaw 0), so the front side follows faceYaw - a
+// blanket -1 put a Jade-rig officer's cap brim and badge on his back.
 const OFFICER_SKINS = [0x2a1a12, 0x6b4a2f, 0xc89b7a, 0xe8b88a];
 function dressUniform(p, kind) {
   if (!p || !p.group) return;
-  const front = p.rigged ? -1 : 1;
+  const front = (p.rigged && p.faceYaw) ? -1 : 1;
   const old = [];
   p.group.traverse(o => { if (o.userData && o.userData.uniformPart) old.push(o); });
   for (const o of old) { if (o.parent) o.parent.remove(o); }
@@ -89,6 +92,33 @@ function dressUniform(p, kind) {
     brim.position.set(0, 1.66, front * 0.19); brim.userData.uniformPart = true; g.add(brim);
     const apron = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.75, 0.03), new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.9 }));
     apron.position.set(0, 1.02, front * 0.17); apron.userData.uniformPart = true; g.add(apron);
+  } else if (kind === 'doctor') {
+    // A white coat over the shirt, with a red cross on the chest.
+    const coat = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.9, 0.03), new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.9 }));
+    coat.position.set(0, 1.05, front * 0.17); coat.userData.uniformPart = true; g.add(coat);
+    const crossMat = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.6 });
+    const crossV = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.17, 0.012), crossMat);
+    crossV.position.set(0.12, 1.32, front * 0.19); crossV.userData.uniformPart = true; g.add(crossV);
+    const crossH = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.05, 0.012), crossMat);
+    crossH.position.set(0.12, 1.32, front * 0.19); crossH.userData.uniformPart = true; g.add(crossH);
+  } else if (kind === 'nurse') {
+    // A white nurse cap.
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 0.08, 12), new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.85 }));
+    cap.position.set(0, 1.71, 0); cap.userData.uniformPart = true; g.add(cap);
+  } else if (kind === 'engineer' || kind === 'worker') {
+    // A hard hat: yellow for the lab engineers, orange for plant crew.
+    const hatMat = new THREE.MeshStandardMaterial({ color: kind === 'engineer' ? 0xf2c230 : 0xe8761a, roughness: 0.5 });
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), hatMat);
+    dome.position.set(0, 1.66, 0); dome.userData.uniformPart = true; g.add(dome);
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.02, 16), hatMat);
+    brim.position.set(0, 1.67, 0); brim.userData.uniformPart = true; g.add(brim);
+  } else if (kind === 'staff') {
+    // A plain navy cap for desk staff, clerks and attendants.
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.85 });
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.19, 0.09, 12), capMat);
+    crown.position.set(0, 1.7, 0); crown.userData.uniformPart = true; g.add(crown);
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.02, 0.14), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 }));
+    brim.position.set(0, 1.66, front * 0.17); brim.userData.uniformPart = true; g.add(brim);
   }
   p.uniform = kind; p.uniformGroup = p.group;
 }
@@ -1139,6 +1169,18 @@ function addExitDoor(scene, opts) {
   // The panel is clickable, so a click on the door opens it too.
   panel.userData.doorRef = door;
   homeTargets.push(panel);
+  // A generous invisible hit box around the whole door assembly, so
+  // a click anywhere on the door (frame, sign, glow strip) opens it
+  // instead of missing the 1.16 m panel from across the grounds:
+  // the hospital ENTER door took clicks from 4-8 m on the live check
+  // and never entered, while walking through worked. The box sits
+  // in the door group, so it follows the door's facing; room keys
+  // are never behind a door, so it cannot steal a key click.
+  const doorHit = new THREE.Mesh(new THREE.BoxGeometry(1.9, 2.7, 0.8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  doorHit.position.set(0, 1.35, 0);
+  doorHit.name = 'exitDoor'; doorHit.userData.homeAction = 'exitDoor'; doorHit.userData.doorRef = door;
+  g.add(doorHit);
+  homeTargets.push(doorHit);
   return door;
 }
 // Enter a building lobby from its entrance door: the lobby is a small
@@ -1149,10 +1191,26 @@ function addExitDoor(scene, opts) {
 // returns to the grounds, not to the map - so it is held and handed to
 // the lobby as its way back: leaving the lobby re-enters the grounds,
 // and leaving the grounds runs the original callback.
-function goToLobby(backKind) {
+function goToLobby(backKind, door) {
   const ol = homeOnLeave;
   homeOnLeave = null;
-  try { enterPlace('lobby', () => { try { enterPlace(backKind, ol); } catch (e) { /* ignore */ } }, { lobbyFor: backKind }); } catch (e) { /* ignore */ }
+  // Coming back out of the lobby, he steps out of the door he went
+  // in: the grounds re-entry spawns beside that door, facing it, so
+  // he walks back to his parked car from the building instead of
+  // restarting at the place's generic start. The spawn sits 2.2 m
+  // out from the door along the line he approached on (outside the
+  // 1.8 m walk-up radius, so the door does not instantly pull him
+  // back in), which works for every door facing.
+  let spawn = null;
+  try {
+    if (door) {
+      const pp = getPlayerPos() || { x: homeCamera.position.x, z: homeCamera.position.z };
+      let dx = pp.x - door.x, dz = pp.z - door.z;
+      const l = Math.hypot(dx, dz);
+      if (l > 0.3) { dx /= l; dz /= l; spawn = { x: door.x + dx * 2.2, z: door.z + dz * 2.2, yaw: Math.atan2(dx, dz) }; }
+    }
+  } catch (e) { /* fall back to the generic spawn */ }
+  try { enterPlace('lobby', () => { try { enterPlace(backKind, ol, spawn ? { spawn } : undefined); } catch (e) { /* ignore */ } }, { lobbyFor: backKind }); } catch (e) { /* ignore */ }
 }
 // The Fill tank button, shown only at the Filling Station: a flat
 // 0.5 ZAMA for a full tank, whatever the current level. If the tank is
@@ -2033,6 +2091,9 @@ function buildIndustry(scene) {
   gate.scale.set(4, 1, 1); gate.position.set(0, 3.2, 10); scene.add(gate);
   addTree(scene, 14, 6);
   lamp(scene, -10, 3.2, 8, 0xfff2c0, 0.7, 10);
+  // Two plant workers on the yard, in hard hats, clear of both doors.
+  addStaff(scene, { x: -5, z: -1, heading: 0, label: 'Worker', uniform: 'worker', shirt: 0x4a6a8a, pants: 0x3a3a3a, line: 'Mind the pipes - the plant runs all night.' });
+  addStaff(scene, { x: 2, z: -1, heading: 0, label: 'Worker', uniform: 'worker', shirt: 0x4a6a8a, pants: 0x3a3a3a, line: 'Treatment plant. The city drinks what we clean.' });
 }
 
 // A simple parked car (body + cabin + wheels) for the car park and airport.
@@ -2289,6 +2350,63 @@ function greetMarketVendor() {
   const line = 'Fresh fruit, friend. Everything on this street is real New York.';
   try { speakLine('vendor', line); } catch (e) { /* speech is best effort */ }
   showHomeToast('Vendor: ' + line);
+}
+// ---------- Professional people in every building ----------
+// Every enterable place has its own staff, standing at their post in
+// role dress with a floating role tag, like the Market Street vendor.
+// Clicking one speaks a fitting line (throttled, like the vendor).
+// Staff stand still (speed 0, Idle clip) and are added to roomWalkers
+// so the animate loop keeps them animated and re-dresses them when
+// the crowd upgrade swaps in a rigged body. phase is pinned to 0 so
+// the walk bob cannot float a standing person off the floor.
+// o: { x, z, heading, label, line, voice, shirt, pants, uniform, action }
+let staffAt = -100; // throttle for staff greetings
+function addStaff(scene, o) {
+  const look = pickLook();
+  if (o.shirt !== undefined) look.shirt = o.shirt;
+  if (o.pants !== undefined) look.pants = o.pants;
+  const p = makePedestrian({ x: o.x, z: o.z, speed: 0, heading: o.heading || 0, idle: true, look, coatColor: o.shirt, legColor: o.pants, skinColor: look.skin });
+  if (!p) return null;
+  p.group.position.set(o.x, 0, o.z);
+  p.phase = 0;
+  scene.add(p.group);
+  if (o.uniform) dressUniform(p, o.uniform);
+  roomWalkers.push(p);
+  const tag = textSprite(o.label, '#2a2118', '#ffd166', '');
+  tag.scale.set(1.8, 0.45, 1); tag.position.set(o.x, 2.15, o.z); scene.add(tag);
+  const hb = hitBox(scene, 1.4, 2.0, 1.4, o.x, 1.0, o.z, o.action || 'staff');
+  hb.userData.staffRole = o.label;
+  hb.userData.staffLine = o.line || 'Can I help you?';
+  hb.userData.staffVoice = o.voice || 'staff';
+  return p;
+}
+function greetStaff(role, line, voice) {
+  const now = Date.now() / 1000;
+  if (now - staffAt < 4) return;
+  staffAt = now;
+  try { speakLine(voice || 'staff', line); } catch (e) { /* speech is best effort */ }
+  showHomeToast(role + ': ' + line);
+}
+// Hospital treatment, priced by the user at exactly 10 ZAMA. The game
+// has no health or energy stat to restore, so treatment is the paid
+// interaction and the doctor's line only. No wallet needed: in-game
+// services (fuel, tickets, treatment) stay wallet-free.
+const TREATMENT_PRICE = 10;
+let treatmentAt = -100;
+function offerTreatment() {
+  const now = Date.now() / 1000;
+  if (now - treatmentAt < 6) return;
+  treatmentAt = now;
+  if (getBalance() < TREATMENT_PRICE) {
+    const line = 'Treatment is 10 ZAMA. Come back when you have it - we will be here.';
+    try { speakLine('doctor', line); } catch (e) { /* speech is best effort */ }
+    showHomeToast('Doctor: ' + line);
+    return;
+  }
+  spendMoney(TREATMENT_PRICE);
+  const line = 'There - patched up. Rest, fluids, and no heroics for a day.';
+  try { speakLine('doctor', line); } catch (e) { /* speech is best effort */ }
+  showHomeToast('Doctor: ' + line + ' Treatment - 10 ZAMA. Balance: ' + moneyFmt(getBalance()) + '.');
 }
 // ---------- Train Terminal front (prologue arrival) ----------
 // After the prologue drive the player parks in the lot in front of
@@ -2616,21 +2734,11 @@ function buildTerminal(scene) {
   const deskSign = textSprite('SERVICE DESK', '#2a2118', '#ffd166', 'Tickets - 0.1 ZAMA');
   deskSign.scale.set(3.0, 0.75, 1); deskSign.position.set(7.0, 2.5, 10.3); scene.add(deskSign);
   hbox(scene, 0.08, 2.3, 0.08, 0x2a3a4a, 7.0, 1.15, 10.3, null, { metalness: 0.6, roughness: 0.4 });
-  const attendant = new THREE.Group(); attendant.position.set(8, 0, 9.2); scene.add(attendant);
-  const navy = mat(0x1a3a5a, { roughness: 0.85 });
-  const skin = mat(0x8a5a3a, { roughness: 0.8 });
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.3), navy);
-  torso.position.set(0, 1.05, 0); torso.castShadow = true; attendant.add(torso);
-  for (const sx of [-0.33, 0.33]) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, 0.12), navy);
-    arm.position.set(sx, 1.05, 0); attendant.add(arm);
-  }
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), skin);
-  head.position.set(0, 1.58, 0); head.castShadow = true; attendant.add(head);
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.18, 0.09, 12), navy);
-  cap.position.set(0, 1.74, 0); attendant.add(cap);
-  const brim = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.14), mat(0x0a0a0a, { roughness: 0.3 }));
-  brim.position.set(0, 1.7, 0.16); attendant.add(brim);
+  // The service-desk clerk: a real rigged person in a navy uniform
+  // and cap, standing behind the counter (the old blocky figure is
+  // gone - no primitive people). Tapping him buys the ticket, exactly
+  // like tapping the desk.
+  addStaff(scene, { x: 8, z: 9.2, heading: 0, label: 'Service desk clerk', action: 'serviceDesk', uniform: 'staff', shirt: 0x1a3a5a, pants: 0x141c28, line: 'Tickets for the 4 train, 0.1 ZAMA. Platform 4, north end.' });
   hitBox(scene, 3.4, 1.6, 1.2, 8, 0.8, 10, 'serviceDesk');
   // Big windows on the west wall, with a daylight sky.
   for (const z of [-8, 0, 8]) {
@@ -2721,6 +2829,9 @@ function buildHotel(scene) {
   // It is locked and needs the hotel key, which is on the desk.
   addExitDoor(scene, { x: 4.9, z: 0, ry: -Math.PI / 2, keyId: 'hotel', keyLabel: 'hotel key', label: 'EXIT - SUITE DOOR' });
   addRoomKey(scene, 3.6, 1.6, 'hotel', 'hotel key');
+  // The receptionist, by the desk, facing the door. Clear of the key
+  // on the desk and of the suite door itself.
+  addStaff(scene, { x: 2.2, z: 1.8, heading: 0, label: 'Receptionist', uniform: 'staff', shirt: 0x2a2a4a, pants: 0x1a1a1a, line: 'Your suite is ready, sir. Room 412 - sleep well, the city needs you rested.' });
 }
 function buildAirport(scene) {
   // JFK terminal exterior: a long white modern terminal with a glass
@@ -2776,6 +2887,9 @@ function buildAirport(scene) {
   addTree(scene, -14, 10); addTree(scene, 14, 12);
   lamp(scene, -8, 3.2, 10, 0xfff2c0, 0.7, 10);
   lamp(scene, 8, 3.2, 12, 0xfff2c0, 0.7, 10);
+  // Airport staff on duty by the entrance door, facing passengers as
+  // they come around the terminal to the glass front.
+  addStaff(scene, { x: 2.5, z: 0.5, heading: Math.PI, label: 'Airport staff', uniform: 'staff', shirt: 0x1a3a5a, pants: 0x141c28, line: 'Welcome to JFK Terminal 4. Check-in is inside - mind the boards.' });
 }
 function buildCarpark(scene) {
   // A parking lot: asphalt, painted bays, rows of parked cars, lamps.
@@ -2821,6 +2935,8 @@ function buildCarpark(scene) {
   officeSign.scale.set(3, 0.75, 1); officeSign.position.set(15, 3.6, -8.4); scene.add(officeSign);
   const sign = textSprite('CAR PARK', '#2a2118', '#ffd166', 'Parking - 2 ZAMA an hour');
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 5, -12); scene.add(sign);
+  // The parking attendant, on the aisle between the two bay rows.
+  addStaff(scene, { x: 6, z: 6, heading: 0, label: 'Parking attendant', uniform: 'staff', shirt: 0xc07a1a, pants: 0x2a2a2a, line: 'Parking is 2 ZAMA an hour. Mind the bays, friend.' });
 }
 
 // A projector slide for the symposium screen: a New York title card.
@@ -3022,6 +3138,11 @@ function buildWindtunnel(scene) {
   // It is locked and needs the wind tunnel key, which is on the workbench.
   addExitDoor(scene, { x: 7, z: 5.9, ry: Math.PI, keyId: 'windtunnel', keyLabel: 'wind tunnel key', label: 'EXIT - LAB DOOR' });
   addRoomKey(scene, -5, 4.6, 'windtunnel', 'wind tunnel key');
+  // Two engineers on duty by the tunnel, in hard hats, facing the
+  // test section. Clear of the control panel, the workbench key and
+  // the lab door.
+  addStaff(scene, { x: -1, z: 0.6, heading: Math.PI, label: 'Engineer', uniform: 'engineer', shirt: 0xc07a1a, pants: 0x2a2a2a, line: 'The wing model is on the sting in the test section. Mind the glass.' });
+  addStaff(scene, { x: 4.2, z: 0.8, heading: Math.PI, label: 'Engineer', uniform: 'engineer', shirt: 0xc07a1a, pants: 0x2a2a2a, line: 'We run the tunnel at 42 metres a second. Clean airflow, every time.' });
 }
 function takePodium() {
   if (podiumDone) { showHomeToast('You already took the NYC podium - the hall heard you.'); return; }
@@ -3162,6 +3283,9 @@ function buildSymposium(scene) {
   // It is locked and needs the symposium key, by the back row.
   addExitDoor(scene, { x: -6, z: 6.9, ry: Math.PI, keyId: 'symposium', keyLabel: 'symposium key', label: 'EXIT - HALL DOOR' });
   addRoomKey(scene, 6.5, 5.5, 'symposium', 'symposium key');
+  // The host, on the floor in front of the stage, facing the house.
+  // Clear of the podium hit box and the front row.
+  addStaff(scene, { x: 3, z: -3.2, heading: 0, label: 'Host', shirt: 0x1a1a2a, pants: 0x1a1a1a, line: 'Welcome to the New York Symposium. The podium is yours when you are ready.' });
 }
 
 // ---------- Place engine ----------
@@ -3291,11 +3415,22 @@ function buildPoliceStation(scene) {
   const sign = textSprite('POLICE STATION', '#1a2a4a', '#7fb0ff', 'NYPD - Midtown Manhattan');
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.0, -6.8); scene.add(sign);
   // Officers on duty: one behind the desk, one by the cells, two
-  // walking the lobby floor.
-  const deskOfficer = makeOfficer('police', { x: 0, z: -5.9, speed: 0 });
-  if (deskOfficer) { deskOfficer.group.position.set(0, 0, -5.9); deskOfficer.group.rotation.y = deskOfficer.rigged ? 0 : Math.PI; scene.add(deskOfficer.group); }
-  const cellOfficer = makeOfficer('police', { x: 4.6, z: -5.2, speed: 0 });
-  if (cellOfficer) { cellOfficer.group.position.set(4.6, 0, -5.2); cellOfficer.group.rotation.y = cellOfficer.rigged ? -Math.PI / 2 : Math.PI / 2; scene.add(cellOfficer.group); }
+  // walking the lobby floor. The two standing officers hold the Idle
+  // clip, face their post, and can be tapped to talk.
+  const deskOfficer = makeOfficer('police', { x: 0, z: -5.9, speed: 0, heading: 0, idle: true });
+  if (deskOfficer) {
+    deskOfficer.group.position.set(0, 0, -5.9); deskOfficer.phase = 0; scene.add(deskOfficer.group); roomWalkers.push(deskOfficer);
+    const t1 = textSprite('Officer', '#2a2118', '#ffd166', ''); t1.scale.set(1.8, 0.45, 1); t1.position.set(0, 2.15, -5.9); scene.add(t1);
+    const h1 = hitBox(scene, 1.4, 2.0, 1.4, 0, 1.0, -5.9, 'staff');
+    h1.userData.staffRole = 'Officer'; h1.userData.staffLine = 'NYPD Midtown. Report it here, or mind the holding cell.'; h1.userData.staffVoice = 'staff';
+  }
+  const cellOfficer = makeOfficer('police', { x: 4.6, z: -5.2, speed: 0, heading: Math.PI / 2, idle: true });
+  if (cellOfficer) {
+    cellOfficer.group.position.set(4.6, 0, -5.2); cellOfficer.phase = 0; scene.add(cellOfficer.group); roomWalkers.push(cellOfficer);
+    const t2 = textSprite('Officer', '#2a2118', '#ffd166', ''); t2.scale.set(1.8, 0.45, 1); t2.position.set(4.6, 2.15, -5.2); scene.add(t2);
+    const h2 = hitBox(scene, 1.4, 2.0, 1.4, 4.6, 1.0, -5.2, 'staff');
+    h2.userData.staffRole = 'Officer'; h2.userData.staffLine = 'Holding cell is occupied. Keep it moving, citizen.'; h2.userData.staffVoice = 'staff';
+  }
   for (let i = 0; i < 2; i++) {
     const w = makeOfficer('police', { bounds: { minX: -8, maxX: 8, minZ: -6, maxZ: 6 }, speed: 0.7 + Math.random() * 0.3 });
     if (w) { scene.add(w.group); roomWalkers.push(w); }
@@ -3364,11 +3499,22 @@ function buildNavyBarracks(scene) {
   const sign = textSprite('NAVY BARRACKS', '#2a2118', '#ffd166', 'US Navy - Brooklyn Navy Yard');
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.0, -5.8); scene.add(sign);
   // Sailors on duty: one by the flag, one by the duty desk, two walking
-  // the hall floor.
-  const flagSailor = makeOfficer('navy', { x: -8.2, z: -4.4, speed: 0 });
-  if (flagSailor) { flagSailor.group.position.set(-8.2, 0, -4.4); flagSailor.group.rotation.y = flagSailor.rigged ? Math.PI : 0; scene.add(flagSailor.group); }
-  const deskSailor = makeOfficer('navy', { x: 2.6, z: 4.4, speed: 0 });
-  if (deskSailor) { deskSailor.group.position.set(2.6, 0, 4.4); deskSailor.group.rotation.y = deskSailor.rigged ? -Math.PI / 2 : Math.PI / 2; scene.add(deskSailor.group); }
+  // the hall floor. The two standing sailors hold the Idle clip, face
+  // their post, and can be tapped to talk.
+  const flagSailor = makeOfficer('navy', { x: -8.2, z: -4.4, speed: 0, heading: Math.PI / 4, idle: true });
+  if (flagSailor) {
+    flagSailor.group.position.set(-8.2, 0, -4.4); flagSailor.phase = 0; scene.add(flagSailor.group); roomWalkers.push(flagSailor);
+    const t1 = textSprite('Sailor', '#2a2118', '#ffd166', ''); t1.scale.set(1.8, 0.45, 1); t1.position.set(-8.2, 2.15, -4.4); scene.add(t1);
+    const h1 = hitBox(scene, 1.4, 2.0, 1.4, -8.2, 1.0, -4.4, 'staff');
+    h1.userData.staffRole = 'Sailor'; h1.userData.staffLine = 'Brooklyn Navy Yard. Shipshape and squared away.'; h1.userData.staffVoice = 'staff';
+  }
+  const deskSailor = makeOfficer('navy', { x: 2.6, z: 4.4, speed: 0, heading: -Math.PI / 2, idle: true });
+  if (deskSailor) {
+    deskSailor.group.position.set(2.6, 0, 4.4); deskSailor.phase = 0; scene.add(deskSailor.group); roomWalkers.push(deskSailor);
+    const t2 = textSprite('Sailor', '#2a2118', '#ffd166', ''); t2.scale.set(1.8, 0.45, 1); t2.position.set(2.6, 2.15, 4.4); scene.add(t2);
+    const h2 = hitBox(scene, 1.4, 2.0, 1.4, 2.6, 1.0, 4.4, 'staff');
+    h2.userData.staffRole = 'Sailor'; h2.userData.staffLine = 'Duty desk. Sign the log if you are staying, sailor.'; h2.userData.staffVoice = 'staff';
+  }
   for (let i = 0; i < 2; i++) {
     const w = makeOfficer('navy', { bounds: { minX: -9, maxX: 9, minZ: -5, maxZ: 5 }, speed: 0.7 + Math.random() * 0.3 });
     if (w) { scene.add(w.group); roomWalkers.push(w); }
@@ -3561,6 +3707,9 @@ function buildSensorVault(scene) {
   const sign = textSprite('SENSOR VAULT', '#2a2118', '#ffd166', 'Water pressure sensors - underground');
   sign.scale.set(4.5, 1.1, 1); sign.position.set(0, 2.6, -3.8); scene.add(sign);
   addExitDoor(scene, { x: 3.5, z: 3.9, ry: Math.PI, label: 'EXIT - UP THE STAIRS' });
+  // The vault technician, by the panels, facing the stair as the
+  // player comes down. Clear of the panel hit boxes and the console.
+  addStaff(scene, { x: -2, z: -1, heading: 0, label: 'Technician', uniform: 'engineer', shirt: 0x2e4a6b, pants: 0x2a2a2a, line: 'The sensors read the three water lines live - hospital, residential, industrial. Tap a panel for the numbers.' });
 }
 // ---------- Building lobbies ----------
 // A small interior lobby behind an entrance door: reception desk,
@@ -3589,6 +3738,24 @@ function buildLobby(scene, lobbyFor) {
   }
   const sign = textSprite(cfg.sign, '#f4f6f8', '#2a3a4a', cfg.sub);
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 2.4, -3.4); scene.add(sign);
+  // The lobby's own people, at their posts beside the desk ends,
+  // facing the player as he comes in. The hospital has a doctor
+  // (tap him for treatment, 10 ZAMA) and a nurse; every other lobby
+  // has its desk staffer. They stand clear of the EXIT door.
+  if (lobbyFor === 'hospital') {
+    addStaff(scene, { x: 2.3, z: -2.9, heading: 0, label: 'Doctor', action: 'doctor', voice: 'doctor', uniform: 'doctor', shirt: 0xf2f2f2, pants: 0x2a2a3a });
+    addStaff(scene, { x: -2.3, z: -2.9, heading: 0, label: 'Nurse', voice: 'nurse', uniform: 'nurse', shirt: 0x2e7a8a, pants: 0x2e7a8a, line: 'Emergency is open 24 hours. The doctor can treat you - 10 ZAMA, paid at the desk.' });
+  } else if (lobbyFor === 'industry') {
+    addStaff(scene, { x: 2.3, z: -2.9, heading: 0, label: 'Plant clerk', uniform: 'staff', shirt: 0x2a4a6b, pants: 0x2a2a2a, line: 'Sign in here, please. Authorised personnel only past the desk.' });
+  } else if (lobbyFor === 'airport') {
+    addStaff(scene, { x: 2.3, z: -2.9, heading: 0, label: 'Airport staff', uniform: 'staff', shirt: 0x1a3a5a, pants: 0x141c28, line: 'Departures are through there. Flights out all day - mind the boards.' });
+  } else if (lobbyFor === 'carpark') {
+    addStaff(scene, { x: 2.3, z: -2.9, heading: 0, label: 'Parking attendant', uniform: 'staff', shirt: 0xc07a1a, pants: 0x2a2a2a, line: 'Parking is 2 ZAMA an hour. Plenty of bays today.' });
+  } else if (lobbyFor === 'marketstreet') {
+    addStaff(scene, { x: 2.3, z: -2.9, heading: 0, label: 'Shopkeeper', uniform: 'vendor', shirt: 0x7a5a3a, pants: 0x3a2a1a, line: 'Fresh goods in today. Browse the shelves, friend.' });
+  } else if (lobbyFor === 'fillingstation') {
+    addStaff(scene, { x: 2.3, z: -2.9, heading: 0, label: 'Salesperson', uniform: 'staff', shirt: 0xc0392b, pants: 0x2a2a2a, line: 'Full tank is 0.5 ZAMA, any level. Tap the Fill tank button and I will sort you out.' });
+  }
   // The way back out: a real EXIT door on the south wall, back to the grounds.
   addExitDoor(scene, { x: 0, z: 3.4, ry: Math.PI, label: 'EXIT', action: 'leave' });
 }
@@ -3623,6 +3790,9 @@ function buildFillingStation(scene) {
   addTree(scene, 11, 8);
   lamp(scene, -6, 3.2, 6, 0xfff2c0, 0.7, 10);
   lamp(scene, 6, 3.2, 10, 0xfff2c0, 0.7, 10);
+  // The forecourt attendant, by the pumps. Tapping him offers the
+  // fill; the gold Fill tank button still does the filling itself.
+  addStaff(scene, { x: 3.2, z: -2.5, heading: 0, label: 'Attendant', uniform: 'staff', shirt: 0xc0392b, pants: 0x2a2a2a, line: 'Full tank is 0.5 ZAMA, any level. Tap the Fill tank button and I will sort you out.' });
 }
 
 // ---------- Wall and furniture colliders (see player.js) ----------
@@ -3855,6 +4025,9 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'lobby') { buildLobby(homeScene, opts.lobbyFor || 'hospital'); homeBounds = { x: [-3.9, 3.9], z: [-2.9, 2.9] }; homeStart = { x: 0, y: 1.7, z: 2, yaw: 0 }; }
   else if (kind === 'fillingstation') { buildFillingStation(homeScene); homeBounds = { x: [-13, 13], z: [-10, 14] }; homeStart = { x: 0, y: 1.7, z: 10, yaw: 0 }; }
   else return;
+  // A return spawn (coming out of a lobby) puts him beside the door
+  // he went in, facing it, instead of at the generic start.
+  if (opts.spawn) homeStart = { x: opts.spawn.x, y: 1.7, z: opts.spawn.z, yaw: opts.spawn.yaw || 0 };
   // Walls and furniture for this place (see registerHomeColliders).
   registerHomeColliders(kind);
   // The Filling Station is where fuel is bought: show the Fill button
@@ -4149,7 +4322,7 @@ function homeAnimateFrame() {
       } else {
         d.open = Math.min(1, d.open + dt * 3);
         if (d.open > 0.6) {
-          if (d.action === 'lobby') { goToLobby(homeKind); return; }
+          if (d.action === 'lobby') { goToLobby(homeKind, d); return; }
           if (homePrologue && homeKind === 'mansion' && homeCallDone) goToTerminal();
           else leavePlace();
           return;
@@ -4329,7 +4502,7 @@ function homeHandleTap(clientX, clientY) {
     // comes first: the player cannot leave before answering the call.
     // An entrance door (action 'lobby') opens into the building's lobby.
     const door = hit.object.userData.doorRef;
-    if (door && door.action === 'lobby') { goToLobby(homeKind); return; }
+    if (door && door.action === 'lobby') { goToLobby(homeKind, door); return; }
     if (homePrologue && homeKind === 'mansion' && !homeCallDone) {
       showHomeToast('The phone is ringing - answer it first.');
       return;
@@ -4377,6 +4550,12 @@ function homeHandleTap(clientX, clientY) {
   } else if (action === 'marketVendor') {
     // The Market Street vendor: tap him to hear his greeting.
     greetMarketVendor();
+  } else if (action === 'staff') {
+    // A professional at their post: tap to talk.
+    greetStaff(hit.object.userData.staffRole || 'Staff', hit.object.userData.staffLine || 'Can I help you?', hit.object.userData.staffVoice);
+  } else if (action === 'doctor') {
+    // The hospital doctor: tap to be treated (10 ZAMA).
+    offerTreatment();
   } else if (action === 'tunnelPanel') {
     startTunnelRun();
   } else if (action === 'vaultPanel') {

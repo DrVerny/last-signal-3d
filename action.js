@@ -295,7 +295,7 @@ export function makePedestrian(opts) {
     const lane = o.lane || null; // { axis: 'x'|'z', fixed, min, max }
     const person = {
       group: g, legL, legR, armL, armR, headGroup, bagMeshes,
-      phone, pockets, bags: bagCount, age,
+      phone, pockets, bags: bagCount, age, idle: !!o.idle,
       heading, bounds, lane, look, body: bodyType,
       skinColor, hairColor, coatColor, legColor,
       x: o.x !== undefined ? o.x : (lane ? (Math.random() * (lane.max - lane.min) + lane.min) : (Math.random() * (bounds.maxX - bounds.minX) + bounds.minX)),

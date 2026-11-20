@@ -79,8 +79,14 @@ export function enterHome(kind, returnTo) {
 export function leaveHome(returnTo) {
   const mod = currentAct ? actModules[currentAct] : null;
   try { if (mod && typeof mod.resumeAct === 'function') mod.resumeAct(); } catch (e) { /* ignore */ }
-  if (returnTo === 'map' && currentAct === 2 && mod && typeof mod.openCityMap === 'function') {
-    try { mod.openCityMap(); } catch (e) { /* ignore */ }
+  if (returnTo === 'map' && currentAct === 2 && mod) {
+    // Back to the parked car first: he steps out beside it and gets
+    // in to drive on (or straight to the map when there is no lot
+    // car, after a Skip arrival).
+    try {
+      if (typeof mod.returnToParkedCar === 'function') mod.returnToParkedCar();
+      else if (typeof mod.openCityMap === 'function') mod.openCityMap();
+    } catch (e) { /* ignore */ }
   }
 }
 // Home chooser for the HUD Home button: Mansion or Safe House.

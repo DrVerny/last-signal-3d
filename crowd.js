@@ -621,7 +621,10 @@ export function makeRiggedPerson(opts) {
     // from their path; the group's translation does the moving.
     let mixer = null, rootBone = null, rootRest = null, headBone = null, torsoBone = null;
     try {
-      const walkClip = THREE.AnimationClip.findByName(model.animations || [], 'Walk');
+      // Standing staff (a doctor at a desk, an engineer by the tunnel)
+      // pass idle: true so they hold the Idle clip instead of marching
+      // on the spot with the Walk clip. Everyone else walks, as before.
+      const walkClip = (o.idle && THREE.AnimationClip.findByName(model.animations || [], 'Idle')) || THREE.AnimationClip.findByName(model.animations || [], 'Walk');
       if (walkClip) {
         mixer = new THREE.AnimationMixer(group);
         const action = mixer.clipAction(walkClip);
@@ -682,7 +685,7 @@ export function makeRiggedPerson(opts) {
     const bounds = o.bounds || { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };
     const lane = o.lane || null;
     return {
-      group, mixer, rootBone, rootRest, headBone, torsoBone, rigged: true, faceYaw,
+      group, mixer, rootBone, rootRest, headBone, torsoBone, rigged: true, faceYaw, idle: !!o.idle,
       phone: !!o.phone, pockets: !!o.pockets, bags: o.bags || 0, age, stoop: traits.stoop,
       heading, bounds, lane, look, body,
       x: o.x !== undefined ? o.x : (lane ? (Math.random() * (lane.max - lane.min) + lane.min) : (Math.random() * (bounds.maxX - bounds.minX) + bounds.minX)),
@@ -863,7 +866,7 @@ export function upgradePedestrian(p) {
     x: p.x, z: p.z, heading: p.heading, speed: p.speed,
     bounds: p.bounds, lane: p.lane, leader: p.leader, latOffset: p.latOffset,
     phone: p.phone, pockets: p.pockets, bags: p.bags, age: p.age,
-    look: p.look, body: p.body
+    look: p.look, body: p.body, idle: p.idle
   });
   if (!rigged) return false;
   try {
@@ -888,6 +891,10 @@ export function upgradePedestrian(p) {
     p.group = rigged.group;
     p.mixer = rigged.mixer; p.rootBone = rigged.rootBone; p.rootRest = rigged.rootRest;
     p.headBone = rigged.headBone; p.torsoBone = rigged.torsoBone; p.stoop = rigged.stoop; p.rigged = true;
+    // The rig's own facing offset must ride across the upgrade too:
+    // without it updatePedestrian defaults to PI, which turns a
+    // Casual-rig person (faceYaw 0, faces +Z) backwards.
+    p.faceYaw = rigged.faceYaw; p.idle = rigged.idle;
     p.legL = null; p.legR = null; p.armL = null; p.armR = null; p.headGroup = null; p.bagMeshes = [];
     return true;
   } catch (e) { return false; }
