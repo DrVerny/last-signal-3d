@@ -1161,7 +1161,7 @@ function addExitDoor(scene, opts) {
   // A gold glow strip above the door, so it is easy to spot across the room.
   const glow = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 0.06), new THREE.MeshBasicMaterial({ color: 0xffd166 }));
   glow.position.set(0, 2.62, 0.05); g.add(glow);
-  const sign = textSprite(o.label || 'EXIT', '#2a2118', '#ffd166', o.keyId ? 'Locked - needs the ' + (o.keyLabel || 'key') : (o.action === 'lobby' ? 'Walk through to enter' : 'Walk through to leave'));
+  const sign = textSprite(o.label || 'EXIT', '#2a2118', '#ffd166', o.keyId ? 'Locked - needs the ' + (o.keyLabel || 'key') : (o.action === 'lobby' ? 'Tap or walk through to enter' : 'Walk through to leave'));
   sign.scale.set(2.2, 0.55, 1); sign.position.set(0, 3.0, 0.05); g.add(sign);
   scene.add(g);
   const door = { x: o.x || 0, z: o.z || 0, ry, keyId: o.keyId || null, keyLabel: o.keyLabel || null, action: o.action || 'leave', lobbyFor: o.lobbyFor || null, panel, hinge, glow, group: g, open: 0 };
@@ -1181,6 +1181,13 @@ function addExitDoor(scene, opts) {
   doorHit.name = 'exitDoor'; doorHit.userData.homeAction = 'exitDoor'; doorHit.userData.doorRef = door;
   g.add(doorHit);
   homeTargets.push(doorHit);
+  // The sign and the glow strip are part of the door the player aims
+  // at: the sign sits above the hit box (y 3.0 vs the box top at
+  // 2.7), so a tap on the ENTER sign itself used to miss everything.
+  sign.userData.homeAction = 'exitDoor'; sign.userData.doorRef = door;
+  homeTargets.push(sign);
+  glow.userData.homeAction = 'exitDoor'; glow.userData.doorRef = door;
+  homeTargets.push(glow);
   return door;
 }
 // Enter a building lobby from its entrance door: the lobby is a small
@@ -1197,9 +1204,9 @@ function goToLobby(backKind, door) {
   // Coming back out of the lobby, he steps out of the door he went
   // in: the grounds re-entry spawns beside that door, facing it, so
   // he walks back to his parked car from the building instead of
-  // restarting at the place's generic start. The spawn sits 2.2 m
+  // restarting at the place's generic start. The spawn sits 2.6 m
   // out from the door along the line he approached on (outside the
-  // 1.8 m walk-up radius, so the door does not instantly pull him
+  // 2.2 m walk-up radius, so the door does not instantly pull him
   // back in), which works for every door facing.
   let spawn = null;
   try {
@@ -1207,10 +1214,20 @@ function goToLobby(backKind, door) {
       const pp = getPlayerPos() || { x: homeCamera.position.x, z: homeCamera.position.z };
       let dx = pp.x - door.x, dz = pp.z - door.z;
       const l = Math.hypot(dx, dz);
-      if (l > 0.3) { dx /= l; dz /= l; spawn = { x: door.x + dx * 2.2, z: door.z + dz * 2.2, yaw: Math.atan2(dx, dz) }; }
+      if (l > 0.3) { dx /= l; dz /= l; spawn = { x: door.x + dx * 2.6, z: door.z + dz * 2.6, yaw: Math.atan2(dx, dz) }; }
     }
   } catch (e) { /* fall back to the generic spawn */ }
-  try { enterPlace('lobby', () => { try { enterPlace(backKind, ol, spawn ? { spawn } : undefined); } catch (e) { /* ignore */ } }, { lobbyFor: backKind }); } catch (e) { /* ignore */ }
+  // If building the lobby fails, the player must never be stranded in
+  // a dead scene: enterPlace has already torn the grounds down by the
+  // time the lobby build runs, so a throw there leaves no scene, no
+  // loop and no error on screen. Put the grounds back instead, and
+  // say so on the error banner so the failure is visible, not silent.
+  try {
+    enterPlace('lobby', () => { try { enterPlace(backKind, ol, spawn ? { spawn } : undefined); } catch (e) { /* ignore */ } }, { lobbyFor: backKind });
+  } catch (e) {
+    try { showFrameErrorBanner('Lobby failed to open: ' + (e && e.message ? e.message : e)); } catch (err) { /* ignore */ }
+    try { enterPlace(backKind, ol, spawn ? { spawn } : undefined); } catch (err) { /* ignore */ }
+  }
 }
 // The Fill tank button, shown only at the Filling Station: a flat
 // 0.5 ZAMA for a full tank, whatever the current level. If the tank is
@@ -4298,11 +4315,15 @@ function homeAnimateFrame() {
   // Train Terminal instead.
   for (const d of homeDoors) {
     const dx = homeCamera.position.x - d.x, dz = homeCamera.position.z - d.z;
-    // 1.8 m, not 1.4: approaching a doorway slightly off its centre
-    // line, the wall collider stops the player a step short of the
-    // old radius and the door never opened (the hospital entrance
-    // needed a strafe into the doorway on the live check).
-    const near = dx * dx + dz * dz < 1.8 * 1.8;
+    // 2.2 m, not 1.8: the hospital ENTER door sits 2 m off the spawn
+    // line, so walking straight north from the grounds spawn stops at
+    // the wing wall 2.02 m from the door centre - just outside the old
+    // 1.8 m radius, and the door never opened on the live check (it
+    // worked in 14fe4e4 when the door was on the spawn line). 2.2 m
+    // catches a straight approach with ordinary aim error; the lobby
+    // return spawn sits 2.6 m out (see goToLobby) so coming back out
+    // does not instantly pull him in again.
+    const near = dx * dx + dz * dz < 2.2 * 2.2;
     if (near && d.keyId && !hasKey(d.keyId)) {
       d.open = Math.max(0, d.open - dt * 2);
       if (t - homeDoorLockedAt > 3) {
@@ -4480,7 +4501,12 @@ if (typeof document !== 'undefined' && document.getElementById('resetViewBtn')) 
 const homeRay = new THREE.Raycaster(), homeMouse = new THREE.Vector2();
 function homeHandleTap(clientX, clientY) {
   if (!homeActive || !homeCamera) return;
-  homeMouse.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  // NDC from the canvas rect, not the window size (the same reference
+  // phoneHitAt uses): if the canvas ever sits offset in the window,
+  // a window-based ray lands beside the thing tapped and the door
+  // click misses from across the grounds.
+  const rect = canvas.getBoundingClientRect();
+  homeMouse.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   homeRay.setFromCamera(homeMouse, homeCamera);
   const hits = homeRay.intersectObjects(homeTargets.filter(o => o.visible !== false), false);
   if (!hits.length) return;
@@ -4629,10 +4655,17 @@ canvas.addEventListener('pointermove', (e) => {
   homePitch = Math.max(-1.5, Math.min(1.5, homePitch));
   homeLx = e.clientX; homeLy = e.clientY;
 });
-function homeEndDrag() { homeDragging = false; phoneDown = false; }
+function homeEndDrag() {
+  homeDragging = false; phoneDown = false;
+  // A drag that ends off-canvas (window pointerup, pointercancel)
+  // must not leave a stale drag distance behind: the next click-only
+  // tap would read it as a drag and be eaten.
+  homeDragMoved = 0;
+}
 let homeLastTapAt = 0;
 canvas.addEventListener('pointerup', (e) => {
   const wasPhoneDown = phoneDown;
+  const dragDist = homeDragMoved; // homeEndDrag resets it; read it first
   homeEndDrag();
   // Releasing a press that started on the phone answers the call, so a
   // swipe across the phone's green button works as well as a tap.
@@ -4646,8 +4679,7 @@ canvas.addEventListener('pointerup', (e) => {
   // homeDragMoved reset to 0 and fires a phantom tap at the release
   // point (the act2 phantom-tap bug, same fix).
   if (!homeActive) return;
-  if (homeDragMoved > 6) { homeDragMoved = 0; homeLastTapAt = Date.now(); return; }
-  homeDragMoved = 0;
+  if (dragDist > 6) { homeLastTapAt = Date.now(); return; }
   if (Date.now() - homeLastTapAt < 400) return;
   homeLastTapAt = Date.now();
   homeHandleTap(e.clientX, e.clientY);

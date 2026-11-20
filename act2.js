@@ -1098,11 +1098,19 @@ function showArrivalBeat(name, onGetOut, key) {
   arrivalCar = car;
   arrivalGroup.visible = true;
   arrivalPendingAction = onGetOut || null;
-  const seated = seatPlayerInParkedCar(car, { x: 0.1, z: 2, yaw: 0 }, () => {
-    hideArrivalBeat();
-    try { resetView(); } catch (e) { /* view is best effort */ }
-    if (arrivalPendingAction) { const cb = arrivalPendingAction; arrivalPendingAction = null; try { cb(); } catch (err) { /* destination action is best effort */ } }
-  });
+  // Seating must never throw past this point: a failure here used to
+  // propagate into the drive completion and could leave the player
+  // on foot with no arrival beat (the hospital arrival spawned him
+  // on foot once on the live check). Fall back to stepping straight
+  // into the destination instead.
+  let seated = false;
+  try {
+    seated = seatPlayerInParkedCar(car, { x: 0.1, z: 2, yaw: 0 }, () => {
+      hideArrivalBeat();
+      try { resetView(); } catch (e) { /* view is best effort */ }
+      if (arrivalPendingAction) { const cb = arrivalPendingAction; arrivalPendingAction = null; try { cb(); } catch (err) { /* destination action is best effort */ } }
+    });
+  } catch (e) { seated = false; }
   if (!seated) {
     hideArrivalBeat();
     if (onGetOut) { try { onGetOut(); } catch (e) { /* ignore */ } }
@@ -1313,6 +1321,74 @@ function placeHuman(group, name, x, z, faceYaw, baseScale) {
   humanGroups.push(group); modelGroups[name] = { group };
   return group;
 }
+// Caleb's loaded scan, kept at module level so a guard can be built
+// from it whenever the yard needs one (see ensureGuards).
+let calebBase = null;
+// Remove the cap, brim and badge cloned from Caleb. They are removed
+// by NAME, not by height: the old height filter (drop every direct
+// child above y 1.0) also dropped the model's own head, hair,
+// eyebrows, eyelashes and teeth, whose nodes sit at y 1.6-1.7 as
+// direct children of the scan - Derrick and both guards rendered
+// headless.
+function stripCalebKit(grp) {
+  for (const c of [...grp.children]) {
+    if (c.name === 'calebCap' || c.name === 'calebBrim' || c.name === 'calebBadge') grp.remove(c);
+  }
+}
+// Build one substation guard at his post: a Caleb clone when Caleb's
+// scan is loaded, else a crowd-rig stand-in. Returns true on success.
+function buildOneGuard(gname, gx, gz) {
+  try {
+    if (calebBase && calebBase.group) {
+      // Slate-blue security uniform, light enough to read against the
+      // dark yard at dusk (the old near-black 0x1c1c22 made the guards
+      // invisible silhouettes on the live checks).
+      const dark = new THREE.MeshStandardMaterial({ color: 0x4a5a74, roughness: 0.85, metalness: 0.02 });
+      const g = calebBase.group.clone(true);
+      g.name = gname;
+      g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = dark; });
+      stripCalebKit(g); // drop Caleb's cap, brim and badge (by name - see above)
+      mission2.add(g); placeHuman(g, gname, gx, gz, Math.PI, calebBase.scale);
+      // Patrol data: the guards walk the gate line so the yard feels
+      // alive and the player can see they are interactive. They
+      // patrol in x around their post; after they stand down they
+      // stop where they are. faceYaw 0: the static Caleb scan faces
+      // +Z in its own space (measured from the GLB: the face parts
+      // sit at +z), so a plain atan2 yaw points him at his target
+      // with no offset.
+      guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, faceYaw: 0 });
+      const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
+      marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
+      g.add(marker); guardMarkers.push(marker);
+      return true;
+    }
+    const person = makeRiggedPerson({ x: gx, z: gz, heading: Math.PI });
+    if (!person || !person.group) return false;
+    const g = person.group;
+    g.name = gname;
+    mission2.add(g);
+    placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
+    // faceYaw rides on the rig: the Atlas crowd rigs face -Z in
+    // their own space (faceYaw PI), the Casual rig faces +Z (0).
+    guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person, faceYaw: person.faceYaw || 0 });
+    const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
+    marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
+    g.add(marker); guardMarkers.push(marker);
+    return true;
+  } catch (e) { return false; }
+}
+// Both guards must always stand in the yard. The two spawn paths
+// (Caleb clones when his model lands, crowd rigs as the stand-in)
+// used to guard on guardPatrol.length, so ONE failed spawn in either
+// path left a single guard forever - the live check found one guard
+// in the yard. Top the line up to two from whichever source is
+// ready, retrying a failed build once.
+function ensureGuards() {
+  for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
+    if (guardPatrol.some(gp => gp.group && gp.group.name === gname)) continue;
+    if (!buildOneGuard(gname, gx, gz)) buildOneGuard(gname, gx, gz);
+  }
+}
 async function loadHumans() {
   const loader = new GLTFLoader();
   // Each model load races a 30 s timeout, as in Act I: a network request
@@ -1358,7 +1434,7 @@ async function loadHumans() {
     brim.position.set(0, 1.775, 0.13); brim.name = 'calebBrim'; cg.add(brim);
     const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
     badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.32, 0.17); badge.name = 'calebBadge'; cg.add(badge);
-    const calebBase = { group: cg, scale: cscale };
+    calebBase = { group: cg, scale: cscale };
     mission1.add(cg); placeHuman(cg, 'caleb', 2.8, 6, Math.PI, cscale);
     // Derrick Shaw and the two substation guards reuse Caleb's scan with
     // new coats (cloned groups, recoloured materials) - a prototype
@@ -1367,46 +1443,13 @@ async function loadHumans() {
     const derrick = calebBase.group.clone(true);
     derrick.name = 'derrick';
     derrick.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = grey; });
-    // Remove the cap, brim and badge cloned from Caleb. They are
-    // removed by NAME, not by height: the old height filter (drop
-    // every direct child above y 1.0) also dropped the model's own
-    // head, hair, eyebrows, eyelashes and teeth, whose nodes sit at
-    // y 1.6-1.7 as direct children of the scan - Derrick and both
-    // guards rendered headless.
-    const stripCalebKit = (grp) => {
-      for (const c of [...grp.children]) {
-        if (c.name === 'calebCap' || c.name === 'calebBrim' || c.name === 'calebBadge') grp.remove(c);
-      }
-    };
     stripCalebKit(derrick);
     mission3.add(derrick); placeHuman(derrick, 'derrick', 0, -6, 0, calebBase.scale);
-    // Slate-blue security uniform, light enough to read against the
-    // dark yard at dusk (the old near-black 0x1c1c22 made the guards
-    // invisible silhouettes on the live checks).
-    const dark = new THREE.MeshStandardMaterial({ color: 0x4a5a74, roughness: 0.85, metalness: 0.02 });
-    // Skip if the crowd-rig fallback already stood guards up (a slow
-    // Caleb fetch must not double the guard line when it lands).
-    if (!guardPatrol.length) for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
-      const g = calebBase.group.clone(true);
-      g.name = gname;
-      g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = dark; });
-      stripCalebKit(g); // drop Caleb's cap, brim and badge (by name - see above)
-      mission2.add(g); placeHuman(g, gname, gx, gz, Math.PI, calebBase.scale);
-      // Patrol data: the guards walk the gate line so the yard feels alive
-      // and the player can see they are interactive. They patrol in x
-      // around their post; after they stand down they stop where they are.
-      // faceYaw 0: the static Caleb scan faces +Z in its own space
-      // (measured from the GLB: the face parts sit at +z), so a plain
-      // atan2 yaw points him at his target with no offset.
-      guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, faceYaw: 0 });
-      // A pulsing gold "!" above each guard until they stand down, so the
-      // player can see at a glance that the guards are the way in.
-      const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
-      // The '!' marker is the only thing that marks a guard at dusk: it was
-      // too small and faint to read at 7-8 m, so it is bigger now.
-      marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
-      g.add(marker); guardMarkers.push(marker);
-    }
+    // Stand the guard line up (or top it up if the crowd-rig
+    // stand-ins already built one): ensureGuards builds any missing
+    // guard from this scan, so a slow Caleb fetch can neither double
+    // the line nor leave it one short.
+    ensureGuards();
     afterHuman();
   };
   // Retry a missed model in the background: two more attempts, the first
@@ -3644,7 +3687,12 @@ function placeStatus(key) {
     if (pendingMission && pendingMission.key === key) return 'next';
     if (missionsDone[p.mission]) return 'done';
     if (p.mission > state.mission) return 'locked';
-    return 'here';
+    // The current mission's place, but he is physically somewhere
+    // else (he drove to a visit mid-mission): driving back must stay
+    // possible, or the mission is unreachable. Physical presence is
+    // the currentPlaceKey check above; this fallthrough used to say
+    // 'here' and soft-locked the return drive.
+    return 'open';
   }
   return 'open';
 }
@@ -3702,6 +3750,12 @@ export function openCityMap(fromKey, preselectKey) {
         // from the lot, instead of the car vanishing and the drive
         // starting from nowhere. (At the arrival lot he is already
         // seated in the car - see getInParkedCar.)
+        // The seated beat is held long enough to be seen (2.2 s, with
+        // a "Leaving ..." toast): at 900 ms the live check never saw
+        // it, and at the arrival lot there was no beat at all - the
+        // seated view sat behind the map overlay and Drive cut
+        // straight to the road. Now every path shows him in the car
+        // at the lot first, then the road.
         const lotCar = departureLotCar();
         if (lotCar) {
           // He may be inside the valve room (Mission 1 ends there):
@@ -3712,7 +3766,13 @@ export function openCityMap(fromKey, preselectKey) {
           const p = PARKING[state.mission];
           const out = (p && p.driveSpawn) || { x: lotCar.position.x - 1.5, z: lotCar.position.z, yaw: 0 };
           seatPlayerInParkedCar(lotCar, out, null, { quiet: true });
-          setTimeout(() => { if (!travelActive) startTravelDrive(key, arriveAt(key)); }, 900);
+          toast('Leaving ' + TRAVEL_PLACES[mapFromKey].name + '...');
+          setTimeout(() => { if (!travelActive) startTravelDrive(key, arriveAt(key)); }, 2200);
+        } else if (parkedSeatActive) {
+          // Already seated at the arrival lot: hold the seated view
+          // for the same beat so the departure is seen, not skipped.
+          toast('Leaving ' + TRAVEL_PLACES[mapFromKey].name + '...');
+          setTimeout(() => { if (!travelActive) startTravelDrive(key, arriveAt(key)); }, 2200);
         } else startTravelDrive(key, arriveAt(key));
       }
     };
@@ -4412,24 +4472,10 @@ function reparentCast(name, group, x, z, yaw) {
 // has landed, this does nothing and Caleb's background retries still
 // deliver the guards when they land.
 function buildFallbackGuards() {
-  if (guardPatrol.length) return;
-  for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
-    let person = null;
-    try { person = makeRiggedPerson({ x: gx, z: gz, heading: Math.PI }); } catch (e) { person = null; }
-    if (!person || !person.group) continue;
-    const g = person.group;
-    g.name = gname;
-    mission2.add(g);
-    placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
-    // faceYaw rides on the rig: the Atlas crowd rigs face -Z in their
-    // own space (faceYaw PI), the Casual rig faces +Z (0). Without it
-    // a fallback guard patrolled backwards and stood down facing away
-    // from the player (guard 1 faced east/away on the live check).
-    guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person, faceYaw: person.faceYaw || 0 });
-    const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
-    marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
-    g.add(marker); guardMarkers.push(marker);
-  }
+  // The yard must never be short a guard: top the line up to two
+  // from whichever source is ready (Caleb clones once his scan has
+  // landed, crowd rigs until then). See ensureGuards.
+  ensureGuards();
 }
 function startMission2() {
   mission1.visible = false; mission2.visible = true; mission3.visible = false;
@@ -4493,13 +4539,18 @@ function hideGuardMarkers() { for (const m of guardMarkers) m.visible = false; }
 // Face both guards at the player. The model-space forward differs by
 // rig: the Caleb scan faces +Z (faceYaw 0 on its patrol entry), the
 // Atlas crowd rigs face -Z (faceYaw PI). The atan2 yaw to the player
-// plus the rig's own faceYaw points either rig at him. camera.position
-// is the player position at the point in the frame this runs (the
-// presence hook moves the camera behind the avatar only at frame end).
+// plus the rig's own faceYaw points either rig at him. The target is
+// the authoritative ground position (getPlayerPos), not the camera:
+// the dialogue callback calls this between frames, when the camera
+// still sits behind the avatar from the last render, and aiming at
+// the camera turned the guards toward a point behind the player.
 function faceGuardsAtPlayer() {
+  const pp = getPlayerPos();
+  const tx = pp ? pp.x : camera.position.x;
+  const tz = pp ? pp.z : camera.position.z;
   for (const gp of guardPatrol) {
-    const dx = camera.position.x - gp.group.position.x;
-    const dz = camera.position.z - gp.group.position.z;
+    const dx = tx - gp.group.position.x;
+    const dz = tz - gp.group.position.z;
     if (dx * dx + dz * dz > 0.04) gp.group.rotation.y = Math.atan2(dx, dz) + (gp.faceYaw || 0);
   }
 }
