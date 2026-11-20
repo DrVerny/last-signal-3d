@@ -3698,7 +3698,11 @@ function placeStatus(key) {
 }
 function placeDriveable(key) {
   const st = placeStatus(key);
-  return st === 'next' || st === 'open';
+  // A finished mission place stays driveable: parking continuity means
+  // the journey continues from where the car is parked, and the player
+  // can drive back to a done mission's yard to walk it (no restart,
+  // no second payout - see arriveAt).
+  return st === 'next' || st === 'open' || st === 'done';
 }
 
 // The bridge leg is a trek, not a drive: after Mission 2 the player
@@ -3763,7 +3767,12 @@ export function openCityMap(fromKey, preselectKey) {
           // drive clears the flag anyway - clear it now so a get-out
           // during the beat cannot clamp him into the room's bounds.
           inValveRoom = false;
-          const p = PARKING[state.mission];
+          // The lot is the current place's mission lot (a revisit to
+          // a finished mission parks there), else the current
+          // mission's lot - the same rule departureLotCar used.
+          const depPlace = TRAVEL_PLACES[currentPlaceKey];
+          const depMission = (depPlace && depPlace.type === 'mission') ? depPlace.mission : state.mission;
+          const p = PARKING[depMission];
           const out = (p && p.driveSpawn) || { x: lotCar.position.x - 1.5, z: lotCar.position.z, yaw: 0 };
           seatPlayerInParkedCar(lotCar, out, null, { quiet: true });
           toast('Leaving ' + TRAVEL_PLACES[mapFromKey].name + '...');
@@ -3877,6 +3886,21 @@ function arriveAt(key) {
       const fn = pendingMission.fn; pendingMission = null;
       return () => { currentPlaceKey = key; parkedPlaceKey = key; fn(); };
     }
+    if (missionsDone[p.mission]) {
+      // Revisit a finished mission place: park in the mission's own
+      // lot, step out beside the car and walk the yard. No briefing,
+      // no objectives reset, no second payout - the mission stays
+      // done (grantPayout is once-only anyway, and nothing here
+      // re-arms an objective).
+      return () => {
+        currentPlaceKey = key; parkedPlaceKey = key;
+        inValveRoom = false;
+        restoreMissionScene();
+        parkPlayerCar(p.mission);
+        if (!seatIfDrove(p.mission, null)) applyDriveSpawn(p.mission);
+        toast(p.name + ' - mission complete. Walk the yard; your car is in the lot.');
+      };
+    }
     return () => restoreMissionScene();
   }
   if (p.type === 'store') {
@@ -3924,9 +3948,15 @@ function closeCityMap() {
   restoreMissionScene();
 }
 function restoreMissionScene() {
-  mission1.visible = state.mission === 1;
-  mission2.visible = state.mission === 2;
-  mission3.visible = state.mission === 3;
+  // The scene to show is the current PLACE's mission when the player
+  // is standing at a mission place (a revisit to a finished mission
+  // keeps its own yard up even though state.mission has moved on);
+  // anywhere else it is the current mission's scene, as before.
+  const place = TRAVEL_PLACES[currentPlaceKey];
+  const sceneMission = (place && place.type === 'mission') ? place.mission : state.mission;
+  mission1.visible = sceneMission === 1;
+  mission2.visible = sceneMission === 2;
+  mission3.visible = sceneMission === 3;
   if (travelGroup) travelGroup.visible = false;
   if (trekGroup) trekGroup.visible = false;
   trekActive = false;
@@ -3934,7 +3964,7 @@ function restoreMissionScene() {
   hideActionBanner();
   // If the camera is far outside the mission (after a drive or a trek),
   // put it back at the mission's default view; otherwise leave it.
-  const v = inValveRoom ? VALVE_ROOM_BOUNDS : VIEWS[state.mission];
+  const v = inValveRoom ? VALVE_ROOM_BOUNDS : VIEWS[sceneMission];
   camBounds = v;
   if (camera.position.x < v.x[0] || camera.position.x > v.x[1] || camera.position.z < v.z[0] || camera.position.z > v.z[1]) resetView();
 }
@@ -4012,7 +4042,11 @@ function hideDriveControls() {
 // is the one he drives away in.
 function departureLotCar() {
   if (parkedSeatActive || atParkedLot) return null;
-  const m = state.mission;
+  // The lot is the current place's mission lot when standing at a
+  // mission place (a revisit parks there too), else the current
+  // mission's lot.
+  const place = TRAVEL_PLACES[currentPlaceKey];
+  const m = (place && place.type === 'mission') ? place.mission : state.mission;
   const group = m === 1 ? mission1 : m === 2 ? mission2 : mission3;
   if (!group || !group.visible) return null;
   if (parkedPlaceKey !== MISSION_PLACE[m]) return null;
@@ -5565,8 +5599,12 @@ function animateFrame() {
   }
   // Stood down: both guards stay facing the player (the patrol no
   // longer overwrites their facing, and a fallback rig keeps its idle
-  // animation alive instead of freezing mid-stride).
-  if (state.mission === 2 && mission2.visible && guardsDown) {
+  // animation alive instead of freezing mid-stride). The gate is the
+  // yard being shown, not the mission number: after Mission 2 the
+  // player can drive back to the substation (parking continuity), and
+  // the guards must still face him there instead of freezing at
+  // whatever facing they last held.
+  if (mission2.visible && guardsDown) {
     faceGuardsAtPlayer();
     for (const gp of guardPatrol) {
       if (gp.person) { try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ } }

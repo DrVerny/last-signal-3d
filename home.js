@@ -2386,6 +2386,12 @@ function addStaff(scene, o) {
   if (!p) return null;
   p.group.position.set(o.x, 0, o.z);
   p.phase = 0;
+  // A standing staff figure must never be frustum-culled by a stale
+  // skinned-mesh bounding sphere: the symposium Host's label floated
+  // with no figure under it on the live check while the scene graph
+  // (and every headless check) showed him present and visible. A
+  // handful of staff per scene makes the culling saving worthless.
+  try { p.group.traverse(m => { if (m.isMesh) m.frustumCulled = false; }); } catch (e) { /* ignore */ }
   scene.add(p.group);
   if (o.uniform) dressUniform(p, o.uniform);
   roomWalkers.push(p);
@@ -2395,6 +2401,14 @@ function addStaff(scene, o) {
   hb.userData.staffRole = o.label;
   hb.userData.staffLine = o.line || 'Can I help you?';
   hb.userData.staffVoice = o.voice || 'staff';
+  // The floating name tag is what the player aims at (it sits above
+  // the hit box), so it carries the same action: tapping the label
+  // talks to the person instead of passing silently over their head.
+  tag.userData.homeAction = o.action || 'staff';
+  tag.userData.staffRole = o.label;
+  tag.userData.staffLine = o.line || 'Can I help you?';
+  tag.userData.staffVoice = o.voice || 'staff';
+  homeTargets.push(tag);
   return p;
 }
 function greetStaff(role, line, voice) {
@@ -4039,7 +4053,7 @@ export function enterPlace(kind, onLeave, options) {
   else if (kind === 'navybarracks') { buildNavyBarracks(homeScene); homeBounds = { x: [-9.4, 9.4], z: [-5.4, 5.4] }; homeStart = { x: 0, y: 1.7, z: 4.5, yaw: 0 }; }
   else if (kind === 'sensorvault') { buildSensorVault(homeScene); homeBounds = { x: [-5.4, 5.4], z: [-3.4, 3.4] }; homeStart = { x: 0, y: 1.7, z: 1.0, yaw: 0 }; }
   else if (kind === 'marketstreet') { buildMarketStreet(homeScene); homeBounds = { x: [-13, 13], z: [-13, 16] }; homeStart = { x: 0, y: 1.7, z: 12, yaw: 0 }; }
-  else if (kind === 'lobby') { buildLobby(homeScene, opts.lobbyFor || 'hospital'); homeBounds = { x: [-3.9, 3.9], z: [-2.9, 2.9] }; homeStart = { x: 0, y: 1.7, z: 2, yaw: 0 }; }
+  else if (kind === 'lobby') { buildLobby(homeScene, opts.lobbyFor || 'hospital'); homeBounds = { x: [-3.9, 3.9], z: [-2.9, 2.9] }; homeStart = { x: 0, y: 1.7, z: 0.5, yaw: 0 }; }
   else if (kind === 'fillingstation') { buildFillingStation(homeScene); homeBounds = { x: [-13, 13], z: [-10, 14] }; homeStart = { x: 0, y: 1.7, z: 10, yaw: 0 }; }
   else return;
   // A return spawn (coming out of a lobby) puts him beside the door
@@ -4324,13 +4338,24 @@ function homeAnimateFrame() {
     // return spawn sits 2.6 m out (see goToLobby) so coming back out
     // does not instantly pull him in again.
     const near = dx * dx + dz * dz < 2.2 * 2.2;
+    // A door starts DISARMED when the place is entered and arms only
+    // once the player has been outside its radius. Without this, a
+    // spawn that lands inside a door's radius fires the door at once:
+    // the lobby spawn sat 1.4 m from the lobby EXIT door, so walking
+    // or clicking into the hospital lobby bounced straight back out
+    // to the grounds a fifth of a second later - entry looked broken
+    // even though goToLobby worked (no error, no banner). A walking
+    // player at full frame rate escaped the radius before the door
+    // finished opening, which is why walk-through sometimes worked
+    // live while clicks and slow frames never did.
+    if (!near) d.armed = true;
     if (near && d.keyId && !hasKey(d.keyId)) {
       d.open = Math.max(0, d.open - dt * 2);
       if (t - homeDoorLockedAt > 3) {
         homeDoorLockedAt = t;
         showHomeToast('Locked - needs the ' + d.keyLabel + '. It is in this room.');
       }
-    } else if (near) {
+    } else if (near && d.armed) {
       // Swing the panel open as the player reaches it, then leave.
       // In the prologue the phone comes first: the player cannot leave
       // the Mansion before answering Jade's call.
@@ -4528,7 +4553,13 @@ function homeHandleTap(clientX, clientY) {
     // comes first: the player cannot leave before answering the call.
     // An entrance door (action 'lobby') opens into the building's lobby.
     const door = hit.object.userData.doorRef;
-    if (door && door.action === 'lobby') { goToLobby(homeKind, door); return; }
+    if (door && door.action === 'lobby') {
+      goToLobby(homeKind, door);
+      // Never fail silently: if the lobby did not open (the banner
+      // already named the error), tell the player what to do instead.
+      if (homeKind !== 'lobby') showHomeToast('Walk to the door to enter.');
+      return;
+    }
     if (homePrologue && homeKind === 'mansion' && !homeCallDone) {
       showHomeToast('The phone is ringing - answer it first.');
       return;

@@ -869,6 +869,11 @@ export function upgradePedestrian(p) {
     look: p.look, body: p.body, idle: p.idle
   });
   if (!rigged) return false;
+  // Same culling guard as addStaff: an upgraded figure must not be
+  // frustum-culled by a stale skinned-mesh bounding sphere (the
+  // symposium Host was present in the scene graph but not drawn on
+  // the live check).
+  try { rigged.group.traverse(m => { if (m.isMesh) m.frustumCulled = false; }); } catch (e) { /* ignore */ }
   try {
     if (parent) parent.remove(old);
     try {

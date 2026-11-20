@@ -129,7 +129,15 @@ export function updateSpeakingGestures(t) {
       // (about 0.006 m per frame) or the walkers get snapped back to
       // their rest pose every frame and never appear to move.
       if (e.applied) {
-        const moved = Math.abs(g.position.x - e.lastX) > 0.002 || Math.abs(g.position.y - e.lastY) > 0.002 || Math.abs(g.position.z - e.lastZ) > 0.002 || Math.abs(g.rotation.y - e.lastYaw) > 0.05;
+        // The yaw threshold must be as small as the position one: the
+        // substation guards are re-faced at the player every frame by
+        // faceGuardsAtPlayer, and a walking player changes that yaw by
+        // only a few thousandths of a radian per frame. At the old
+        // 0.05 rad threshold those changes were rejected as "not a
+        // move", so this module kept overwriting the guards' facing
+        // with a stale restYaw and they stood with their backs to the
+        // player on the live check.
+        const moved = Math.abs(g.position.x - e.lastX) > 0.002 || Math.abs(g.position.y - e.lastY) > 0.002 || Math.abs(g.position.z - e.lastZ) > 0.002 || Math.abs(g.rotation.y - e.lastYaw) > 0.002;
         if (moved) {
           e.restX = g.position.x; e.restY = g.position.y; e.restZ = g.position.z;
           e.restYaw = g.rotation.y;
