@@ -9,7 +9,7 @@
 // game-wide systems, not tied to one act, and they work in demo mode with
 // no wallet connected, so a first-time player can use them immediately.
 import './core.js';
-import { initEconomy, isStoreOpen } from './economy.js';
+import { initEconomy, isStoreOpen, updateWalletHUD, updateFuelHUD } from './economy.js';
 import { enterPlace } from './home.js';
 import { initPlayer } from './player.js';
 
@@ -285,13 +285,22 @@ try {
 // add ?fresh to start again from the phone call. The fuel key is in
 // the list too: without it a fresh player booted with whatever fuel
 // the last session left in the tank (94% on the live check) while
-// his balance correctly reset to 10 ZAMA.
+// his balance correctly reset to 10 ZAMA. The keys key belongs here
+// as well: without it a fresh player kept every key from the last
+// session, so the station key never appeared on its hook (Mission 1
+// hides it when the key is already held) and the locked door opened
+// with no pickup at all.
 try {
   if (new URLSearchParams(location.search).has('fresh')) {
-    for (const k of ['lastSignalPrologue', 'lastSignalAct1', 'lastSignalAct2', 'lastSignalAct3', 'lastSignalMoney', 'lastSignalPaid', 'lastSignalOwned', 'lastSignalEquipped', 'lastSignalCurrentAct', 'lastSignalAct2Mission', 'lastSignalFuel']) {
+    for (const k of ['lastSignalPrologue', 'lastSignalAct1', 'lastSignalAct2', 'lastSignalAct3', 'lastSignalMoney', 'lastSignalPaid', 'lastSignalOwned', 'lastSignalEquipped', 'lastSignalCurrentAct', 'lastSignalAct2Mission', 'lastSignalFuel', 'lastSignalKeys']) {
       try { localStorage.removeItem(k); } catch (e) { /* ignore */ }
     }
     prologueDone = false; hasActSave = false;
+    // initEconomy ran above and painted the HUD from the pre-clear
+    // saves, so a first ?fresh load showed the old balance until the
+    // next money change. Repaint from the cleared state now.
+    try { updateWalletHUD(); } catch (e) { /* ignore */ }
+    try { updateFuelHUD(); } catch (e) { /* ignore */ }
   }
 } catch (e) { /* ignore */ }
 if (!prologueDone && !hasActSave) startPrologue();

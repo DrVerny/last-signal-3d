@@ -9,11 +9,11 @@
 // is a reference only, never a texture.
 
 import * as THREE from 'three';
-import { canvas, renderer, disposeScene } from './core.js';
+import { canvas, renderer, disposeScene, showFrameErrorBanner } from './core.js';
 import { getBalance, moneyFmt, grantPayout, spendMoney, getEquippedCarDef, getFuel, refillFuel, consumeFuelMiles } from './economy.js';
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady } from './crowd.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson, resolveMove, addBoxCollider } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, setThirdPerson, resolveMove, addBoxCollider, clearPinchPointers } from './player.js';
 import { readingTimeMs, speakLine } from './speak.js';
 
 let homeActive = false, homeRaf = 0, homeScene = null, homeCamera = null;
@@ -3942,6 +3942,21 @@ export function leavePlace() {
 function homeAnimate() {
   if (!homeActive) return;
   homeRaf = requestAnimationFrame(homeAnimate);
+  // A throw anywhere in the frame (a rigged model, a mixer, a sound
+  // call) must not skip the render: the canvas would freeze on the
+  // last good frame while the DOM and the game logic kept running,
+  // which reads as the world being stuck with dead drags. Catch it,
+  // put it on the on-screen banner (the console is unreadable to a
+  // live checker), and still present a frame with whatever state was
+  // reached. The next frame tries again.
+  try { homeAnimateFrame(); }
+  catch (e) {
+    try { console.error('[LastSignal frame error]', e); } catch (e2) { /* ignore */ }
+    try { showFrameErrorBanner(e && e.message ? e.message : String(e)); } catch (e2) { /* ignore */ }
+    try { if (homeScene && homeCamera) renderer.render(homeScene, homeCamera); } catch (e2) { try { showFrameErrorBanner('render: ' + (e2 && e2.message ? e2.message : String(e2))); } catch (e3) { /* ignore */ } }
+  }
+}
+function homeAnimateFrame() {
   const t = Date.now() / 1000;
   const dt = homeAnimate.lastT === undefined ? 0.016 : Math.min(0.1, t - homeAnimate.lastT);
   homeAnimate.lastT = t;
@@ -4110,7 +4125,11 @@ function homeAnimate() {
   // Train Terminal instead.
   for (const d of homeDoors) {
     const dx = homeCamera.position.x - d.x, dz = homeCamera.position.z - d.z;
-    const near = dx * dx + dz * dz < 1.4 * 1.4;
+    // 1.8 m, not 1.4: approaching a doorway slightly off its centre
+    // line, the wall collider stops the player a step short of the
+    // old radius and the door never opened (the hospital entrance
+    // needed a strafe into the doorway on the live check).
+    const near = dx * dx + dz * dz < 1.8 * 1.8;
     if (near && d.keyId && !hasKey(d.keyId)) {
       d.open = Math.max(0, d.open - dt * 2);
       if (t - homeDoorLockedAt > 3) {
@@ -4265,6 +4284,15 @@ function homeResetView() {
   // reload. Reset view is the player's recovery button, so it must
   // recover the input as well as the camera.
   homeDragging = false; phoneDown = false; homeDragMoved = 0;
+  // Clear held movement keys and stale pinch pointers as well. A
+  // keyup lost to a focus change (clicking this very button moves
+  // focus) leaves a movement key stuck on: after the reset the
+  // player walks straight back to the wall he came from, the
+  // squeezed camera hides his avatar, and the view reads as dead.
+  // A phantom pinch pointer does the same to drags (one lost
+  // pointerup plus one real finger reads as a two-finger pinch).
+  for (const k in homeKeys) homeKeys[k] = false;
+  try { clearPinchPointers(); } catch (e) { /* ignore */ }
   // Keep the stored player position in step, or the next frame's
   // beginPlayerFrame teleports the camera back to the old spot and
   // undoes the reset.
@@ -4423,23 +4451,42 @@ canvas.addEventListener('pointermove', (e) => {
   homeLx = e.clientX; homeLy = e.clientY;
 });
 function homeEndDrag() { homeDragging = false; phoneDown = false; }
+let homeLastTapAt = 0;
 canvas.addEventListener('pointerup', (e) => {
   const wasPhoneDown = phoneDown;
   homeEndDrag();
   // Releasing a press that started on the phone answers the call, so a
   // swipe across the phone's green button works as well as a tap.
-  if (wasPhoneDown) answerPhone();
+  if (wasPhoneDown) { answerPhone(); return; }
+  // Tap fallback: some harnesses and touch inputs deliver press and
+  // release without a click event on the canvas, so a tap on a door
+  // or the desk did nothing at all. A release that was not a drag is
+  // a tap here; the click handler below dedupes against this stamp.
+  // A drag must never become a tap: stamp homeLastTapAt when
+  // rejecting, or the click that follows every pointerup sees
+  // homeDragMoved reset to 0 and fires a phantom tap at the release
+  // point (the act2 phantom-tap bug, same fix).
+  if (!homeActive) return;
+  if (homeDragMoved > 6) { homeDragMoved = 0; homeLastTapAt = Date.now(); return; }
+  homeDragMoved = 0;
+  if (Date.now() - homeLastTapAt < 400) return;
+  homeLastTapAt = Date.now();
+  homeHandleTap(e.clientX, e.clientY);
 });
 canvas.addEventListener('pointercancel', homeEndDrag);
 addEventListener('pointerup', homeEndDrag);
 // A keyup lost to a focus change would leave a movement key stuck on
 // forever (W cancelled by a phantom S reads as "cannot move, reload
-// required"): drop every held key when the window loses focus.
-addEventListener('blur', () => { homeEndDrag(); for (const k in homeKeys) homeKeys[k] = false; homeSuppressedKeys.clear(); });
+// required"): drop every held key when the window loses focus. The
+// prologue drive keys and pedals too: a stuck brake there holds the
+// car at a standstill while the drive timer runs on.
+addEventListener('blur', () => { homeEndDrag(); for (const k in homeKeys) homeKeys[k] = false; homeSuppressedKeys.clear(); plDriveKeys = {}; plDrivePedalGas = false; plDrivePedalBrake = false; });
 canvas.addEventListener('click', (e) => {
   if (!homeActive) return;
   if (homeDragMoved > 6) { homeDragMoved = 0; return; }
   homeDragMoved = 0;
+  if (Date.now() - homeLastTapAt < 400) return; // already handled by pointerup
+  homeLastTapAt = Date.now();
   homeHandleTap(e.clientX, e.clientY);
 });
 addEventListener('keydown', (e) => {

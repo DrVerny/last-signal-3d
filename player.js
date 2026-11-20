@@ -1319,6 +1319,15 @@ export function resolveMove(x, z, dx, dz, colliders) {
 // pad is shown automatically on touch devices and can be toggled.
 let touchBuilt = false;
 let touchVisible = false;
+// The live pinch-pointer map (built inside buildTouchControls). Kept at
+// module level so Reset view in any act can drop stale tracked
+// pointers: one lost pointerup leaves a phantom finger in the map, and
+// with one real finger down the map reads as a two-finger pinch
+// forever, freezing every look-drag until a reload.
+let pinchPointersRef = null;
+export function clearPinchPointers() {
+  try { if (pinchPointersRef) pinchPointersRef.clear(); } catch (e) { /* ignore */ }
+}
 function dispatchKey(type, key) {
   try {
     const ev = new KeyboardEvent(type, { key, bubbles: true, cancelable: true });
@@ -1377,11 +1386,27 @@ export function buildTouchControls() {
   // spins the camera. There is no pinch zoom any more (the user asked for
   // zoom removed), so two fingers simply do nothing while they are down.
   const pinchPointers = new Map();
+  pinchPointersRef = pinchPointers;
   function pinchOnCanvas(e) {
     return e.target && e.target.tagName === 'CANVAS';
   }
+  // A tracked pointer that has not moved or been re-pressed for a
+  // while is stale: its release was lost (a missed pointerup, a focus
+  // change, a synthetic event from automation). A real second finger
+  // lands within a second or two of the first, so anything older than
+  // this is a phantom. Expire phantoms on every fresh press, or one
+  // lost release plus one real finger reads as a two-finger pinch
+  // forever and every later look-drag is stopped in the capture
+  // phase - the camera can never be dragged again until a reload.
+  const PINCH_STALE_MS = 2500;
+  function expireStalePinchPointers(now) {
+    for (const [id, p] of pinchPointers) {
+      if (now - (p.t || 0) > PINCH_STALE_MS) pinchPointers.delete(id);
+    }
+  }
   addEventListener('pointerdown', (e) => {
     if (!pinchOnCanvas(e)) return;
+    expireStalePinchPointers(Date.now());
     // A stale entry (a release the page never saw - a missed pointerup,
     // a lost focus, a synthetic event from automation) would leave two
     // phantom fingers "down" forever, and every later pointermove would
@@ -1390,7 +1415,7 @@ export function buildTouchControls() {
     // A fresh press while the map is already full means the old entries
     // are stale, so clear them before tracking the new press.
     if (pinchPointers.size >= 2) pinchPointers.clear();
-    pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: Date.now() });
     if (pinchPointers.size === 2) {
       // Keep the second finger from resetting the look-drag origin.
       e.stopPropagation();
@@ -1402,7 +1427,7 @@ export function buildTouchControls() {
   addEventListener('pointermove', (e) => {
     if (!pinchPointers.has(e.pointerId)) return;
     const p = pinchPointers.get(e.pointerId);
-    p.x = e.clientX; p.y = e.clientY;
+    p.x = e.clientX; p.y = e.clientY; p.t = Date.now();
     if (pinchPointers.size < 2) return;
     // Two fingers down: freeze the look-drag.
     e.stopPropagation();

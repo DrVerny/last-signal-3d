@@ -35,16 +35,49 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // on its last frame while the game logic keeps running - which reads
 // as the world being stuck. preventDefault on the lost event lets
 // the browser restore the context; three.js then re-uploads on the
-// next render. Log both events so a live check can see them.
+// next render. Log both events so a live check can see them, and put
+// them on screen too (see the error banner below): a checker without
+// console access can still read a frozen canvas's reason in a
+// screenshot.
 try {
   canvas.addEventListener('webglcontextlost', (e) => {
     e.preventDefault();
     console.error('[LastSignal] WebGL context lost - waiting for restore.');
+    showFrameErrorBanner('WebGL context lost - the picture may stay frozen until the browser restores it.');
   }, false);
   canvas.addEventListener('webglcontextrestored', () => {
     console.error('[LastSignal] WebGL context restored.');
+    showFrameErrorBanner('WebGL context restored.');
+    setTimeout(() => { try { hideFrameErrorBanner(); } catch (e) { /* ignore */ } }, 5000);
   }, false);
 } catch (e) { /* context events are best effort */ }
+
+// On-screen frame-error banner. A per-frame throw used to be visible
+// only in the console, which a live checker (or the player) cannot
+// read: the canvas froze on the last good frame while the game logic
+// kept running, with no clue on screen. Every caught frame error now
+// also lands here - a small red-on-dark strip at the top left naming
+// the last error and how many have been caught. It stays hidden in
+// normal play and only appears when something actually breaks, so a
+// screenshot of a frozen game carries its own diagnosis.
+let frameErrorBannerEl = null;
+let frameErrorCount = 0;
+export function showFrameErrorBanner(message) {
+  try {
+    frameErrorCount++;
+    if (!frameErrorBannerEl) {
+      frameErrorBannerEl = document.createElement('div');
+      frameErrorBannerEl.id = 'frameErrorBanner';
+      frameErrorBannerEl.style.cssText = 'position:fixed;left:8px;top:8px;z-index:9999;max-width:62vw;padding:6px 10px;background:rgba(20,0,0,0.85);color:#ff6b6b;border:1px solid #ff6b6b;border-radius:6px;font:12px/1.4 monospace;pointer-events:none;word-break:break-word;';
+      document.body.appendChild(frameErrorBannerEl);
+    }
+    frameErrorBannerEl.textContent = '[LastSignal frame error x' + frameErrorCount + '] ' + String(message || 'unknown error');
+    frameErrorBannerEl.style.display = 'block';
+  } catch (e) { /* the banner must never break the game */ }
+}
+export function hideFrameErrorBanner() {
+  try { if (frameErrorBannerEl) frameErrorBannerEl.style.display = 'none'; } catch (e) { /* ignore */ }
+}
 
 // Dispose every GPU resource owned by a scene (geometries, materials and
 // their textures) so a finished act does not leak into the next one.

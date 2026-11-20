@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
-import { canvas, renderer, disposeScene } from './core.js';
+import { canvas, renderer, disposeScene, showFrameErrorBanner } from './core.js';
 import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
 import { registerHumans, updateSpeakingGestures } from './gestures.js';
 import { registerLipSyncHumans } from './lipsync.js';
@@ -10,7 +10,7 @@ import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
 import { makeRiggedPerson, updateRiggedPerson } from './crowd.js';
 import { grantPayout, openStore, getEquippedCarDef, getBalance, moneyFmt, spendMoney, getFuel, consumeFuelMiles } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, getPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson, resolveMove, addBoxCollider } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, getPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson, resolveMove, addBoxCollider, clearPinchPointers } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
 // no long verbatim copying): 1. The Delaware Line (Rondout Reservoir),
@@ -410,7 +410,12 @@ let lastDamLevel = -1; // last roar level sent to setAmbientLevel
 // the player stands after getting out on a drive arrival (null means the
 // normal mission spawn is used).
 const PARKING = {
-  1: { cx: 8.3, cz: 4.25, carX: 6.9, carZ: 4.25, carRotY: Math.PI, driveSpawn: { x: 8.3, z: 3.9, yaw: 0 } },
+  // driveSpawn z 7.0, not 3.9: at 3.9 the get-out spot sat between
+  // the rental (carX 6.9) and his own car parked beside it (cx + 1.4),
+  // inside the overlap of the two car colliders - he stepped out
+  // wedged between the cars with WASD dead. Behind the cars (south
+  // edge of the pad) is open ground.
+  1: { cx: 8.3, cz: 4.25, carX: 6.9, carZ: 4.25, carRotY: Math.PI, driveSpawn: { x: 8.3, z: 7.0, yaw: 0 } },
   // Mission 2 lot: cz is 7.0, not 9.0. The seated camera sits about 4.2 m
   // behind the parked car, and at cz 9.0 it landed south of the yard's
   // south fence (z 12), looking through the fence into a dark yard with
@@ -783,9 +788,16 @@ function tryStationDoor(side) {
   if (side === 'outside') {
     if (!mission1Started) { toast('Take the rental car to the water facility first - it costs 0.05 ZAMA and is waiting by the platform.'); return false; }
     if (!hasKey('station')) { toast('Locked - needs the station key. It is on the hook beside the door.'); sfxThud(); return false; }
+    // He has to be AT the door (1.8 m, the walk-up radius). The gate
+    // lives here, not only in the click handler, so every path that
+    // can start the door - click, walk-up, anything added later -
+    // is refused from across the room. Exit stays key-free; it is
+    // not distance-free.
+    if (playerDist2D(0, -0.68) > 1.8) { toast('The station door is just ahead - walk to it and use the key.'); return false; }
     stationDoorAnim = { side, phase: 'lever', t: 0, onDone: enterValveRoom };
   } else {
     if (!inValveRoom) return false;
+    if (playerDist2D(0, -0.68) > 1.8) { toast('Walk to the station door to head back outside.'); return false; }
     stationDoorAnim = { side, phase: 'lever', t: 0, onDone: exitValveRoom };
   }
   return true;
@@ -864,7 +876,11 @@ function setArrivalSign(name) {
   if (arrivalSignSprite) { try { arrivalGroup.remove(arrivalSignSprite); } catch (e) { /* ignore */ } arrivalSignSprite = null; }
   const sprite = makeTextSprite((name || 'DESTINATION').toUpperCase(), '#ffd166');
   sprite.scale.set(7, 1.75, 1);
-  sprite.position.set(0, 5.0, -6.9);
+  // 1 m off the facade (front face at z -7), not 0.1: a billboard
+  // hugging the wall swings its far edge behind the wall plane at
+  // oblique angles, and the depth test clipped the last letters of
+  // long names (SYMPOSIUM, FILLING STATION) on the live check.
+  sprite.position.set(0, 5.0, -6.0);
   arrivalGroup.add(sprite);
   arrivalSignSprite = sprite;
 }
@@ -957,6 +973,13 @@ let stationDoorHinge = null, stationLeverPivots = [], stationDoorHandleParts = [
 let stationDoorAnim = null, stationDoorOpen = false;
 function resetView() {
   if (!actActive) return;
+  // Reset view is the recovery button: recover the input too. A
+  // keyup lost to a focus change leaves a movement key stuck on
+  // (the player walks straight back to the wall after the reset),
+  // and a phantom pinch pointer freezes every drag. Clear both.
+  for (const k in keys) keys[k] = false;
+  dragging = false; dragMoved = 0;
+  try { clearPinchPointers(); } catch (e) { /* ignore */ }
   if (inValveRoom) {
     camera.position.set(VALVE_ROOM_BOUNDS.pos[0], VALVE_ROOM_BOUNDS.pos[1], VALVE_ROOM_BOUNDS.pos[2]);
     state.yaw = VALVE_ROOM_BOUNDS.yaw; state.pitch = 0; camBounds = VALVE_ROOM_BOUNDS;
@@ -1115,11 +1138,11 @@ async function loadHumans() {
     cg.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = navy; });
     const capMat = new THREE.MeshStandardMaterial({ color: 0x16283f, roughness: 0.7 });
     const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.125, 0.13, 0.07, 16), capMat);
-    crown.position.set(0, 1.81, 0); crown.castShadow = true; cg.add(crown);
+    crown.position.set(0, 1.81, 0); crown.castShadow = true; crown.name = 'calebCap'; cg.add(crown);
     const brim = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.012, 0.1), new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3 }));
-    brim.position.set(0, 1.775, 0.13); cg.add(brim);
+    brim.position.set(0, 1.775, 0.13); brim.name = 'calebBrim'; cg.add(brim);
     const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
-    badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.32, 0.17); cg.add(badge);
+    badge.rotation.x = Math.PI / 2; badge.position.set(-0.09, 1.32, 0.17); badge.name = 'calebBadge'; cg.add(badge);
     const calebBase = { group: cg, scale: cscale };
     mission1.add(cg); placeHuman(cg, 'caleb', 2.8, 6, Math.PI, cscale);
     // Derrick Shaw and the two substation guards reuse Caleb's scan with
@@ -1129,9 +1152,18 @@ async function loadHumans() {
     const derrick = calebBase.group.clone(true);
     derrick.name = 'derrick';
     derrick.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = grey; });
-    // Remove the cap, brim and badge cloned from Caleb (direct children of
-    // the group, all sitting above y 1.0; the model's own roots sit at y 0).
-    derrick.children = derrick.children.filter(c => c.position.y <= 1.0);
+    // Remove the cap, brim and badge cloned from Caleb. They are
+    // removed by NAME, not by height: the old height filter (drop
+    // every direct child above y 1.0) also dropped the model's own
+    // head, hair, eyebrows, eyelashes and teeth, whose nodes sit at
+    // y 1.6-1.7 as direct children of the scan - Derrick and both
+    // guards rendered headless.
+    const stripCalebKit = (grp) => {
+      for (const c of [...grp.children]) {
+        if (c.name === 'calebCap' || c.name === 'calebBrim' || c.name === 'calebBadge') grp.remove(c);
+      }
+    };
+    stripCalebKit(derrick);
     mission3.add(derrick); placeHuman(derrick, 'derrick', 0, -6, 0, calebBase.scale);
     // Slate-blue security uniform, light enough to read against the
     // dark yard at dusk (the old near-black 0x1c1c22 made the guards
@@ -1143,7 +1175,7 @@ async function loadHumans() {
       const g = calebBase.group.clone(true);
       g.name = gname;
       g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = dark; });
-      g.children = g.children.filter(c => c.position.y <= 1.0); // drop Caleb's cap, brim and badge
+      stripCalebKit(g); // drop Caleb's cap, brim and badge (by name - see above)
       mission2.add(g); placeHuman(g, gname, gx, gz, Math.PI, calebBase.scale);
       // Patrol data: the guards walk the gate line so the yard feels alive
       // and the player can see they are interactive. They patrol in x
@@ -3634,7 +3666,22 @@ function startTravelDrive(toKey, onArrive) {
     if (destGroup && typeof renderer.compile === 'function') {
       travelGroup.visible = false;
       destGroup.visible = true;
+      // compile() only initialises programs for objects inside the
+      // camera frustum, and the camera is wherever the last scene
+      // left it (inside the valve room, facing away from the
+      // substation yard) - so the old warm-up compiled almost
+      // nothing of the destination and the first real frame still
+      // paid for every program. Point the camera at the whole
+      // destination group for the compile, then put it back.
+      const savedPos = camera.position.clone();
+      const savedQuat = camera.quaternion.clone();
+      camera.position.set(0, 10, 28);
+      camera.lookAt(0, 1, 0);
+      camera.updateMatrixWorld(true);
       renderer.compile(scene, camera);
+      camera.position.copy(savedPos);
+      camera.quaternion.copy(savedQuat);
+      camera.updateMatrixWorld(true);
       destGroup.visible = false;
       travelGroup.visible = true;
     }
@@ -3729,6 +3776,10 @@ function startTravelDrive(toKey, onArrive) {
   // do the same on touch.
   driveSpeed = DRIVE_CREEP_SPEED; driveView = 'chase';
   driveKeys.w = driveKeys.a = driveKeys.s = driveKeys.d = false;
+  // Pedals too: a pedal press whose release was lost (pointer capture
+  // dropped, focus change) would brake the car to a standstill for
+  // the whole drive while the miles counted down by the clock.
+  drivePedalGas = false; drivePedalBrake = false;
   driveKeyHandler = (e) => {
     if (!travelActive) return;
     const k = (e.key || '').toLowerCase();
@@ -4691,7 +4742,7 @@ function interact(name) {
     // The click target is generous, so a click from across the yard
     // would otherwise pick the key up from metres away: he has to
     // walk to the hook beside the door.
-    if (playerDist2D(1.5, -0.6) > 2.5) {
+    if (playerDist2D(1.5, -0.6) > 2.0) {
       toast('The station key is on the hook beside the door - walk over to it.');
       return;
     }
@@ -4710,7 +4761,10 @@ function interact(name) {
     if (inValveRoom) {
       // Exit stays key-free, but he still has to be at the door: the
       // click target is generous enough to reach from the back wall.
-      if (playerDist2D(0, -0.68) > 3.5) {
+      // 1.8 m, the walk-up radius: the old 3.5 m covered most of this
+      // small room (the gauges and the east stairs both sit inside
+      // it), so "far" clicks still exited on the live check.
+      if (playerDist2D(0, -0.68) > 1.8) {
         toast('Walk to the station door to head back outside.');
         return;
       }
@@ -4733,7 +4787,7 @@ function interact(name) {
     // The door's click target is generous: a click from across the
     // yard would otherwise swing it open and put him inside without
     // ever walking to it. He has to be at the door.
-    if (playerDist2D(0, -0.68) > 3.5) {
+    if (playerDist2D(0, -0.68) > 1.8) {
       toast('The station door is just ahead - walk to it and use the key.');
       return;
     }
@@ -4836,11 +4890,15 @@ function act2Colliders() {
 }
 // Frame errors are logged once per distinct message so a live check
 // can capture them from the console instead of the game freezing on
-// the last good frame with no trace of why.
+// the last good frame with no trace of why. They also go on the
+// on-screen banner (core.js): the checker toolset has no console
+// access, so a frozen canvas must carry its reason in the screenshot
+// itself. The banner counts every error, not just distinct ones.
 const _frameErrorsSeen = new Set();
 function logFrameError(e) {
   try {
     const msg = (e && e.message) ? e.message : String(e);
+    try { showFrameErrorBanner(msg); } catch (err) { /* banner is best effort */ }
     if (_frameErrorsSeen.has(msg)) return;
     _frameErrorsSeen.add(msg);
     console.error('[LastSignal frame error] ' + msg, e);
@@ -4854,13 +4912,37 @@ function logFrameError(e) {
 // what the live check saw at every Act II travel arrival (the drive
 // street stayed on screen, drags did not orbit, WASD moved nothing
 // visibly, while the DOM and the game logic kept working).
+let _renderFailStreak = 0;
+let _skinnedFallbackDone = false;
 function animate() {
   if (!actActive) return;
   actRaf = requestAnimationFrame(animate);
-  try { animateFrame(); }
+  try { animateFrame(); _renderFailStreak = 0; }
   catch (e) {
     logFrameError(e);
-    try { renderer.render(scene, camera); } catch (e2) { logFrameError(e2); }
+    try { renderer.render(scene, camera); _renderFailStreak = 0; }
+    catch (e2) {
+      logFrameError(e2);
+      // The render itself is throwing, so no frame can present and
+      // the canvas stays frozen on the last good frame (the Mission
+      // 2 arrival freeze: logic and DOM kept running over a frozen
+      // street). As a last resort, after a streak of render
+      // failures, hide every skinned mesh in the scene (the rigged
+      // people are the only Mission 2 content class the other
+      // arrivals never render) and let the rest of the world
+      // present. The banner keeps the original error on screen, so
+      // a live check can still read what broke; the game stays
+      // playable instead of frozen.
+      _renderFailStreak++;
+      if (_renderFailStreak >= 10 && !_skinnedFallbackDone) {
+        _skinnedFallbackDone = true;
+        _renderFailStreak = 0;
+        try {
+          scene.traverse(o => { if (o.isSkinnedMesh) o.visible = false; });
+          showFrameErrorBanner('render fallback: skinned meshes hidden after repeated render failures - see error above');
+        } catch (e3) { /* fallback is best effort */ }
+      }
+    }
   }
 }
 function animateFrame() {
@@ -4905,7 +4987,7 @@ function animateFrame() {
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
     for (const vx of [-3, 0, 3]) {
-      if (dist2D(camera.position.x, camera.position.z, vx, -5.7) < 1.8) { openValveModal(); break; }
+      if (playerDist2D(vx, -5.7) < 1.8) { openValveModal(); break; }
     }
   }
   // Arrival: the player stepped off the train at Rondout station. The
@@ -4944,7 +5026,7 @@ function animateFrame() {
   if (state.mission === 1 && mission1.visible && !inValveRoom && !hasKey('station')
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
-    if (dist2D(camera.position.x, camera.position.z, 1.5, -0.6) < 0.6) {
+    if (playerDist2D(1.5, -0.6) < 0.6) {
       giveKey('station', 'station key');
       toast('Picked up the station key. The station door is unlocked.');
       sfxRepair();
@@ -4964,7 +5046,7 @@ function animateFrame() {
   if (state.mission === 1 && mission1.visible && !inValveRoom
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
-    if (dist2D(camera.position.x, camera.position.z, 0, -0.68) < 1.8) {
+    if (playerDist2D(0, -0.68) < 1.8) {
       if (!mission1Started) {
         if (t - stationDoorLockedAt > 3) {
           stationDoorLockedAt = t;
@@ -5076,7 +5158,10 @@ function animateFrame() {
       cityTrain.position.x += 9 * dt;
       if (cityTrain.position.x > 55) cityTrain.position.x = -55;
     }
-    for (const p of cityPedestrians) updatePedestrian(p, dt);
+    // Per-pedestrian isolation: one bad rigged upgrade or mixer must
+    // not take the whole frame (and with it the render) down with
+    // it. The error still lands on the banner via logFrameError.
+    for (const p of cityPedestrians) { try { updatePedestrian(p, dt); } catch (e) { logFrameError(e); } }
     hornTimer += dt;
     if (hornTimer > 9) { hornTimer = 0; honkHorn(); }
   }
