@@ -10,7 +10,7 @@ import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
 import { makeRiggedPerson, updateRiggedPerson } from './crowd.js';
 import { grantPayout, openStore, getEquippedCarDef, getBalance, moneyFmt, spendMoney, getFuel, consumeFuelMiles } from './economy.js';
-import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson, resolveMove, addBoxCollider } from './player.js';
+import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, getPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson, resolveMove, addBoxCollider } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
 // Three missions from the script (short original dialogue in its spirit;
 // no long verbatim copying): 1. The Delaware Line (Rondout Reservoir),
@@ -1455,8 +1455,10 @@ function buildRondoutStation() {
   benchBack.position.set(-7, 0.9, 12.72); mission1.add(benchBack);
   // RONDOUT station sign above the platform, near the middle of the
   // platform sightline so it reads whole from the spawn and the track.
+  // Shifted east and narrowed: from north-facing platform views its
+  // left letters sat behind the 320px left HUD panel.
   const stnSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT', '#1a2a44', '#ffd166', 'DELAWARE AQUEDUCT - 6 AM'), transparent: true, depthWrite: false }));
-  stnSign.scale.set(4.6, 1.15, 1); stnSign.position.set(3.5, 3.4, 12.3); mission1.add(stnSign);
+  stnSign.scale.set(4.0, 1.0, 1); stnSign.position.set(5.0, 3.4, 12.3); mission1.add(stnSign);
   // Track bed, rails and sleepers running east-west.
   const bed = new THREE.Mesh(new THREE.BoxGeometry(34, 0.12, 3.4), stdMat({ color: 0x4a4a48, roughness: 1 }));
   bed.position.set(0, 0.06, 15.3); bed.receiveShadow = true; mission1.add(bed);
@@ -1591,15 +1593,18 @@ function buildMission1() {
   // and a floating label, so the player can find it before he needs
   // the door. Clicking it (or walking up to it) picks it up, and the
   // door unlocks. The key is always here, so the player can never get
-  // stuck at the locked door.
+  // stuck at the locked door. The key parts are unlit bright gold and
+  // oversized: as a small lit-metal key on a dark wall it was never
+  // visually located on the live checks (the wall read as bare).
   const keyGroup = new THREE.Group();
-  const keyRing = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.025, 8, 20), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
-  keyRing.position.set(0, 0.1, 0); keyGroup.add(keyRing);
-  const keyStem = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.22, 0.03), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
-  keyStem.position.set(0.05, -0.08, 0); keyGroup.add(keyStem);
-  const keyTooth = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.03), new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.3, metalness: 0.8 }));
-  keyTooth.position.set(0.09, -0.16, 0); keyGroup.add(keyTooth);
-  const keyGlow = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.18 }));
+  const keyMat = new THREE.MeshBasicMaterial({ color: 0xffd166 });
+  const keyRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.04, 8, 20), keyMat);
+  keyRing.position.set(0, 0.16, 0); keyGroup.add(keyRing);
+  const keyStem = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.34, 0.05), keyMat);
+  keyStem.position.set(0.08, -0.12, 0); keyGroup.add(keyStem);
+  const keyTooth = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.05), keyMat);
+  keyTooth.position.set(0.14, -0.24, 0); keyGroup.add(keyTooth);
+  const keyGlow = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
   keyGroup.add(keyGlow);
   keyGroup.position.set(1.5, 1.5, -0.6);
   keyGroup.name = 'stationKey'; keyGroup.userData.clickable = true;
@@ -1608,11 +1613,11 @@ function buildMission1() {
   window._stationKey = keyGroup;
   // Generous invisible click target around the key: the group itself
   // has no geometry, so a click on the key meshes would miss it.
-  const keyHit = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.7), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  const keyHit = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.9), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
   keyHit.position.set(1.5, 1.5, -0.6); keyHit.name = 'stationKey'; keyHit.userData.clickable = true; mission1.add(keyHit);
   window._stationKeyHit = keyHit;
-  const keyLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.28), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.9 }));
-  keyLabel.position.set(1.5, 1.95, -0.6); keyLabel.name = 'stationKeyLabel'; mission1.add(keyLabel);
+  const keyLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('STATION KEY', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
+  keyLabel.scale.set(1.6, 0.4, 1); keyLabel.position.set(1.5, 2.15, -0.6); keyLabel.name = 'stationKeyLabel'; mission1.add(keyLabel);
   window._stationKeyLabel = keyLabel;
   for (const wx of [-3, 3]) {
     const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1), new THREE.MeshStandardMaterial({ color: 0x0e1a24, roughness: 0.1, metalness: 0.4 }));
@@ -1914,7 +1919,10 @@ function buildStationRental() {
   // reads whole on the walk north from the platform (over the car at
   // x 4.5 it sat far right of the northward view and was never seen).
   const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RENTAL CAR - 0.05 ZAMA', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
-  label.scale.set(6, 1.5, 1); label.position.set(1.8, 3.0, 8.5); g.add(label);
+  // Shifted east and narrowed: at 6 m wide centred on x 1.8 its left
+  // letters ("RENTAL") stayed behind the 320px left HUD panel from
+  // every platform viewpoint on the live checks.
+  label.scale.set(4.8, 1.2, 1); label.position.set(3.2, 3.0, 8.5); g.add(label);
   // Generous invisible hit box over the car, so a tap anywhere on it
   // takes the rental.
   const hit = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.4, 5.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
@@ -2101,13 +2109,13 @@ function buildMission2() {
     head.position.set(fx, 4.65, 4.5); head.rotation.x = 0.5; mission2.add(head);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffe9a8, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
     glow.scale.set(3.2, 3.2, 1); glow.position.set(fx, 4.5, 4.5); mission2.add(glow);
-    const fl = new THREE.PointLight(0xffd9a0, 140, 34, 2);
+    const fl = new THREE.PointLight(0xffd9a0, 180, 36, 2);
     fl.position.set(fx, 4.4, 4.5); mission2.add(fl);
   }
-  const lotLight = new THREE.PointLight(0xffd9a0, 100, 30, 2);
+  const lotLight = new THREE.PointLight(0xffd9a0, 140, 32, 2);
   lotLight.position.set(-8.5, 4.1, 6.1); mission2.add(lotLight);
   const subSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('CON EDISON SUBSTATION', '#1a2a44', '#ffd166', ''), transparent: true, depthWrite: false }));
-  subSign.scale.set(7, 1.75, 1); subSign.position.set(0, 3.6, -2.1); mission2.add(subSign);
+  subSign.scale.set(8, 2, 1); subSign.position.set(0, 3.7, -2.1); mission2.add(subSign);
   // The living city around the yard: the substation sits in Long Island
   // City, so beyond the north fence there is a road with moving cars,
   // houses, an elevated train track with a passing train, and the
@@ -2834,10 +2842,14 @@ function setTimeOfDay(mode) {
   } else if (mode === 'dusk') {
     scene.background.set(0x2a1e33); // dusky purple-orange evening
     scene.fog.color.set(0x2a1e33); scene.fog.density = 0.012;
-    sun.intensity = 0.5; sun.color.set(0xff8a3c); sun.position.set(-14, 6, 8);
+    sun.intensity = 0.65; sun.color.set(0xff8a3c); sun.position.set(-14, 6, 8);
     moon.intensity = 0.15;
-    hemi.intensity = 0.25; hemi.color.set(0x8a6a9a); hemi.groundColor.set(0x3a2a22);
-    ambient.intensity = 0.25;
+    // Dusk stays dusky, but the fill light is high enough that the
+    // substation yard (lot, fence, control room, guards) reads from
+    // the seated arrival view instead of sinking into silhouette
+    // against the lit shops beyond it.
+    hemi.intensity = 0.4; hemi.color.set(0x8a6a9a); hemi.groundColor.set(0x3a2a22);
+    ambient.intensity = 0.4;
   } else { // night
     scene.background.set(0x05070a);
     scene.fog.color.set(0x05070a); scene.fog.density = 0.012;
@@ -3610,6 +3622,23 @@ function startTravelDrive(toKey, onArrive) {
   buildTravelScene();
   mission1.visible = false; mission2.visible = false; mission3.visible = false;
   travelGroup.visible = true;
+  // Warm up the destination's shader programs now, while the drive
+  // transition covers it: the first real render of a mission scene
+  // otherwise compiles dozens of programs in one frame, which on a
+  // slow or software renderer stalls the arrival for a long time
+  // (the canvas keeps showing the drive street while the game state
+  // has already arrived). Compiling here, with only the destination
+  // group shown, matches the light state the arrival frame renders.
+  try {
+    const destGroup = to && to.mission === 1 ? mission1 : to && to.mission === 2 ? mission2 : to && to.mission === 3 ? mission3 : null;
+    if (destGroup && typeof renderer.compile === 'function') {
+      travelGroup.visible = false;
+      destGroup.visible = true;
+      renderer.compile(scene, camera);
+      destGroup.visible = false;
+      travelGroup.visible = true;
+    }
+  } catch (e) { /* warm-up is best effort */ }
   travelActive = true; window.__lsTravelActive = true;
   // Driving away means he has left the valve room: clear the flag so it
   // cannot leak into the next scene. Mission 1 ends with the device
@@ -4626,18 +4655,20 @@ canvas.addEventListener('pointerup', e => {
   lastTapAt = Date.now();
   handleTap(e.clientX, e.clientY);
 });
-// Distance from the PLAYER (the avatar's ground position) to a point.
-// Click handlers run outside the animate loop, where camera.position
-// is the render camera - up to 4 m behind him in third person - so
+// Distance from the PLAYER (his ground position) to a point. Click
+// handlers run outside the animate loop, where camera.position is
+// the render camera - up to 4 m behind him in third person - so
 // measuring from the camera would refuse clicks while he stands at
-// the target. (The animate-loop walk-ups measure from the camera
-// only because beginPlayerFrame has just copied his position into
-// it for that frame.)
-const _playerWorldPos = new THREE.Vector3();
+// the target. The avatar mesh is not used either: in first person
+// the avatar is hidden and its position is never updated, so it
+// stays where third person last left it (near the station door, say)
+// and a gate measured from it passed from the back wall of the
+// valve room, 5 m away. getPlayerPos is the ground position the
+// movement code itself uses, kept current in both camera modes.
 function playerDist2D(x, z) {
-  try { getAvatar().getWorldPosition(_playerWorldPos); }
-  catch (e) { _playerWorldPos.copy(camera.position); }
-  return dist2D(_playerWorldPos.x, _playerWorldPos.z, x, z);
+  const p = getPlayerPos();
+  if (p) return dist2D(p.x, p.z, x, z);
+  return dist2D(camera.position.x, camera.position.z, x, z);
 }
 function interact(name) {
   if (!name) return;
@@ -4803,12 +4834,39 @@ function act2Colliders() {
   if (state.mission === 1 && !inValveRoom && !stationDoorOpen) return list.concat([STATION_DOOR_BOX]);
   return list;
 }
+// Frame errors are logged once per distinct message so a live check
+// can capture them from the console instead of the game freezing on
+// the last good frame with no trace of why.
+const _frameErrorsSeen = new Set();
+function logFrameError(e) {
+  try {
+    const msg = (e && e.message) ? e.message : String(e);
+    if (_frameErrorsSeen.has(msg)) return;
+    _frameErrorsSeen.add(msg);
+    console.error('[LastSignal frame error] ' + msg, e);
+  } catch (err) { /* logging must never break the loop */ }
+}
+// The render loop must never die on a bad frame: if any per-frame
+// update throws (a rigged model, a mixer, a sound call), the frame
+// still renders with whatever state was reached, and the next frame
+// tries again. Before this wrapper, one throw before the render
+// call froze the canvas on the last good frame - which is exactly
+// what the live check saw at every Act II travel arrival (the drive
+// street stayed on screen, drags did not orbit, WASD moved nothing
+// visibly, while the DOM and the game logic kept working).
 function animate() {
   if (!actActive) return;
   actRaf = requestAnimationFrame(animate);
+  try { animateFrame(); }
+  catch (e) {
+    logFrameError(e);
+    try { renderer.render(scene, camera); } catch (e2) { logFrameError(e2); }
+  }
+}
+function animateFrame() {
   const t = Date.now() / 1000;
-  const dt = animate.lastT === undefined ? 0.016 : Math.min(0.1, t - animate.lastT);
-  animate.lastT = t;
+  const dt = animateFrame.lastT === undefined ? 0.016 : Math.min(0.1, t - animateFrame.lastT);
+  animateFrame.lastT = t;
   // During the drive between missions the travel sequence owns the
   // camera: the road and the city scroll past, WASD is ignored, and the
   // mission camera control below is skipped so it cannot fight the drive.

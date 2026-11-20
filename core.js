@@ -30,6 +30,21 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// If the GPU drops the context (memory pressure, a driver reset, a
+// software renderer giving up on a heavy scene), the canvas freezes
+// on its last frame while the game logic keeps running - which reads
+// as the world being stuck. preventDefault on the lost event lets
+// the browser restore the context; three.js then re-uploads on the
+// next render. Log both events so a live check can see them.
+try {
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.error('[LastSignal] WebGL context lost - waiting for restore.');
+  }, false);
+  canvas.addEventListener('webglcontextrestored', () => {
+    console.error('[LastSignal] WebGL context restored.');
+  }, false);
+} catch (e) { /* context events are best effort */ }
 
 // Dispose every GPU resource owned by a scene (geometries, materials and
 // their textures) so a finished act does not leak into the next one.

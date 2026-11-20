@@ -1141,6 +1141,13 @@ let playerPos = null;
 // next frame's beginPlayerFrame would otherwise teleport the camera
 // straight back to the old spot and undo the reset.
 export function setPlayerPos(x, z) { playerPos = { x, z }; }
+// The authoritative player ground position, updated every frame by
+// applyPlayerPresence in BOTH camera modes and directly by
+// setPlayerPos. Click gates must measure from this, not from the
+// avatar mesh: in first person the avatar is hidden and its position
+// is not updated, so it stays wherever third person last left it and
+// a distance gate measured from it passes from metres away.
+export function getPlayerPos() { return playerPos ? { x: playerPos.x, z: playerPos.z } : null; }
 export function beginPlayerFrame(camera, eyeY) {
   if (!playerPos || !camera) return;
   try {
@@ -1164,6 +1171,15 @@ export function beginPlayerFrame(camera, eyeY) {
 export function applyPlayerPresence(o) {
   if (!o || !o.scene || !o.camera) return false;
   const a = getAvatar();
+  // A non-finite position or yaw would wedge the camera forever
+  // (NaN propagates through every later frame and no drag or Reset
+  // can level it - the live check hit exactly that: after Reset at
+  // a wall the avatar vanished and drag-orbit died until a reload).
+  // Fall back to the last good ground position and a level yaw.
+  if (!isFinite(o.x)) o.x = playerPos ? playerPos.x : 0;
+  if (!isFinite(o.z)) o.z = playerPos ? playerPos.z : 0;
+  if (!isFinite(o.yaw)) o.yaw = 0;
+  if (!isFinite(o.pitch)) o.pitch = 0;
   // Move the avatar between scenes when the act or place changes.
   if (avatarScene !== o.scene) {
     detachAvatar();

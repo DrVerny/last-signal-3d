@@ -4038,6 +4038,10 @@ function homeAnimate() {
   // put it back on the player before moving, or movement starts from
   // the wrong place.
   beginPlayerFrame(homeCamera, 1.7);
+  // Self-heal a wedged camera: if the position or angles ever go
+  // non-finite, reset to the room start instead of rendering
+  // nothing with dead drags until a reload.
+  if (!isFinite(homeCamera.position.x) || !isFinite(homeCamera.position.z) || !isFinite(homeYaw) || !isFinite(homePitch)) homeResetView();
   const sp = 0.07;
   const mv = moveDelta(homeKeys, homeYaw, sp);
   // Remember where the player stood before this step, so the bed
@@ -4255,6 +4259,12 @@ function homeResetView() {
   if (!homeActive || !homeCamera) return;
   homeCamera.position.set(homeStart.x, homeStart.y, homeStart.z);
   homeYaw = homeStart.yaw; homePitch = 0;
+  // Clear any wedged drag state too: a press whose release was lost
+  // (focus change, pointer capture dropped) leaves homeDragging or
+  // phoneDown set, and every later drag then does nothing until a
+  // reload. Reset view is the player's recovery button, so it must
+  // recover the input as well as the camera.
+  homeDragging = false; phoneDown = false; homeDragMoved = 0;
   // Keep the stored player position in step, or the next frame's
   // beginPlayerFrame teleports the camera back to the old spot and
   // undoes the reset.

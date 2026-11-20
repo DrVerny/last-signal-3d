@@ -183,12 +183,21 @@ export async function goToAct(n) {
   // of an endless loading screen. The ?v= cache-buster forces a fresh
   // fetch of the act module, so a stale cached copy cannot hang the boot.
   let mod;
+  const importAct = () => Promise.race([
+    import(ACTS[n].file + '?v=' + BUILD_VERSION),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('act module load timed out after 30s')), 30000))
+  ]);
   try {
-    mod = await Promise.race([
-      import(ACTS[n].file + '?v=' + BUILD_VERSION),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('act module load timed out after 30s')), 30000))
-    ]);
-  } catch (e) {
+    mod = await importAct();
+  } catch (e1) {
+    // One silent retry before showing any error: a slow first fetch
+    // (cold cache, a stalled connection) often lands on the second
+    // try, and the player should never see a "Load error" flash for
+    // a load that was about to succeed anyway (a direct ?act=2 load
+    // flashed the timeout error live, then recovered).
+    try {
+      mod = await importAct();
+    } catch (e) {
     const t = document.getElementById('loadingText');
     if (t) t.textContent = 'The game took too long to load. Check your connection and try again.';
     // Show the real reason under the message, so a timeout reads
@@ -210,6 +219,7 @@ export async function goToAct(n) {
       c.onclick = () => { location.href = 'index.html' + (n > 1 ? '?act=' + n : ''); };
     }
     return;
+    }
   }
   actModules[n] = mod;
 }
@@ -272,10 +282,13 @@ try {
 // ?fresh in the URL starts over from the beginning: it clears the
 // prologue flag and all act saves and money, then boots the prologue
 // (phone ringing in the room). Share the plain link for a normal load;
-// add ?fresh to start again from the phone call.
+// add ?fresh to start again from the phone call. The fuel key is in
+// the list too: without it a fresh player booted with whatever fuel
+// the last session left in the tank (94% on the live check) while
+// his balance correctly reset to 10 ZAMA.
 try {
   if (new URLSearchParams(location.search).has('fresh')) {
-    for (const k of ['lastSignalPrologue', 'lastSignalAct1', 'lastSignalAct2', 'lastSignalAct3', 'lastSignalMoney', 'lastSignalPaid', 'lastSignalOwned', 'lastSignalEquipped', 'lastSignalCurrentAct', 'lastSignalAct2Mission']) {
+    for (const k of ['lastSignalPrologue', 'lastSignalAct1', 'lastSignalAct2', 'lastSignalAct3', 'lastSignalMoney', 'lastSignalPaid', 'lastSignalOwned', 'lastSignalEquipped', 'lastSignalCurrentAct', 'lastSignalAct2Mission', 'lastSignalFuel']) {
       try { localStorage.removeItem(k); } catch (e) { /* ignore */ }
     }
     prologueDone = false; hasActSave = false;
