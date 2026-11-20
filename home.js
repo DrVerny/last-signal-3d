@@ -2397,7 +2397,10 @@ function addStaff(scene, o) {
   roomWalkers.push(p);
   const tag = textSprite(o.label, '#2a2118', '#ffd166', '');
   tag.scale.set(1.8, 0.45, 1); tag.position.set(o.x, 2.15, o.z); scene.add(tag);
-  const hb = hitBox(scene, 1.4, 2.0, 1.4, o.x, 1.0, o.z, o.action || 'staff');
+  // The hit box reaches up to the tag (top at 2.6, tag centre 2.15):
+  // a tap aimed at the floating label lands on the box even if the
+  // sprite quad itself is missed, so the person always answers.
+  const hb = hitBox(scene, 1.4, 2.6, 1.4, o.x, 1.3, o.z, o.action || 'staff');
   hb.userData.staffRole = o.label;
   hb.userData.staffLine = o.line || 'Can I help you?';
   hb.userData.staffVoice = o.voice || 'staff';
@@ -3315,8 +3318,11 @@ function buildSymposium(scene) {
   addExitDoor(scene, { x: -6, z: 6.9, ry: Math.PI, keyId: 'symposium', keyLabel: 'symposium key', label: 'EXIT - HALL DOOR' });
   addRoomKey(scene, 6.5, 5.5, 'symposium', 'symposium key');
   // The host, on the floor in front of the stage, facing the house.
-  // Clear of the podium hit box and the front row.
-  addStaff(scene, { x: 3, z: -3.2, heading: 0, label: 'Host', shirt: 0x1a1a2a, pants: 0x1a1a1a, line: 'Welcome to the New York Symposium. The podium is yours when you are ready.' });
+  // Clear of the podium hit box and the front row. A light suit: the
+  // old near-black one read as absent against the dark red stage
+  // skirt in the red-lit hall (the live check saw his gold label
+  // floating with no figure under it).
+  addStaff(scene, { x: 3, z: -3.2, heading: 0, label: 'Host', shirt: 0xd8d2c4, pants: 0x3a3a4a, line: 'Welcome to the New York Symposium. The podium is yours when you are ready.' });
 }
 
 // ---------- Place engine ----------
@@ -4059,6 +4065,18 @@ export function enterPlace(kind, onLeave, options) {
   // A return spawn (coming out of a lobby) puts him beside the door
   // he went in, facing it, instead of at the generic start.
   if (opts.spawn) homeStart = { x: opts.spawn.x, y: 1.7, z: opts.spawn.z, yaw: opts.spawn.yaw || 0 };
+  // Doors arm only after a short grace (see the door loop): stamp
+  // every door built for this place so entry motion - a held key
+  // carried through the door, backing away from a desk - can never
+  // fire a walk-up trigger in the first moments inside.
+  const doorArmAt = Date.now() / 1000 + 2;
+  for (const d of homeDoors) { d.armed = false; d.armAt = doorArmAt; }
+  // A movement key held through a scene change (walking into a
+  // lobby with W down, clicking a door while holding S) must not
+  // keep walking him in the new scene: suppress held keys on every
+  // entry, the same rule as the terminal-front seat. He arrives
+  // standing still and presses afresh to walk.
+  homeSuppressHeldKeys();
   // Walls and furniture for this place (see registerHomeColliders).
   registerHomeColliders(kind);
   // The Filling Station is where fuel is bought: show the Fill button
@@ -4348,7 +4366,18 @@ function homeAnimateFrame() {
     // player at full frame rate escaped the radius before the door
     // finished opening, which is why walk-through sometimes worked
     // live while clicks and slow frames never did.
-    if (!near) d.armed = true;
+    // The arming also waits out a short grace after the place is
+    // entered (d.armAt, stamped in enterPlace): the lobby spawn now
+    // sits OUTSIDE the EXIT radius but only 0.7 m from its edge, so
+    // the door armed on the first frame and any southward drift in
+    // the first second inside - a held S, a W with the camera
+    // dragged round, backing away from the desk - walked straight
+    // into the armed trigger and bounced back out (the live check
+    // entered the lobby, released W, and was outside within
+    // seconds). With the grace, entry motion can never fire a door;
+    // the player must be outside the radius after the grace and
+    // then walk to the door, or click it (clicks are unaffected).
+    if (!near && t >= (d.armAt || 0)) d.armed = true;
     if (near && d.keyId && !hasKey(d.keyId)) {
       d.open = Math.max(0, d.open - dt * 2);
       if (t - homeDoorLockedAt > 3) {
@@ -4636,6 +4665,12 @@ function homeHandleTap(clientX, clientY) {
     else showHomeToast('Soft. You could nap here - but the city needs you.');
   }
   else if (action === 'info') showHomeToast(homeKind === 'hospital' ? 'City Hospital - the tower from the photo. Emergency is open 24 hours.' : 'Water treatment plant - the industrial line feeds this place.');
+  // Stamp the tap as handled NOW, after any scene change this tap
+  // caused (a door tap builds a whole lobby synchronously): the
+  // click event that follows the pointerup is deduped against this
+  // stamp, and a slow scene build must not let that click re-tap
+  // the new scene at the same screen point.
+  homeLastTapAt = Date.now();
 }
 // Raycast at a pointer position: true when the ray hits the phone.
 // Used to tell a press that starts on the phone (tap or swipe to answer)

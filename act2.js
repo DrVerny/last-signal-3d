@@ -1347,6 +1347,10 @@ function buildOneGuard(gname, gx, gz) {
       const g = calebBase.group.clone(true);
       g.name = gname;
       g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = dark; });
+      // A guard must never be frustum-culled: his marker sprite
+      // rendered while his meshes were culled away on the live
+      // check (one guard figure invisible, marker floating).
+      g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
       stripCalebKit(g); // drop Caleb's cap, brim and badge (by name - see above)
       mission2.add(g); placeHuman(g, gname, gx, gz, Math.PI, calebBase.scale);
       // Patrol data: the guards walk the gate line so the yard feels
@@ -1366,6 +1370,9 @@ function buildOneGuard(gname, gx, gz) {
     if (!person || !person.group) return false;
     const g = person.group;
     g.name = gname;
+    // Same culling guard as the clone path (makeRiggedPerson sets
+    // it too; belt and braces for the guard line).
+    g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
     mission2.add(g);
     placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
     // faceYaw rides on the rig: the Atlas crowd rigs face -Z in
@@ -1388,6 +1395,16 @@ function ensureGuards() {
     if (guardPatrol.some(gp => gp.group && gp.group.name === gname)) continue;
     if (!buildOneGuard(gname, gx, gz)) buildOneGuard(gname, gx, gz);
   }
+  // Orphan sweep: a guard figure in the yard that is not on the
+  // patrol list would stand at its post forever, never patrolling
+  // and never facing the player (the live check saw a stationary
+  // guard facing north while the patrol line worked). Remove any
+  // guard-named group the patrol does not own.
+  try {
+    for (const child of [...mission2.children]) {
+      if ((child.name === 'guard1' || child.name === 'guard2') && !guardPatrol.some(gp => gp.group === child)) mission2.remove(child);
+    }
+  } catch (e) { /* ignore */ }
 }
 async function loadHumans() {
   const loader = new GLTFLoader();
@@ -5666,6 +5683,14 @@ function animateFrame() {
     }
   }
   updateSpeakingGestures(t); // speaking bob, nod, lean and turn (no-op with no speaker)
+  // Stood-down guards face the player LAST: gestures write every
+  // registered human's rotation each frame (a listener turn toward
+  // whoever spoke last would swing the guards away from the player
+  // after any later line), so re-apply the guard facing after the
+  // gesture pass. The patrol block above already ran before
+  // gestures and its facing is adopted as the rest pose, so only
+  // the stood-down facing needs this final word.
+  if (mission2.visible && guardsDown) faceGuardsAtPlayer();
   // Sound: footsteps while moving, heartbeat and score tension. The bomb
   // countdown and the bridge gap are the tense moments here.
   // (`moving` is computed above, with the camera bob.)

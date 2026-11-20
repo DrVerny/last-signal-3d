@@ -614,6 +614,13 @@ export function makeRiggedPerson(opts) {
       if (fit) fit.position.y = -model.groundY;
     }
     group.traverse(m => { m.castShadow = true; });
+    // A rigged figure must never be frustum-culled by a stale skinned
+    // bounding sphere: the substation guard's marker sprite rendered
+    // while his meshes were culled away on the live check (the
+    // headless harness has no renderer, so it cannot see this).
+    // Every direct build gets the same guard addStaff and the
+    // upgrade path already had.
+    group.traverse(m => { if (m.isMesh) m.frustumCulled = false; });
     // Walk clip on its own mixer, with a random phase so the crowd never
     // marches in lockstep. The Walk clip walks in place; the root bone's
     // horizontal position is reset after each mixer update (see
@@ -809,6 +816,9 @@ export function makeSeatedPerson(opts) {
     const sj = 0.98 + Math.random() * 0.04;
     group.scale.set(s * body.width, s * sj, s * body.width);
     group.traverse(m => { m.castShadow = true; });
+    // Same culling guard as makeRiggedPerson: a seated figure must
+    // never be culled by a stale skinned bounding sphere.
+    group.traverse(m => { if (m.isMesh) m.frustumCulled = false; });
     group.position.set(o.x || 0, 0, o.z || 0);
     // The rigs face opposite ways in model space (Atlas -Z, Casual
     // +Z), so add the rig's own faceYaw to the requested heading, or
