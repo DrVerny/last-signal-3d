@@ -49,7 +49,7 @@ Real scanned figures, not procedural geometry: `models/jade.glb` (Riley, woman, 
 - The full 16-scene script in full detail - Acts I, II and III are all built as playable slices, not the whole story shot-for-shot
 - Multiplayer
 - **Live-stream audience voting** - not built yet. How it could work later: viewers vote in chat (e.g. `!hospital` / `!residential` / `!industrial`); votes are collected as the sealed choice, encrypted, and revealed live at the end of the act - the audience's choice changes the ending, but nobody sees the tally until reveal
-- Real FHEVM contract - written, tested, wired and deployed to Sepolia 2026-11-11, redeployed fresh the same day at 21:09 WAT (see "Zama FHEVM integration" below): `LastSignalSealedChoice` at `0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10` (replaces the abandoned 0x1504E234eab90BF383f64691BB7117da317740bC). The game runs in demo mode until the updated `zama-config.js` is pushed to GitHub Pages.
+- Real FHEVM contract - written, tested, wired and deployed to Sepolia 2026-11-11, redeployed fresh the same day at 21:09 WAT (see "Zama FHEVM integration" below): `LastSignalSealedChoice` at `0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10` (replaces the abandoned 0x1504E234eab90BF383f64691BB7117da317740bC). The updated `zama-config.js` is pushed to GitHub Pages, so the live site runs with the Sepolia contract configured (verified live 2026-11-19).
 
 ## Act II - City of Wires (added 2026-11-10)
 Act I's end card links to `act2.html`. Trust, System Integrity, the sealed choice and the RESET board carry over from Act I via localStorage (defaults apply when played standalone). Three missions, one per script location:
@@ -99,10 +99,10 @@ npm test          # npx hardhat test - 9 passing
 - Redeployed fresh: `LastSignalSealedChoice` at `0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10` on Sepolia, 2026-11-11 21:09 WAT (forced fresh deploy; the first deploy that day, 0x1504E234eab90BF383f64691BB7117da317740bC, is abandoned).
 - Deploy tx: `0x35fb6760a55b10e68ab0d5e76a5fde3cc5a36dd1073e94f7add3c7cd42a244e3`. Note: the 2026-11-11 17:46 UTC Etherscan check verified the OLD contract only - re-check https://sepolia.etherscan.io/address/0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10 before submitting.
 - Deployer: the same wallet used for Sealed Fortune, `0x41381f0d4f88b8954650ddf7b2607c89430a0e0a` (balance was 0.0351 Sepolia ETH before the redeploy, no faucet top-up needed; 6,100,454 gas).
-- The address is already in local `zama-config.js`. Push it to GitHub Pages (step 4 below) so the live site stops running demo-only.
+- The address is in `zama-config.js` and pushed to GitHub Pages (step 4 below), so the live site runs with the Sepolia contract configured.
 - Sepolia ETH in the deploy wallet came from the Sepolia faucet; top up from a faucet again if the balance is too low for gas.
 - Wallet access: the deploy needed the deploy wallet's private key as the `PRIVATE_KEY` env var at deploy time only. It is never committed and never stored in this repo.
 - Deploy command used: `PRIVATE_KEY=... npm run deploy:sepolia` (add `INFURA_API_KEY=...` or it falls back to the public Sepolia RPC).
-4. Push the updated `zama-config.js` (and all game + FHE files) to GitHub Pages as usual. The HUD badge will switch to "SEPOLIA" once a wallet connects. **Still pending as of 2026-11-11 17:47 UTC: the live Pages copy of `zama-config.js` still shows `CONTRACT_ADDRESS: ""`.**
+4. Push the updated `zama-config.js` (and all game + FHE files) to GitHub Pages as usual. The HUD badge will switch to "SEPOLIA" once a wallet connects. **Done - verified live 2026-11-19 19:19 UTC: the live Pages copy of `zama-config.js` shows `CONTRACT_ADDRESS: "0x9eE62DA6f26Ef3E6D275DaFAE2E4b3f8DC661d10"`.**
 5. Play Acts I-III with the same wallet in all three acts, so both choices land under one player address. On the Act III end card, press "Reveal sealed choices on Sepolia" to decrypt and show the on-chain record. **Not yet verified live on Sepolia.**
 6. Optional: verify the contract on Etherscan with `ETHERSCAN_API_KEY=... npx hardhat verify --network sepolia <address>`.
