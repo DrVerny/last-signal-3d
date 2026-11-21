@@ -362,6 +362,13 @@ function blobShadow(parent, x, z, sx, sz, opacity) {
 }
 // Mission groups: only one visible at a time.
 const mission1 = new THREE.Group(); scene.add(mission1);
+// Rondout station sits 300 m south of the water facility in its own
+// sub-group, so from the platform the facility is beyond the camera
+// far plane (200) and cannot be seen: the rental drive is a real
+// drive, not a walk across a shared field. Station geometry is built
+// in local coordinates and shifted by this offset.
+const STATION_DZ = 300;
+const stationGroup = new THREE.Group(); stationGroup.position.z = STATION_DZ; mission1.add(stationGroup);
 const mission2 = new THREE.Group(); scene.add(mission2); mission2.visible = false;
 const mission3 = new THREE.Group(); scene.add(mission3); mission3.visible = false;
 // Camera bounds per mission (x/z clamp + default view).
@@ -371,11 +378,18 @@ const VIEWS = {
   3: { pos: [0, 2.2, 10], yaw: 0, x: [-1.2, 1.2], z: [-14, 12] }
 };
 let camBounds = VIEWS[1];
-// Act II arrival: the player steps off the train at Rondout station and
-// walks to the facility before Mission 1 starts. The platform is at the
-// south end (z 11 to 13.6), so the arrival spawn faces the train (yaw PI
-// looks south, +z) and the trigger line is z 7 on the dirt track.
-const ARRIVAL_VIEW = { pos: [-3.9, 1.7, 12.3], yaw: Math.PI };
+// Act II arrival: the player steps off the train at Rondout station,
+// 300 m south of the water facility (see STATION_DZ), and takes the
+// rental car before Mission 1 starts. The platform is at the south
+// end of the station ground (local z 11 to 13.6), so the arrival
+// spawn faces the train (yaw PI looks south, +z) and the trigger
+// line is local z 7 on the dirt track. World positions add
+// STATION_DZ to the local station coordinates.
+const ARRIVAL_VIEW = { pos: [-3.9, 1.7, 312.3], yaw: Math.PI };
+// Camera bounds while he is at the station, before Mission 1 starts:
+// VIEWS[1] shifted by STATION_DZ (platform world z 311 to 313.6, the
+// rental car at world z 309, the track bed at 315.3 just outside).
+const STATION_VIEW = { pos: ARRIVAL_VIEW.pos, yaw: Math.PI, x: [-8, 11.5], z: [294, 314] };
 let arrivalDone = false; // true once the player has walked off the platform
 let mission1Started = false; // true once startMission1 has run
 // The rental car at Rondout station: a plain sedan he rents for 0.05 ZAMA
@@ -1216,7 +1230,7 @@ function resetView() {
   // platform where he stepped off the train, not to the mission spawn.
   if (state.mission === 1 && !mission1Started) {
     camera.position.set(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[1], ARRIVAL_VIEW.pos[2]);
-    state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = VIEWS[1];
+    state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = STATION_VIEW;
     try { setPlayerPos(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[2]); } catch (e) { /* ignore */ }
     return;
   }
@@ -1908,43 +1922,50 @@ function buildRondoutStation() {
   // Rondout station at the south end: a ground-level track with a
   // two-car commuter train, a raised concrete platform alongside it,
   // and a RONDOUT sign. The player spawns on the platform facing the
-  // train (south), steps off through the open car door, and walks the
-  // dirt track north to the tower.
+  // train (south), steps off through the open car door, and takes the
+  // rental car north to the facility. Everything here is built in
+  // station-local coordinates inside stationGroup (300 m south of
+  // the facility, see STATION_DZ).
   const concrete = stdMat({ color: 0x8a8a86, roughness: 0.95 });
+  // Station ground: the facility's 60x60 field only covers z -30 to
+  // 30, so the station needs its own grass patch under the platform,
+  // the track and the rental pull-off.
+  const stnGround = new THREE.Mesh(new THREE.PlaneGeometry(60, 40), stdMat({ color: 0x4a5a34, roughness: 1 }));
+  stnGround.rotation.x = -Math.PI / 2; stnGround.position.set(0, 0, 12); stnGround.receiveShadow = true; stationGroup.add(stnGround);
   // Platform: 24 m long, 2.6 m wide, 0.15 m high, top at y 0.15.
   const platform = new THREE.Mesh(new THREE.BoxGeometry(24, 0.15, 2.6), concrete);
-  platform.position.set(0, 0.075, 12.3); platform.receiveShadow = true; mission1.add(platform);
+  platform.position.set(0, 0.075, 12.3); platform.receiveShadow = true; stationGroup.add(platform);
   // Yellow safety line along the platform edge.
   const edgeLine = new THREE.Mesh(new THREE.BoxGeometry(24, 0.02, 0.3), new THREE.MeshStandardMaterial({ color: 0xd8b13a, roughness: 0.8 }));
-  edgeLine.position.set(0, 0.16, 11.2); mission1.add(edgeLine);
+  edgeLine.position.set(0, 0.16, 11.2); stationGroup.add(edgeLine);
   // Shelter: four posts, a flat canopy roof, and a bench.
   const postMat = stdMat({ color: 0x3a3f44, metalness: 0.6, roughness: 0.4 });
   for (const [px, pz] of [[-8.8, 11.4], [-5.2, 11.4], [-8.8, 13.2], [-5.2, 13.2]]) {
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.6, 8), postMat);
-    post.position.set(px, 1.45, pz); post.castShadow = true; mission1.add(post);
+    post.position.set(px, 1.45, pz); post.castShadow = true; stationGroup.add(post);
   }
   const shelterRoof = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.1, 2.4), stdMat({ color: 0x2a4a6a, roughness: 0.6, metalness: 0.3 }));
-  shelterRoof.position.set(-7, 2.8, 12.3); shelterRoof.castShadow = true; mission1.add(shelterRoof);
+  shelterRoof.position.set(-7, 2.8, 12.3); shelterRoof.castShadow = true; stationGroup.add(shelterRoof);
   const benchSeat = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.08, 0.5), stdMat({ color: 0x6a4a30, roughness: 0.9 }));
-  benchSeat.position.set(-7, 0.62, 12.5); mission1.add(benchSeat);
+  benchSeat.position.set(-7, 0.62, 12.5); stationGroup.add(benchSeat);
   const benchBack = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 0.08), stdMat({ color: 0x6a4a30, roughness: 0.9 }));
-  benchBack.position.set(-7, 0.9, 12.72); mission1.add(benchBack);
+  benchBack.position.set(-7, 0.9, 12.72); stationGroup.add(benchBack);
   // RONDOUT station sign above the platform, near the middle of the
   // platform sightline so it reads whole from the spawn and the track.
   // Shifted east and narrowed: from north-facing platform views its
   // left letters sat behind the 320px left HUD panel.
   const stnSign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('RONDOUT', '#1a2a44', '#ffd166', 'DELAWARE AQUEDUCT - 6 AM'), transparent: true, depthWrite: false }));
-  stnSign.scale.set(4.0, 1.0, 1); stnSign.position.set(5.0, 3.4, 12.3); mission1.add(stnSign);
+  stnSign.scale.set(4.0, 1.0, 1); stnSign.position.set(5.0, 3.4, 12.3); stationGroup.add(stnSign);
   // Track bed, rails and sleepers running east-west.
   const bed = new THREE.Mesh(new THREE.BoxGeometry(34, 0.12, 3.4), stdMat({ color: 0x4a4a48, roughness: 1 }));
-  bed.position.set(0, 0.06, 15.3); bed.receiveShadow = true; mission1.add(bed);
+  bed.position.set(0, 0.06, 15.3); bed.receiveShadow = true; stationGroup.add(bed);
   for (const rz of [14.6, 16.0]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(34, 0.12, 0.12), stdMat({ color: 0x9aa2a8, metalness: 0.9, roughness: 0.3 }));
-    rail.position.set(0, 0.18, rz); mission1.add(rail);
+    rail.position.set(0, 0.18, rz); stationGroup.add(rail);
   }
   for (let x = -16; x <= 16; x += 1.1) {
     const tie = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.08, 2.4), stdMat({ color: 0x3a2f24, roughness: 1 }));
-    tie.position.set(x, 0.12, 15.3); mission1.add(tie);
+    tie.position.set(x, 0.12, 15.3); stationGroup.add(tie);
   }
   // The train: two commuter cars with lit windows, sliding doors on the
   // platform side, bogies and wheels underneath. The first car's centre
@@ -2009,7 +2030,7 @@ function buildRondoutStation() {
     const tail = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2222 }));
     tail.position.set(-7.62, 1.2, hz); train.add(tail);
   }
-  mission1.add(train);
+  stationGroup.add(train);
 }
 
 function buildMission1() {
@@ -2304,9 +2325,10 @@ function startArrival() {
   // Sync the stored ground position: coming from Act I the stored spot
   // is a train-car position, and beginPlayerFrame would snap him there.
   try { setPlayerPos(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[2]); } catch (e) { /* ignore */ }
-  state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = VIEWS[1];
+  state.yaw = ARRIVAL_VIEW.yaw; state.pitch = 0; camBounds = STATION_VIEW;
   // The player's car is already parked in the lot in front of the
-  // tower, so he sees it as he walks up from the platform.
+  // tower at the facility, 300 m north; he reaches it after the
+  // rental drive.
   parkPlayerCar(1);
   // A rental car waits by the platform end (0.05 ZAMA): he drives it to the
   // facility, parks it, and only then does the mission begin.
@@ -2419,13 +2441,13 @@ function buildStationRental() {
   // takes the rental.
   const hit = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.4, 5.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
   hit.position.set(4.5, 1.1, 9.0); hit.name = 'rentalCar'; hit.userData.clickable = true; g.add(hit);
-  mission1.add(g);
+  stationGroup.add(g);
   stationRental = { group: g, hit, label };
   window._rentalCarHit = hit;
 }
 function disposeStationRental() {
   if (!stationRental) return;
-  try { mission1.remove(stationRental.group); } catch (e) { /* ignore */ }
+  try { stationGroup.remove(stationRental.group); } catch (e) { /* ignore */ }
   try { disposeCarGroup(stationRental.group); } catch (e) { /* ignore */ }
   stationRental = null; window._rentalCarHit = null;
 }
@@ -5699,13 +5721,14 @@ function animateFrame() {
   }
   // Arrival: the player stepped off the train at Rondout station. The
   // mission only starts once he walks off the platform toward the
-  // facility: crossing z 7 on the dirt track, past the platform end at
-  // z 11. He spawns at z 12.3, so this cannot fire at spawn, and the
-  // flag makes it fire exactly once per Act II entry.
+  // facility: crossing world z 307 (local z 7 + STATION_DZ) on the
+  // dirt track, past the platform end at world z 311. He spawns at
+  // world z 312.3, so this cannot fire at spawn, and the flag makes
+  // it fire exactly once per Act II entry.
   if (state.mission === 1 && mission1.visible && !mission1Started && !arrivalDone
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
-    if (camera.position.z < 7) {
+    if (camera.position.z < 307) {
       arrivalDone = true;
       // Walking off the platform leads to the rental car, not straight
       // into the mission: the briefing starts only after the rental drive.
@@ -5718,7 +5741,7 @@ function animateFrame() {
   if (state.mission === 1 && mission1.visible && !mission1Started && !rentalTaken && stationRental
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
-    if (dist2D(camera.position.x, camera.position.z, 4.5, 9.0) < 4) {
+    if (dist2D(camera.position.x, camera.position.z, 4.5, 309.0) < 4) {
       showTakeRentalButton();
       if (t - rentalToastAt > 6) {
         rentalToastAt = t;
