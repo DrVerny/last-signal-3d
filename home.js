@@ -185,6 +185,7 @@ let terminalPedestrians = [];
 // needed to board in prologue mode; in visit mode no ticket is needed.
 let terminalTicket = false;
 let terminalSeated = false; // seated in the parked car at the terminal front
+let terminalFrontOnFoot = false; // came back out of the hall on foot (no seat, ticket kept)
 let terminalFrontCar = null, terminalFrontDoor = null; // parked car + its door hinge
 let terminalDoorSwing = null; // { group, t } while the car door swings open
 let terminalGetOutBtnEl = null;
@@ -718,6 +719,10 @@ function boardTrain() {
     const cb = prologueOnBoardTrain;
     prologueOnBoardTrain = null;
     homePrologue = false;
+    // Boarding is one-way: the hall's leave callback (back outside
+    // to the glass doors) must not run here, or it would rebuild the
+    // terminal front underneath Act I as it starts.
+    homeOnLeave = null;
     leavePlace();
     cb();
   } else {
@@ -1058,7 +1063,7 @@ function showHomeBar(kind) {
     hospital: 'Drag to look around - WASD to walk - look around, then head back.',
     industry: 'Drag to look around - WASD to walk - look around, then head back.',
     terminal: homePrologue ? 'Buy your ticket at the service desk (0.1 ZAMA), then board the 4 train on Platform 4.' : 'Drag to look around - WASD to walk - the 4 train is on the platform. Look around, then head back.',
-    terminalFront: homePrologue ? 'You are parked in front of the terminal. Get out of the car and walk to the glass doors.' : 'Drag to look around - WASD to walk - the 4 train is on the platform. Look around, then head back.',
+    terminalFront: homePrologue ? (terminalFrontOnFoot ? 'You are outside the terminal. Walk back through the glass doors to the hall.' : 'You are parked in front of the terminal. Get out of the car and walk to the glass doors.') : 'Drag to look around - WASD to walk - the 4 train is on the platform. Look around, then head back.',
     hotel: 'Drag to look around - WASD to walk - click the bed to sleep.',
     airport: 'Drag to look around - WASD to walk - look around, then head back.',
     carpark: 'Drag to look around - WASD to walk - rows of parked cars. Look around, then head back.',
@@ -2575,7 +2580,17 @@ function updateTerminalGlassDoor(dt) {
 }
 function enterTerminalInterior() {
   if (!homeActive || homeKind !== 'terminalFront') return;
-  enterPlace('terminal', () => {}, { prologue: homePrologue, onBoardTrain: prologueOnBoardTrain });
+  const wasPrologue = homePrologue, ob = prologueOnBoardTrain;
+  // Walking back out the main entrance (the hall's EXIT door) puts
+  // him outside again, on foot by the glass doors, the same way he
+  // came in. This callback used to be a no-op: the EXIT door fired
+  // leavePlace, the hall was torn down and nothing ran after it - no
+  // act loop exists in the prologue - so the game sat on the last
+  // frame forever with every key, drag and button dead (the live
+  // check wedged at the EXIT door twice, ticket never bought).
+  enterPlace('terminal', () => {
+    enterPlace('terminalFront', () => {}, { prologue: wasPrologue, onBoardTrain: ob, onFoot: true, spawn: { x: 0, z: -7, yaw: 0 } });
+  }, { prologue: wasPrologue, onBoardTrain: ob });
 }
 // Gold on-screen button for getting out of the parked car at the
 // terminal front. Same look as the act's Get out button.
@@ -4033,7 +4048,10 @@ export function enterPlace(kind, onLeave, options) {
   // seated; the seat logic below puts the player in the parked car.
   terminalSeated = false; terminalFrontCar = null; terminalFrontDoor = null; terminalDoorSwing = null;
   glassDoor = null; glassDoorToastAt = -100; serviceDeskToastAt = -100; marketVendorAt = -100;
-  if (kind === 'terminalFront' && homePrologue) terminalTicket = false;
+  // Coming back out of the hall on foot (opts.onFoot) keeps a bought
+  // ticket: only a fresh drive arrival starts ticketless.
+  terminalFrontOnFoot = kind === 'terminalFront' && !!opts.onFoot;
+  if (kind === 'terminalFront' && homePrologue && !opts.onFoot) terminalTicket = false;
   hideTerminalGetOutButton();
   const isRoom = kind === 'mansion' || kind === 'safehouse' || kind === 'terminal' || kind === 'hotel' || kind === 'windtunnel' || kind === 'symposium' || kind === 'policestation' || kind === 'navybarracks' || kind === 'sensorvault' || kind === 'lobby';
   if (isRoom) {
@@ -4119,12 +4137,15 @@ export function enterPlace(kind, onLeave, options) {
     lobby: 'Lobby - look around, then walk back out through the EXIT door.',
     fillingstation: 'Filling Station - full tank for 0.5 ZAMA. Tap the Fill tank button to fill up.'
   };
+  if (kind === 'terminalFront' && opts.onFoot) welcomes.terminalFront = 'Outside Grand Central. Walk back through the glass doors when you are ready.';
   showHomeToast(welcomes[kind] || kind);
   if (homeRaf) cancelAnimationFrame(homeRaf);
   homeRaf = requestAnimationFrame(homeAnimate);
   // Terminal front: the player arrives in his parked car, seated in the
-  // driver's seat. The seat owns the camera until he gets out.
-  if (kind === 'terminalFront') seatTerminalFront();
+  // driver's seat. The seat owns the camera until he gets out. Coming
+  // back out of the hall on foot (opts.onFoot) skips the seat: he is
+  // already standing by the glass doors.
+  if (kind === 'terminalFront' && !opts.onFoot) seatTerminalFront();
   // The loading overlay starts visible on page load, and only the acts
   // hide it (in their start functions). A place (Mansion, Terminal,
   // hotel...) is a full scene too, so hide the overlay once the room is
