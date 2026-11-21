@@ -817,7 +817,7 @@ function tryStationDoor(side) {
     stationDoorAnim = { side, phase: 'lever', t: 0, onDone: enterValveRoom };
   } else {
     if (!inValveRoom) return false;
-    if (playerDist2D(0, -0.68) > 1.8) { toast('Walk to the station door to head back outside.'); return false; }
+    if (playerDist2D(0, -0.68) > 1.8) { toast('Too far - walk to the door.'); sfxThud(); return false; }
     stationDoorAnim = { side, phase: 'lever', t: 0, onDone: exitValveRoom };
   }
   return true;
@@ -1315,7 +1315,15 @@ const guardMarkerTex = (() => {
   return tex;
 })();
 function placeHuman(group, name, x, z, faceYaw, baseScale) {
-  group.position.set(x, 0, z); group.rotation.y = faceYaw;
+  group.position.set(x, 0, z);
+  // Set the FULL rotation, never just .y: a cloned group (the guard
+  // clones, Derrick) carries its source's quaternion, and THREE
+  // re-derives the Euler from it in the gimbal-flipped form
+  // (-PI, 0, -PI) for a PI yaw. Writing .y on that form produces
+  // (-PI, yaw, -PI), whose effective yaw is PI - yaw - the guards
+  // faced exactly away from the player after stand-down on the
+  // live check while every rotation-based test passed.
+  group.rotation.set(0, faceYaw, 0);
   group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   humans.push({ group, name, baseScale, phase: Math.random() * 6 });
   humanGroups.push(group); modelGroups[name] = { group };
@@ -1335,10 +1343,55 @@ function stripCalebKit(grp) {
     if (c.name === 'calebCap' || c.name === 'calebBrim' || c.name === 'calebBadge') grp.remove(c);
   }
 }
+// Measure which way a guard figure visually faces in its own space,
+// from its face-feature geometry: the scan's named face parts
+// (eyebrow, eyelash, teeth) or a rig's face features under the Head
+// bone. Returns 0 when the face sits at +Z, PI when it sits at -Z,
+// null when no features are found (caller falls back to the table
+// value). The facing code then points the VISUAL face at its target
+// by construction, whichever model file is actually served - the
+// live check found a guard facing exactly away from the player
+// while every rotation-based check passed.
+function measureGuardFaceYaw(group) {
+  try {
+    // Zero the rotation with a full set, and restore the saved
+    // Euler the same way: a cloned group's Euler can sit in the
+    // gimbal-flipped form (-PI, 0, -PI), where setting .y alone
+    // does not zero the rotation, and restoring via the quaternion
+    // re-derives that flipped form.
+    const saved = group.rotation.clone();
+    group.rotation.set(0, 0, 0);
+    group.updateWorldMatrix(true, true);
+    const pts = [];
+    const v = new THREE.Vector3();
+    group.traverse(o => {
+      if (!o.isMesh || o.isSkinnedMesh) return;
+      const nm = o.name || '';
+      if (/eyebrow|eyelash|teeth/i.test(nm)) {
+        const b = new THREE.Box3().setFromObject(o); b.getCenter(v); pts.push(v.clone()); return;
+      }
+      let p = o.parent, underHead = false;
+      while (p) { if (p.isBone && /head/i.test(p.name || '')) { underHead = true; break; } p = p.parent; }
+      if (underHead) { o.getWorldPosition(v); pts.push(v.clone()); }
+    });
+    group.rotation.copy(saved);
+    if (!pts.length) return null;
+    const gp0 = new THREE.Vector3(); group.getWorldPosition(gp0);
+    let cz = 0; for (const p of pts) cz += p.z - gp0.z;
+    return cz < 0 ? Math.PI : 0;
+  } catch (e) { return null; }
+}
 // Build one substation guard at his post: a Caleb clone when Caleb's
 // scan is loaded, else a crowd-rig stand-in. Returns true on success.
 function buildOneGuard(gname, gx, gz) {
   try {
+    // One figure per post, by construction: drop any stale same-name
+    // group already in the yard before adding the new one, so a
+    // retry or a double build can never leave an orphan figure
+    // standing at the post while the patrol drives a different one.
+    for (const child of [...mission2.children]) {
+      if (child.name === gname && !guardPatrol.some(gp => gp.group === child)) mission2.remove(child);
+    }
     if (calebBase && calebBase.group) {
       // Slate-blue security uniform, light enough to read against the
       // dark yard at dusk (the old near-black 0x1c1c22 made the guards
@@ -1356,11 +1409,13 @@ function buildOneGuard(gname, gx, gz) {
       // Patrol data: the guards walk the gate line so the yard feels
       // alive and the player can see they are interactive. They
       // patrol in x around their post; after they stand down they
-      // stop where they are. faceYaw 0: the static Caleb scan faces
-      // +Z in its own space (measured from the GLB: the face parts
-      // sit at +z), so a plain atan2 yaw points him at his target
-      // with no offset.
-      guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, faceYaw: 0 });
+      // stop where they are. faceYaw is MEASURED from the clone's
+      // own face geometry (see measureGuardFaceYaw): the scan faces
+      // +Z, so the measured value is 0 and a plain atan2 yaw points
+      // him at his target with no offset. Measuring keeps the
+      // visual face correct even if the served model file differs.
+      const measuredYaw = measureGuardFaceYaw(g);
+      guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, faceYaw: measuredYaw === null ? 0 : measuredYaw });
       const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
       marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
       g.add(marker); guardMarkers.push(marker);
@@ -1377,7 +1432,10 @@ function buildOneGuard(gname, gx, gz) {
     placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
     // faceYaw rides on the rig: the Atlas crowd rigs face -Z in
     // their own space (faceYaw PI), the Casual rig faces +Z (0).
-    guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person, faceYaw: person.faceYaw || 0 });
+    // Measured from the rig's own face features when they exist,
+    // with the layout table value as the fallback.
+    const measuredRigYaw = measureGuardFaceYaw(g);
+    guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person, faceYaw: measuredRigYaw === null ? (person.faceYaw || 0) : measuredRigYaw });
     const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
     marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
     g.add(marker); guardMarkers.push(marker);
@@ -1391,6 +1449,17 @@ function buildOneGuard(gname, gx, gz) {
 // in the yard. Top the line up to two from whichever source is
 // ready, retrying a failed build once.
 function ensureGuards() {
+  // One patrol entry per guard name: a double build (retry after a
+  // throw past the push) would leave two entries for one post, and
+  // the patrol loop would drive both figures. Drop the extras and
+  // take their groups out of the yard.
+  for (let i = guardPatrol.length - 1; i >= 0; i--) {
+    const name = guardPatrol[i].group && guardPatrol[i].group.name;
+    if (guardPatrol.findIndex(gp => gp.group && gp.group.name === name) !== i) {
+      try { mission2.remove(guardPatrol[i].group); } catch (e) { /* ignore */ }
+      guardPatrol.splice(i, 1);
+    }
+  }
   for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
     if (guardPatrol.some(gp => gp.group && gp.group.name === gname)) continue;
     if (!buildOneGuard(gname, gx, gz)) buildOneGuard(gname, gx, gz);
@@ -1405,6 +1474,15 @@ function ensureGuards() {
       if ((child.name === 'guard1' || child.name === 'guard2') && !guardPatrol.some(gp => gp.group === child)) mission2.remove(child);
     }
   } catch (e) { /* ignore */ }
+  // Visibility by construction: both figures shown, no mesh left
+  // frustum-culled (meshes added later - expression pivots, kit -
+  // get the same treatment the build paths apply).
+  for (const gp of guardPatrol) {
+    try {
+      gp.group.visible = true;
+      gp.group.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+    } catch (e) { /* ignore */ }
+  }
 }
 async function loadHumans() {
   const loader = new GLTFLoader();
@@ -2180,9 +2258,8 @@ function startMission1() {
   // The car stays parked in the lot in front of the tower (already
   // parked on arrival; rebuilt here if this start came another way).
   parkPlayerCar(1);
-  // A drive arrival seats him in the parked car so he can open the door
-  // and step out; any other entry just stands him beside it.
-  if (!seatIfDrove(1)) applyDriveSpawn(1);
+  // Seating happens below, with the briefing as the get-out callback
+  // (same pattern as Mission 2).
   // If the player already has the station key (a replay), the key
   // mesh beside the door is hidden so it cannot be picked up twice.
   try {
@@ -2198,7 +2275,14 @@ function startMission1() {
   document.getElementById('timerBar').style.width = '80%';
   // Every mission starts with a briefing: who asked, what is wrong, and
   // what is at stake. The phone call (Act I) covered the first mission;
-  // this is the reason for Mission 1.
+  // this is the reason for Mission 1. The briefing waits until the
+  // player is on foot: on the rental-drive arrival he starts seated
+  // in the parked car, and the briefing must never fire while he is
+  // still sitting in it (the live check found the Mission 1 briefing
+  // modal open over the seated player). It runs as the get-out
+  // callback, same as Mission 2; any other entry stands him beside
+  // the car and runs it at once.
+  const startBriefing = () => {
   showBriefing({
     title: 'Mission 1 - The Water',
     calledBy: 'Jade Morales, MTA signal engineer - she called you at dawn.',
@@ -2216,6 +2300,8 @@ function startMission1() {
     toast('Enter the valve room through the station door - the valves are inside. Walk up to a valve wheel to open the pressure controls.');
   });
   });
+  };
+  if (!seatIfDrove(1, startBriefing)) { applyDriveSpawn(1); startBriefing(); }
 }
 
 // ---------- The rental car: Rondout station to the water facility ----------
@@ -4602,7 +4688,11 @@ function faceGuardsAtPlayer() {
   for (const gp of guardPatrol) {
     const dx = tx - gp.group.position.x;
     const dz = tz - gp.group.position.z;
-    if (dx * dx + dz * dz > 0.04) gp.group.rotation.y = Math.atan2(dx, dz) + (gp.faceYaw || 0);
+    // Full rotation set, not .y alone: a cloned guard group's Euler
+    // can sit in the gimbal-flipped form (-PI, 0, -PI), where a .y
+    // write produces an effective yaw of PI - yaw and the guard
+    // faces exactly away from the player (see placeHuman).
+    if (dx * dx + dz * dz > 0.04) gp.group.rotation.set(0, Math.atan2(dx, dz) + (gp.faceYaw || 0), 0);
   }
 }
 function guardDialogue() {
@@ -4621,7 +4711,10 @@ function guardDialogue() {
       // so the white key card on guard 1's front belt is in plain
       // sight (he patrolled facing sideways, card hidden behind his
       // arm - the live check could not find it on either belt). The
-      // per-frame block keeps them facing him after this.
+      // per-frame block keeps them facing him after this. The line
+      // is topped up and swept first, so exactly the two patrol
+      // figures stand in the yard at the stand-down moment.
+      try { ensureGuards(); } catch (e) { /* guards are best effort */ }
       faceGuardsAtPlayer();
       // The guard hands over the substation gate key with the key card.
       giveKey('substation', 'substation key');
@@ -4637,7 +4730,9 @@ function guardDialogue() {
     ], () => {
       guardsDown = true; hideGuardMarkers(); keycardMesh.visible = true; if (window._keycardHit) window._keycardHit.visible = true; trust(-1, 'the bluff failed'); integrity('Power', -5);
       // Same turn-to-face as the bluff-success path: the key card on
-      // guard 1's front belt must be visible either way.
+      // guard 1's front belt must be visible either way. The line is
+      // topped up and swept first, same as the success path.
+      try { ensureGuards(); } catch (e) { /* guards are best effort */ }
       faceGuardsAtPlayer();
       // Jade slipped in and took the substation gate key from the guard
       // post on her way through, so the player has it either way.
@@ -5235,9 +5330,12 @@ function interact(name) {
       // click target is generous enough to reach from the back wall.
       // 1.8 m, the walk-up radius: the old 3.5 m covered most of this
       // small room (the gauges and the east stairs both sit inside
-      // it), so "far" clicks still exited on the live check.
+      // it), so "far" clicks still exited on the live check. The
+      // refusal is loud and explicit so a far click can never read
+      // as a silent exit.
       if (playerDist2D(0, -0.68) > 1.8) {
-        toast('Walk to the station door to head back outside.');
+        toast('Too far - walk to the door.');
+        sfxThud();
         return;
       }
       tryStationDoor('inside'); return;
@@ -5583,7 +5681,7 @@ function animateFrame() {
     for (const gp of guardPatrol) {
       const w = Math.sin(t * 0.45 + gp.phase);
       gp.group.position.x = gp.baseX + w * 1.8;
-      gp.group.rotation.y = (Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2) + (gp.faceYaw || 0);
+      gp.group.rotation.set(0, (Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2) + (gp.faceYaw || 0), 0);
       // Fallback crowd-rig guards carry their own walk mixer.
       if (gp.person) { try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ } }
     }
