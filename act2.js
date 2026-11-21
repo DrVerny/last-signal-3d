@@ -8,7 +8,7 @@ import { initSoundUI, setAmbient, setAmbientLevel, setTension, soundTick, sfxRep
 import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
-import { makeRiggedPerson, updateRiggedPerson } from './crowd.js';
+import { makeRiggedPerson, updateRiggedPerson, getCrowdModels, pickLook, onCrowdReady } from './crowd.js';
 import { grantPayout, openStore, getEquippedCarDef, getBalance, moneyFmt, spendMoney, getFuel, consumeFuelMiles } from './economy.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, getPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson, resolveMove, addBoxCollider, clearPinchPointers } from './player.js';
 // THE LAST SIGNAL - Act II: City of Wires - 3D prototype
@@ -1381,9 +1381,114 @@ function measureGuardFaceYaw(group) {
     return cz < 0 ? Math.PI : 0;
   } catch (e) { return null; }
 }
-// Build one substation guard at his post: a Caleb clone when Caleb's
-// scan is loaded, else a crowd-rig stand-in. Returns true on success.
-function buildOneGuard(gname, gx, gz) {
+// The crowd model a rigged person was built from, found by matching
+// the Walk clip the person's mixer is playing against the loaded
+// models' clip lists (makeRiggedPerson does not hand the model back).
+// Used to give guards the matching Idle clip and to keep the guard
+// line male (the bluff dialogue addresses them as gentlemen).
+function guardModelFor(person) {
+  try {
+    const models = getCrowdModels() || [];
+    if (!person || !person.mixer) return null;
+    for (const m of models) {
+      const walk = THREE.AnimationClip.findByName(m.animations || [], 'Walk');
+      if (walk && person.mixer.existingAction(walk)) return m;
+    }
+    const acts = person.mixer._actions || [];
+    const clip = acts.length ? acts[0].getClip() : null;
+    if (clip) return models.find(m => (m.animations || []).indexOf(clip) !== -1) || null;
+  } catch (e) { /* best effort */ }
+  return null;
+}
+// Build one substation guard as a rigged crowd person in a slate-blue
+// security uniform, Walk clip playing, matching Idle clip ready for
+// stand-down. Returns the patrol entry (group already in the yard)
+// or null when the crowd models are not loaded yet.
+//
+// Why rigged, not a Caleb clone: Act II's Caleb (models/caleb.glb)
+// is a static scan - eight unskinned meshes, no bones, no clips - so
+// a clone can only ever glide when the patrol translates it (the
+// live-play report: guards sliding instead of walking back and
+// forth). A rigged guard walks the gate line for real. Caleb himself
+// and Derrick keep the scan (neither patrols).
+function buildRiggedGuardEntry(gname, gx, gz) {
+  let person = null, model = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const look = pickLook();
+    look.shirt = 0x4a5a74; // slate-blue security shirt (the old guard colour)
+    look.pants = 0x232830; // dark trousers
+    const p = makeRiggedPerson({ x: gx, z: gz, heading: Math.PI, look });
+    if (!p || !p.group) return null; // crowd models not loaded yet
+    person = p; model = guardModelFor(p);
+    if (model && model.sex === 'm') break;
+    // A female rig was picked: discard it (its group was never added
+    // to the yard) and roll again - the guards are addressed as
+    // gentlemen in the bluff.
+  }
+  const g = person.group;
+  g.name = gname;
+  // A guard must never be frustum-culled: his marker sprite rendered
+  // while his meshes were culled away on the live check (one guard
+  // figure invisible, marker floating). makeRiggedPerson sets this
+  // too; belt and braces for the guard line.
+  g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+  mission2.add(g);
+  placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
+  // faceYaw rides on the rig: the Atlas crowd rigs face -Z in their
+  // own space (faceYaw PI), the Casual rig faces +Z (0). Measured
+  // from the rig's own face features when they exist, with the
+  // layout table value as the fallback.
+  const measuredRigYaw = measureGuardFaceYaw(g);
+  // Walk is already playing on the person's mixer (makeRiggedPerson
+  // starts it at a random phase). Keep a handle on it plus the
+  // matching Idle action so stand-down can crossfade instead of
+  // marching in place.
+  let walkAction = null, idleAction = null;
+  try {
+    const acts = person.mixer ? (person.mixer._actions || []) : [];
+    walkAction = acts.length ? acts[0] : null;
+    const idleClip = model ? THREE.AnimationClip.findByName(model.animations || [], 'Idle') : null;
+    if (idleClip && person.mixer) idleAction = person.mixer.clipAction(idleClip);
+  } catch (e) { walkAction = null; idleAction = null; }
+  const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
+  marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
+  g.add(marker); guardMarkers.push(marker);
+  return { group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person, walkAction, idleAction, marker, faceYaw: measuredRigYaw === null ? (person.faceYaw || 0) : measuredRigYaw };
+}
+// Last-resort guard: a Caleb scan clone. The scan has no skeleton,
+// so this guard can only glide on patrol - it exists so the yard is
+// never guard-less (which would soft-lock Mission 2) if the crowd
+// models fail to load. ensureGuards upgrades it to a rigged guard
+// as soon as the crowd lands.
+function buildStaticGuardEntry(gname, gx, gz) {
+  if (!calebBase || !calebBase.group) return null;
+  // Slate-blue security uniform, light enough to read against the
+  // dark yard at dusk (the old near-black 0x1c1c22 made the guards
+  // invisible silhouettes on the live checks).
+  const dark = new THREE.MeshStandardMaterial({ color: 0x4a5a74, roughness: 0.85, metalness: 0.02 });
+  const g = calebBase.group.clone(true);
+  g.name = gname;
+  g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = dark; });
+  // A guard must never be frustum-culled (see buildRiggedGuardEntry).
+  g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+  stripCalebKit(g); // drop Caleb's cap, brim and badge (by name - see above)
+  mission2.add(g); placeHuman(g, gname, gx, gz, Math.PI, calebBase.scale);
+  // faceYaw is MEASURED from the clone's own face geometry (see
+  // measureGuardFaceYaw): the scan faces +Z, so the measured value
+  // is 0 and a plain atan2 yaw points him at his target with no
+  // offset. Measuring keeps the visual face correct even if the
+  // served model file differs.
+  const measuredYaw = measureGuardFaceYaw(g);
+  const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
+  marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
+  g.add(marker); guardMarkers.push(marker);
+  return { group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, marker, static: true, faceYaw: measuredYaw === null ? 0 : measuredYaw };
+}
+// Build one substation guard at his post: a walking rigged guard
+// whenever the crowd models are loaded, else (only when allowStatic)
+// a Caleb scan clone so the yard is never empty. Returns true on
+// success.
+function buildOneGuard(gname, gx, gz, allowStatic) {
   try {
     // One figure per post, by construction: drop any stale same-name
     // group already in the yard before adding the new one, so a
@@ -1392,62 +1497,18 @@ function buildOneGuard(gname, gx, gz) {
     for (const child of [...mission2.children]) {
       if (child.name === gname && !guardPatrol.some(gp => gp.group === child)) mission2.remove(child);
     }
-    if (calebBase && calebBase.group) {
-      // Slate-blue security uniform, light enough to read against the
-      // dark yard at dusk (the old near-black 0x1c1c22 made the guards
-      // invisible silhouettes on the live checks).
-      const dark = new THREE.MeshStandardMaterial({ color: 0x4a5a74, roughness: 0.85, metalness: 0.02 });
-      const g = calebBase.group.clone(true);
-      g.name = gname;
-      g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = dark; });
-      // A guard must never be frustum-culled: his marker sprite
-      // rendered while his meshes were culled away on the live
-      // check (one guard figure invisible, marker floating).
-      g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
-      stripCalebKit(g); // drop Caleb's cap, brim and badge (by name - see above)
-      mission2.add(g); placeHuman(g, gname, gx, gz, Math.PI, calebBase.scale);
-      // Patrol data: the guards walk the gate line so the yard feels
-      // alive and the player can see they are interactive. They
-      // patrol in x around their post; after they stand down they
-      // stop where they are. faceYaw is MEASURED from the clone's
-      // own face geometry (see measureGuardFaceYaw): the scan faces
-      // +Z, so the measured value is 0 and a plain atan2 yaw points
-      // him at his target with no offset. Measuring keeps the
-      // visual face correct even if the served model file differs.
-      const measuredYaw = measureGuardFaceYaw(g);
-      guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, faceYaw: measuredYaw === null ? 0 : measuredYaw });
-      const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
-      marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
-      g.add(marker); guardMarkers.push(marker);
-      return true;
-    }
-    const person = makeRiggedPerson({ x: gx, z: gz, heading: Math.PI });
-    if (!person || !person.group) return false;
-    const g = person.group;
-    g.name = gname;
-    // Same culling guard as the clone path (makeRiggedPerson sets
-    // it too; belt and braces for the guard line).
-    g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
-    mission2.add(g);
-    placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
-    // faceYaw rides on the rig: the Atlas crowd rigs face -Z in
-    // their own space (faceYaw PI), the Casual rig faces +Z (0).
-    // Measured from the rig's own face features when they exist,
-    // with the layout table value as the fallback.
-    const measuredRigYaw = measureGuardFaceYaw(g);
-    guardPatrol.push({ group: g, baseX: gx, baseZ: gz, phase: Math.random() * 6, person, faceYaw: measuredRigYaw === null ? (person.faceYaw || 0) : measuredRigYaw });
-    const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
-    marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
-    g.add(marker); guardMarkers.push(marker);
+    const entry = buildRiggedGuardEntry(gname, gx, gz) || (allowStatic ? buildStaticGuardEntry(gname, gx, gz) : null);
+    if (!entry) return false;
+    guardPatrol.push(entry);
     return true;
   } catch (e) { return false; }
 }
 // Both guards must always stand in the yard. The two spawn paths
-// (Caleb clones when his model lands, crowd rigs as the stand-in)
-// used to guard on guardPatrol.length, so ONE failed spawn in either
-// path left a single guard forever - the live check found one guard
-// in the yard. Top the line up to two from whichever source is
-// ready, retrying a failed build once.
+// (walking rigged guards once the crowd models land, Caleb scan
+// clones as the last resort) used to guard on guardPatrol.length,
+// so ONE failed spawn in either path left a single guard forever -
+// the live check found one guard in the yard. Top the line up to
+// two from whichever source is ready, retrying a failed build once.
 function ensureGuards() {
   // One patrol entry per guard name: a double build (retry after a
   // throw past the push) would leave two entries for one post, and
@@ -1462,7 +1523,23 @@ function ensureGuards() {
   }
   for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
     if (guardPatrol.some(gp => gp.group && gp.group.name === gname)) continue;
-    if (!buildOneGuard(gname, gx, gz)) buildOneGuard(gname, gx, gz);
+    if (!buildOneGuard(gname, gx, gz, false)) buildOneGuard(gname, gx, gz, false);
+  }
+  // Upgrade any static scan-clone guard to a walking rigged guard
+  // once the crowd models are in: the scan has no skeleton, so a
+  // scan guard can only glide along the patrol line. The
+  // replacement is built first; the static figure is swapped out
+  // only on success, so a failed upgrade never empties the post.
+  for (let i = guardPatrol.length - 1; i >= 0; i--) {
+    const gp = guardPatrol[i];
+    if (!gp.static || !gp.group) continue;
+    const entry = buildRiggedGuardEntry(gp.group.name, gp.baseX, gp.baseZ);
+    if (!entry) continue;
+    try { mission2.remove(gp.group); } catch (e) { /* ignore */ }
+    for (let j = humans.length - 1; j >= 0; j--) if (humans[j].group === gp.group) humans.splice(j, 1);
+    const hi = humanGroups.indexOf(gp.group); if (hi !== -1) humanGroups.splice(hi, 1);
+    if (gp.marker) { const mi = guardMarkers.indexOf(gp.marker); if (mi !== -1) guardMarkers.splice(mi, 1); }
+    guardPatrol[i] = entry;
   }
   // Orphan sweep: a guard figure in the yard that is not on the
   // patrol list would stand at its post forever, never patrolling
@@ -1484,6 +1561,9 @@ function ensureGuards() {
     } catch (e) { /* ignore */ }
   }
 }
+// Guards are rigged crowd people: when the crowd models land, top
+// the guard line up (and upgrade any static stand-in).
+try { onCrowdReady(() => { try { ensureGuards(); } catch (e) { /* guards are best effort */ } }); } catch (e) { /* ignore */ }
 async function loadHumans() {
   const loader = new GLTFLoader();
   // Each model load races a 30 s timeout, as in Act I: a network request
@@ -4615,9 +4695,15 @@ function reparentCast(name, group, x, z, yaw) {
 // deliver the guards when they land.
 function buildFallbackGuards() {
   // The yard must never be short a guard: top the line up to two
-  // from whichever source is ready (Caleb clones once his scan has
-  // landed, crowd rigs until then). See ensureGuards.
+  // with walking rigged guards (see ensureGuards).
   ensureGuards();
+  // Last resort: if the crowd models never landed, stand Caleb scan
+  // clones up so Mission 2 is never soft-locked guard-less. A scan
+  // guard glides (no skeleton), but ensureGuards upgrades him to a
+  // rigged guard as soon as the crowd arrives.
+  for (const [gname, gx, gz] of [['guard1', -3.5, 2], ['guard2', 3.5, 2]]) {
+    if (!guardPatrol.some(gp => gp.group && gp.group.name === gname)) buildOneGuard(gname, gx, gz, true);
+  }
 }
 function startMission2() {
   mission1.visible = false; mission2.visible = true; mission3.visible = false;
@@ -5681,7 +5767,7 @@ function animateFrame() {
   // not stood down, so the yard feels alive and the player can see the
   // guards are the way in. They walk back and forth in x around their
   // post and face the direction they walk (the Caleb scan faces +z, so
-  // +x is rotation.y = PI/2 and -x is -PI/2; a fallback crowd rig adds
+  // +x is rotation.y = PI/2 and -x is -PI/2; a rigged guard adds
   // its own faceYaw, PI for the -Z Atlas rigs). The key card rides on
   // guard1's belt, so it follows him; the "!" markers pulse above them.
   // mission2.visible is part of the gate: the shared arrival lot sits
@@ -5693,8 +5779,13 @@ function animateFrame() {
       const w = Math.sin(t * 0.45 + gp.phase);
       gp.group.position.x = gp.baseX + w * 1.8;
       gp.group.rotation.set(0, (Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2) + (gp.faceYaw || 0), 0);
-      // Fallback crowd-rig guards carry their own walk mixer.
-      if (gp.person) { try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ } }
+      // Rigged guards carry their own walk mixer. The stride follows
+      // the patrol speed (velocity ~ cos(t*0.45+phase)) so the feet
+      // slow at the turnarounds instead of skating.
+      if (gp.person) {
+        if (gp.walkAction) gp.walkAction.timeScale = 0.25 + 0.75 * Math.abs(Math.cos(t * 0.45 + gp.phase));
+        try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ }
+      }
     }
     for (const m of guardMarkers) {
       const s = 1.15 + Math.sin(t * 4) * 0.18;
@@ -5733,7 +5824,21 @@ function animateFrame() {
   if (mission2.visible && guardsDown) {
     faceGuardsAtPlayer();
     for (const gp of guardPatrol) {
-      if (gp.person) { try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ } }
+      if (!gp.person) continue;
+      // Stand down into Idle once per guard: crossfade Walk -> Idle
+      // so the guards breathe where they stand instead of marching
+      // in place (the old fallback wart) or freezing mid-stride.
+      if (!gp.idled && gp.walkAction && gp.idleAction) {
+        gp.idled = true;
+        try {
+          gp.idleAction.reset();
+          gp.idleAction.setEffectiveTimeScale(1);
+          gp.idleAction.setEffectiveWeight(1);
+          gp.idleAction.play();
+          gp.walkAction.crossFadeTo(gp.idleAction, 0.4, false);
+        } catch (e) { /* animation is best effort */ }
+      }
+      try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ }
     }
   }
   // The key card sits on guard1's front belt: while it is visible,
