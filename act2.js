@@ -7,7 +7,7 @@ import { registerLipSyncHumans } from './lipsync.js';
 import { initSoundUI, setAmbient, setAmbientLevel, setTension, soundTick, sfxRepair, sfxTick, sfxPowerRestored, sfxBoom, sfxThud, sfxWhoosh } from './sound.js';
 import { runQTE, runHoldQTE } from './qte.js';
 import { initZamaUI } from './zama.js';
-import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
+import { showActionBanner, hideActionBanner, showTrekGuide, hideTrekGuide, updateTrekGuide, flashScreen, dist2D, makeActionMarker, showBriefing, makePedestrian, updatePedestrian, makeCrowd } from './action.js';
 import { makeRiggedPerson, updateRiggedPerson, getCrowdModels, pickLook, onCrowdReady } from './crowd.js';
 import { grantPayout, openStore, getEquippedCarDef, getBalance, moneyFmt, spendMoney, getFuel, consumeFuelMiles } from './economy.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, getPlayerPos, buildCar, buildPlayerCar, hasKey, giveKey, getAvatar, setAvatarPose, detachAvatar, getZoom, setThirdPerson, resolveMove, addBoxCollider, clearPinchPointers } from './player.js';
@@ -4145,6 +4145,7 @@ function restoreMissionScene() {
   trekActive = false;
   hideDriveHood();
   hideActionBanner();
+  hideTrekGuide();
   // If the camera is far outside the mission (after a drive or a trek),
   // put it back at the mission's default view; otherwise leave it.
   const v = inValveRoom ? VALVE_ROOM_BOUNDS : VIEWS[sceneMission];
@@ -4529,6 +4530,11 @@ function buildTrekStreet() {
   trekGroup = new THREE.Group();
   trekGroup.visible = false;
   scene.add(trekGroup);
+  // The street cars are solid (the solid-world rule), so each car that
+  // actually spawns registers a box here. Parked spawn is random, so
+  // the boxes follow the real cars, and the layout always leaves a
+  // passable gap (see the parked/jam loops below).
+  trekColliders = [];
   const roadTex = hexTileTexture();
   roadTex.repeat.set(2, 18);
   const road = new THREE.Mesh(new THREE.PlaneGeometry(9, 85), new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95 }));
@@ -4590,7 +4596,11 @@ function buildTrekStreet() {
       }
     }
   }
-  // Parked cars along both curbs, and trees on the sidewalks.
+  // Parked cars along both curbs, and trees on the sidewalks. Each
+  // parked car is solid: rotated +-PI/2, the sedan (len 4.4, wid 1.85)
+  // spans x +-2.2 around +-3.9 and z +-0.925 around its slot, shrunk
+  // 0.1 a side so a shoulder can brush the paint. Even with a car on
+  // both curbs the middle of the road stays open.
   const parkCols = [0xc0392b, 0x2e6fb0, 0xd8d8d8, 0x3a3a3a, 0xc07a1a, 0x5a7a3a];
   for (let z = 16; z >= -40; z -= 14) {
     for (const side of [-1, 1]) {
@@ -4599,6 +4609,7 @@ function buildTrekStreet() {
       pc.position.set(side * 3.9, 0, z);
       pc.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
       trekGroup.add(pc);
+      addBoxCollider(trekColliders, side * 3.9 - 2.1, z - 0.825, side * 3.9 + 2.1, z + 0.825);
     }
     if (Math.random() < 0.7) {
       const tree = makeStreetTree();
@@ -4613,11 +4624,17 @@ function buildTrekStreet() {
     lamp.group.position.set(lx, 0, lz); trekGroup.add(lamp.group);
   }
   // The traffic hold-up, here too: a line of cars stopped bumper to
-  // bumper in the east lane, horns sounding, blocking the road.
+  // bumper in the east lane, horns sounding, blocking the road. The
+  // jam is solid as one long block (unrotated sedans at x -2: x span
+  // -2.925..-1.075, z span +-2.2 each, shrunk 0.1 a side). Worst case,
+  // a left-curb parked car beside the jam still leaves the free gap
+  // x -1.175..1.8 (2.975 m, 2.275 m after the player's radius), so
+  // the player can always slip past on the west side.
   for (let i = 0; i < 5; i++) {
     const jc = makeStreetCar(parkCols[i % parkCols.length]);
     jc.position.set(-2, 0, -8 - i * 2.7);
     trekGroup.add(jc);
+    addBoxCollider(trekColliders, -2.825, -8 - i * 2.7 - 2.1, -1.175, -8 - i * 2.7 + 2.1);
   }
   // Pedestrians on the sidewalks, walking in both directions, in pairs
   // and alone, like the plaza video. They are the crowd the player
@@ -4651,6 +4668,7 @@ function startTrek(toKey, onArrive) {
   state.yaw = 0; state.pitch = 0;
   camBounds = { x: [-4.2, 4.2], z: [-48, 32] };
   showActionBanner('TREK ON FOOT - walk to the ' + (to ? to.name : 'destination') + '. No car - walk with the crowd. Reach the gold BRIDGE marker at the end of the street.');
+  showTrekGuide();
   toast('Trek on foot - walk the busy street to the gold marker. No car for this leg.');
 }
 function endTrek() {
@@ -4658,6 +4676,7 @@ function endTrek() {
   trekActive = false;
   if (trekGroup) trekGroup.visible = false;
   hideActionBanner();
+  hideTrekGuide();
   if (trekToKey) currentPlaceKey = trekToKey;
   const cb = trekOnArrive; trekOnArrive = null; trekToKey = null;
   if (cb) cb();
@@ -4677,7 +4696,23 @@ function updateTrek(dt, t) {
   if (playerDist2D(trekDestX, trekDestZ) < 3) {
     toast('You reach the bridge approach. The Verrazzano is ahead.');
     endTrek();
+    return;
   }
+  // Direction guide: point the HUD arrow at the bridge marker and
+  // count down the metres. Forward is (-sin yaw, -cos yaw) (see
+  // moveDelta in player.js), so the yaw that faces the target is
+  // atan2(-dx, -dz); the guide takes the bearing relative to the
+  // current facing, wrapped to [-PI, PI].
+  const p = getPlayerPos();
+  const px = p ? p.x : camera.position.x;
+  const pz = p ? p.z : camera.position.z;
+  const dx = trekDestX - px, dz = trekDestZ - pz;
+  const dist = Math.hypot(dx, dz);
+  const targetYaw = Math.atan2(-dx, -dz);
+  let rel = targetYaw - state.yaw;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+  updateTrekGuide(rel, dist);
 }
 
 function reparentCast(name, group, x, z, yaw) {
@@ -5542,13 +5577,15 @@ let mission1Colliders = [];
 let mission2Colliders = [];
 let mission3Colliders = [];
 let valveRoomColliders = [];
+let trekColliders = [];
 function act2Colliders() {
-  // The trek street is its own scene and registers no colliders; the
-  // player is held by camBounds alone. Without this exception the
-  // substation yard fences (mission2Colliders, still selected while
-  // state.mission is 2) block the street: the full-width fence at
-  // z 12.35-12.7 stopped the trek 58 m short of the bridge marker.
-  if (trekActive) return [];
+  // The trek street is its own scene: only its own car boxes apply
+  // (trekColliders, registered in buildTrekStreet). Without this
+  // exception the substation yard fences (mission2Colliders, still
+  // selected while state.mission is 2) block the street: the
+  // full-width fence at z 12.35-12.7 stopped the trek 58 m short of
+  // the bridge marker (round 17).
+  if (trekActive) return trekColliders;
   let list;
   if (inValveRoom) list = valveRoomColliders;
   else if (state.mission === 2) list = mission2Colliders;

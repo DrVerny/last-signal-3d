@@ -33,6 +33,62 @@ export function hideActionBanner() {
   try { if (bannerEl) bannerEl.style.display = 'none'; } catch (e) { /* ignore */ }
 }
 
+// ---------- Trek direction guide ----------
+// On the on-foot trek the gold BRIDGE marker sits 75 m from the spawn
+// at night, too far to see. This small HUD pill sits just below the
+// action banner and shows an arrow plus the metres left, so the player
+// always knows which way to walk. Created lazily like the banner.
+let trekGuideEl = null, trekGuideArrowEl = null, trekGuideDistEl = null, trekGuideLastM = -1;
+
+function ensureTrekGuide() {
+  if (trekGuideEl) return trekGuideEl;
+  try {
+    trekGuideEl = document.createElement('div');
+    trekGuideEl.id = 'trekGuide';
+    trekGuideEl.style.cssText = 'position:fixed;top:96px;left:50%;transform:translateX(-50%);' +
+      'background:rgba(8,14,20,.92);border:1px solid #ffd166;border-radius:10px;' +
+      'padding:6px 14px;z-index:18;color:#ffd166;font-size:15px;letter-spacing:1px;' +
+      'text-align:center;display:none;pointer-events:none;';
+    trekGuideEl.innerHTML = '<span id="trekGuideArrow" style="display:inline-block;">&#9650;</span> <span id="trekGuideDist">BRIDGE 75 m</span>';
+    document.body.appendChild(trekGuideEl);
+    trekGuideArrowEl = document.getElementById('trekGuideArrow');
+    trekGuideDistEl = document.getElementById('trekGuideDist');
+  } catch (e) { trekGuideEl = null; trekGuideArrowEl = null; trekGuideDistEl = null; }
+  return trekGuideEl;
+}
+
+export function showTrekGuide() {
+  const el = ensureTrekGuide();
+  if (!el) return;
+  trekGuideLastM = -1; // force the distance text to refresh on the next update
+  try { el.style.display = 'block'; } catch (e) { /* ignore */ }
+}
+
+export function hideTrekGuide() {
+  try { if (trekGuideEl) trekGuideEl.style.display = 'none'; } catch (e) { /* ignore */ }
+}
+
+// relRad is the bearing of the target relative to the player's facing
+// (0 = dead ahead; positive when the target yaw is greater than the
+// facing yaw). CSS rotate() is clockwise-positive while world yaw is
+// counter-clockwise-positive viewed from above, so the arrow turns by
+// -relRad: a target to the east while facing north (rel = -PI/2)
+// rotates +PI/2 and the up arrow points right, at the target. The
+// distance text only rewrites when the whole metre changes, so the
+// per-frame call does not thrash the DOM.
+export function updateTrekGuide(relRad, distM) {
+  const el = ensureTrekGuide();
+  if (!el) return;
+  try {
+    if (trekGuideArrowEl) trekGuideArrowEl.style.transform = 'rotate(' + (-relRad) + 'rad)';
+    const m = Math.round(distM);
+    if (m !== trekGuideLastM) {
+      trekGuideLastM = m;
+      if (trekGuideDistEl) trekGuideDistEl.textContent = 'BRIDGE ' + m + ' m';
+    }
+  } catch (e) { /* ignore */ }
+}
+
 function ensureFlash() {
   if (flashEl) return flashEl;
   try {
