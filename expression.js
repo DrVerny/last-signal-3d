@@ -364,6 +364,21 @@ function addSmileMorphToMesh(mesh, mouthWorld, forwardWorld) {
     if (!geo.userData) geo.userData = {};
     geo.userData.smileMorphDone = true;
     mesh.updateMorphTargets();
+    // Same shared-geometry sweep as the jaw morph in lipsync.js:
+    // meshes built before this push share the new morph attribute
+    // but have no morphTargetInfluences, and rendering one throws
+    // in the WebGL2 morph path. Fix every sharer already in the
+    // scene; clones built later are fixed in crowd.js cloneSkinned.
+    try {
+      let root = mesh;
+      while (root.parent) root = root.parent;
+      const n = geo.morphAttributes.position.length;
+      root.traverse(o => {
+        if (o.isMesh && o.geometry === geo && (!o.morphTargetInfluences || o.morphTargetInfluences.length !== n)) {
+          try { o.updateMorphTargets(); } catch (e) { /* best effort */ }
+        }
+      });
+    } catch (e) { /* best effort */ }
     const d = mesh.morphTargetDictionary || {};
     if (typeof d.smile === 'number') {
       mesh.morphTargetInfluences[d.smile] = 0;

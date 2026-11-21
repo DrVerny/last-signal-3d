@@ -347,6 +347,22 @@ export function cloneSkinned(source) {
       o.bind(newSkel, o.bindMatrix);
     } catch (e) { /* keep the shared skeleton as a fallback */ }
   });
+  // Morph safety: lip-sync and the face controls push jaw/smile
+  // morph attributes onto the SHARED model geometry at runtime. A
+  // clone made after such a push shares the geometry (so it now
+  // carries morph attributes) but not the processed mesh's
+  // morphTargetInfluences - and the WebGL2 morph path reads
+  // influences.length unguarded, so rendering that clone throws
+  // and freezes the canvas. Give every morph-carrying mesh in the
+  // clone its influences here, at build time.
+  clone.traverse(o => {
+    if (!o.isMesh || !o.geometry || !o.geometry.morphAttributes) return;
+    const ma = o.geometry.morphAttributes;
+    const n = (ma.position || ma.normal || ma.color || []).length;
+    if (n > 0 && (!o.morphTargetInfluences || o.morphTargetInfluences.length !== n)) {
+      try { o.updateMorphTargets(); } catch (e) { /* keep the clone as-is */ }
+    }
+  });
   return clone;
 }
 function pickModel(index) {

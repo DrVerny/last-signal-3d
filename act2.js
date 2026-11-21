@@ -3917,7 +3917,10 @@ function isTrekLeg(key) {
   return !!(pendingMission && pendingMission.key === key && key === 'bridge');
 }
 export function openCityMap(fromKey, preselectKey) {
-  if (travelActive || window.__lsHomeActive) return;
+  // No map during a drive, a home scene, or the on-foot trek: the
+  // walk is the mission and cannot be skipped, and closing the map
+  // mid-trek used to kill the trek (street hidden, guide gone).
+  if (travelActive || trekActive || window.__lsHomeActive) return;
   mapFromKey = fromKey || currentPlaceKey;
   if (preselectKey) mapSelectedKey = preselectKey;
   else if (!mapSelectedKey || !TRAVEL_PLACES[mapSelectedKey] || mapSelectedKey === mapFromKey) mapSelectedKey = pendingMission ? pendingMission.key : MISSION_PLACE[state.mission];
@@ -4153,6 +4156,10 @@ function closeCityMap() {
   restoreMissionScene();
 }
 function restoreMissionScene() {
+  // Never restore over an active trek: the walk is the mission and
+  // cannot be skipped, and restoring here hides the trek street and
+  // its guide mid-walk (the disappearing arrow pill).
+  if (trekActive) return;
   // The scene to show is the current PLACE's mission when the player
   // is standing at a mission place (a revisit to a finished mission
   // keeps its own yard up even though state.mission has moved on);
@@ -4261,6 +4268,15 @@ function departureLotCar() {
 }
 function startTravelDrive(toKey, onArrive) {
   if (travelActive) return;
+  // A drive can never legitimately start mid-trek (the map stays
+  // closed during the walk), but clear the trek state defensively
+  // so no stray path can leave the trek street or guide orphaned.
+  if (trekActive) {
+    trekActive = false;
+    if (trekGroup) trekGroup.visible = false;
+    trekOnArrive = null; trekToKey = null;
+    hideTrekGuide();
+  }
   const to = TRAVEL_PLACES[toKey];
   // Leaving from a parked seat (the departure beat seated him in the
   // lot car, or he got in at the arrival lot): clear the seat state
