@@ -4589,7 +4589,12 @@ function updateTrek(dt, t) {
   for (const p of trekPedestrians) updatePedestrian(p, dt);
   hornTimer += dt;
   if (hornTimer > 9) { hornTimer = 0; honkHorn(); }
-  if (dist2D(camera.position.x, camera.position.z, trekDestX, trekDestZ) < 3) {
+  // Measure from the player's ground position, not the camera: in
+  // third person the camera rides ~4 m behind him, so a camera-based
+  // check can read 4 m at the marker and never fire (the same class
+  // as the round-8 valve proximity bug; playerDist2D falls back to
+  // the camera only when no ground position is stored).
+  if (playerDist2D(trekDestX, trekDestZ) < 3) {
     toast('You reach the bridge approach. The Verrazzano is ahead.');
     endTrek();
   }
@@ -5452,6 +5457,12 @@ let mission2Colliders = [];
 let mission3Colliders = [];
 let valveRoomColliders = [];
 function act2Colliders() {
+  // The trek street is its own scene and registers no colliders; the
+  // player is held by camBounds alone. Without this exception the
+  // substation yard fences (mission2Colliders, still selected while
+  // state.mission is 2) block the street: the full-width fence at
+  // z 12.35-12.7 stopped the trek 58 m short of the bridge marker.
+  if (trekActive) return [];
   let list;
   if (inValveRoom) list = valveRoomColliders;
   else if (state.mission === 2) list = mission2Colliders;
