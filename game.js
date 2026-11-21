@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
-import { canvas, renderer, disposeScene } from './core.js';
+import { canvas, renderer, disposeScene, healMorphsIfDirty } from './core.js';
 import { PRIORITY_VALUES, sealPriorityChoice, wasSealedOnChain, initZamaUI } from './zama.js';
 import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
 import { registerHumans, updateSpeakingGestures } from './gestures.js';
@@ -1336,6 +1336,9 @@ addEventListener('keyup', e => { if (!actActive) return; keys[e.key.toLowerCase(
 function animate() {
   if (!actActive) return;
   actRaf = requestAnimationFrame(animate);
+  // Heal any mesh left without morphTargetInfluences by a morph
+  // push since the last frame, before rendering (see core.js).
+  try { healMorphsIfDirty(scene); } catch (e) { /* healing is best effort */ }
   const t = Date.now() / 1000;
   // Frame-rate independent tunnel speed: at 2.7 m/s the lamps stream past
   // the windows at train speed whatever the frame rate (a per-frame step

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
-import { canvas, renderer, disposeScene } from './core.js';
+import { canvas, renderer, disposeScene, healMorphsIfDirty } from './core.js';
 import { FINAL_VALUES, sealFinalChoice, wasSealedOnChain, initZamaUI, setupRevealButton } from './zama.js';
 import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
 import { registerHumans, updateSpeakingGestures } from './gestures.js';
@@ -1392,6 +1392,9 @@ document.getElementById('cinemaBtn').onclick = () => {
 function animate() {
   if (!actActive) return;
   actRaf = requestAnimationFrame(animate);
+  // Heal any mesh left without morphTargetInfluences by a morph
+  // push since the last frame, before rendering (see core.js).
+  try { healMorphsIfDirty(scene); } catch (e) { /* healing is best effort */ }
   const t = Date.now() / 1000;
   const dt = animate.lastT === undefined ? 0.016 : Math.min(0.1, t - animate.lastT);
   animate.lastT = t;

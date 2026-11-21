@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
-import { canvas, renderer, disposeScene, showFrameErrorBanner } from './core.js';
+import { canvas, renderer, disposeScene, showFrameErrorBanner, healMorphsIfDirty, healMorphInfluences } from './core.js';
 import { speakLine, stopSpeaking, initVoiceUI } from './speak.js';
 import { registerHumans, updateSpeakingGestures } from './gestures.js';
 import { registerLipSyncHumans } from './lipsync.js';
@@ -2092,17 +2092,30 @@ function buildMission1() {
   // door unlocks. The key is always here, so the player can never get
   // stuck at the locked door. The key parts are unlit bright gold and
   // oversized: as a small lit-metal key on a dark wall it was never
-  // visually located on the live checks (the wall read as bare).
+  // visually located on the live checks (the wall read as bare). The
+  // hook itself is a permanent wall fixture (plate + curved hook on
+  // the lobby face), separate from the key group, so the hook is
+  // still there to see after the key has been taken.
+  const hookMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.85, roughness: 0.35 });
+  const hookPlate = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.34, 0.04), hookMat);
+  hookPlate.position.set(1.5, 1.82, -0.73); hookPlate.name = 'stationKeyHook'; mission1.add(hookPlate);
+  const hookCurve = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.022, 8, 16, Math.PI * 1.35), hookMat);
+  hookCurve.position.set(1.5, 1.74, -0.66); hookCurve.rotation.set(0, Math.PI / 2, Math.PI * 0.82); hookCurve.name = 'stationKeyHook'; mission1.add(hookCurve);
+  const hookArm = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.12, 8), hookMat);
+  hookArm.rotation.x = Math.PI / 2; hookArm.position.set(1.5, 1.74, -0.7); hookArm.name = 'stationKeyHook'; mission1.add(hookArm);
   const keyGroup = new THREE.Group();
   const keyMat = new THREE.MeshBasicMaterial({ color: 0xffd166 });
-  const keyRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.04, 8, 20), keyMat);
-  keyRing.position.set(0, 0.16, 0); keyGroup.add(keyRing);
-  const keyStem = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.34, 0.05), keyMat);
-  keyStem.position.set(0.08, -0.12, 0); keyGroup.add(keyStem);
-  const keyTooth = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.05), keyMat);
-  keyTooth.position.set(0.14, -0.24, 0); keyGroup.add(keyTooth);
-  const keyGlow = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const keyRing = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.05, 8, 20), keyMat);
+  keyRing.position.set(0, 0.18, 0); keyGroup.add(keyRing);
+  const keyStem = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.42, 0.06), keyMat);
+  keyStem.position.set(0.1, -0.14, 0); keyGroup.add(keyStem);
+  const keyTooth = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.07, 0.06), keyMat);
+  keyTooth.position.set(0.17, -0.3, 0); keyGroup.add(keyTooth);
+  const keyGlow = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
   keyGroup.add(keyGlow);
+  // Never frustum-cull the key: it is the one small object the
+  // player must spot on a big dark wall.
+  keyGroup.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
   keyGroup.position.set(1.5, 1.5, -0.6);
   keyGroup.name = 'stationKey'; keyGroup.userData.clickable = true;
   keyGroup.userData.keyId = 'station'; keyGroup.userData.keyLabel = 'station key';
@@ -4845,6 +4858,30 @@ function hideGuardMarkers() { for (const m of guardMarkers) m.visible = false; }
 // the dialogue callback calls this between frames, when the camera
 // still sits behind the avatar from the last render, and aiming at
 // the camera turned the guards toward a point behind the player.
+// One patrol step for both guards: walk the gate line in x around
+// their post, face the walking direction, stride matched to the
+// patrol speed so the feet slow at the turnarounds. Called from the
+// main frame loop and from the seated-arrival branch (movement
+// only there - the bluff trigger stays in the main loop).
+function updateGuardPatrol(t, dt) {
+  for (const gp of guardPatrol) {
+    const w = Math.sin(t * 0.45 + gp.phase);
+    gp.group.position.x = gp.baseX + w * 1.8;
+    gp.group.rotation.set(0, (Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2) + (gp.faceYaw || 0), 0);
+    // Rigged guards carry their own walk mixer. The stride follows
+    // the patrol speed (velocity ~ cos(t*0.45+phase)) so the feet
+    // slow at the turnarounds instead of skating.
+    if (gp.person) {
+      if (gp.walkAction) gp.walkAction.timeScale = 0.25 + 0.75 * Math.abs(Math.cos(t * 0.45 + gp.phase));
+      try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ }
+    }
+  }
+  for (const m of guardMarkers) {
+    const s = 1.15 + Math.sin(t * 4) * 0.18;
+    m.scale.set(s, s, 1);
+    m.material.opacity = 0.85 + Math.sin(t * 4) * 0.15;
+  }
+}
 function faceGuardsAtPlayer() {
   const pp = getPlayerPos();
   const tx = pp ? pp.x : camera.position.x;
@@ -5662,9 +5699,19 @@ let _skinnedFallbackDone = false;
 function animate() {
   if (!actActive) return;
   actRaf = requestAnimationFrame(animate);
+  // A morph push since the last frame (a cast arrival registering
+  // lip-sync) can leave a sharer mesh in this scene without its
+  // morphTargetInfluences, which throws inside renderer.render and
+  // freezes the canvas. Heal once per push generation, before the
+  // frame renders (see core.js). O(1) when nothing was pushed.
+  try { healMorphsIfDirty(scene); } catch (e) { /* healing is best effort */ }
   try { animateFrame(); _renderFailStreak = 0; }
   catch (e) {
     logFrameError(e);
+    // The frame (or its render) threw: heal any morph-poisoned mesh
+    // in the scene and retry the render once, so a sharer the push
+    // sweeps missed fixes itself instead of freezing the canvas.
+    try { healMorphInfluences(scene); } catch (e0) { /* best effort */ }
     try { renderer.render(scene, camera); _renderFailStreak = 0; }
     catch (e2) {
       logFrameError(e2);
@@ -5710,6 +5757,10 @@ function animateFrame() {
   if (parkedSeatActive) {
     updateParkedSeatView();
     updateDoorSwing(dt);
+    // The yard stays alive while he sits in the car: guards keep
+    // walking their patrol (movement only - the walk-up bluff
+    // trigger must never fire while he is still seated).
+    if (mission2.visible && !guardsDown) updateGuardPatrol(t, dt);
     renderer.render(scene, camera);
     return;
   }
@@ -5839,47 +5890,28 @@ function animateFrame() {
     const bt = t * 1.1 + h.phase;
     h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
   }
-  // Guards patrol the gate line while Mission 2 is active and they have
+  // Guards patrol the gate line while the yard is shown and they have
   // not stood down, so the yard feels alive and the player can see the
   // guards are the way in. They walk back and forth in x around their
   // post and face the direction they walk (the Caleb scan faces +z, so
   // +x is rotation.y = PI/2 and -x is -PI/2; a rigged guard adds
   // its own faceYaw, PI for the -Z Atlas rigs). The key card rides on
   // guard1's belt, so it follows him; the "!" markers pulse above them.
-  // mission2.visible is part of the gate: the shared arrival lot sits
-  // on the same origin coordinates as the yard, so without it the
-  // patrol trigger fired inside the lot (a Symposium arrival put the
-  // player 1.7 m from a guard patrol point) while the yard was hidden.
-  if (state.mission === 2 && mission2.visible && !guardsDown) {
-    for (const gp of guardPatrol) {
-      const w = Math.sin(t * 0.45 + gp.phase);
-      gp.group.position.x = gp.baseX + w * 1.8;
-      gp.group.rotation.set(0, (Math.cos(t * 0.45 + gp.phase) >= 0 ? Math.PI / 2 : -Math.PI / 2) + (gp.faceYaw || 0), 0);
-      // Rigged guards carry their own walk mixer. The stride follows
-      // the patrol speed (velocity ~ cos(t*0.45+phase)) so the feet
-      // slow at the turnarounds instead of skating.
-      if (gp.person) {
-        if (gp.walkAction) gp.walkAction.timeScale = 0.25 + 0.75 * Math.abs(Math.cos(t * 0.45 + gp.phase));
-        try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ }
-      }
-    }
-    for (const m of guardMarkers) {
-      const s = 1.15 + Math.sin(t * 4) * 0.18;
-      m.scale.set(s, s, 1);
-      m.material.opacity = 0.85 + Math.sin(t * 4) * 0.15;
-    }
-    // Walk up to a guard: if the player gets close, Caleb starts the
-    // bluff on his own. This is the forgiving path for players who do
-    // not think to click - walking up to the police is the natural move.
-    // (Only when no dialogue or modal is open, so it never fires over
-    // the intro scene or another interaction.) The radius is 4 m, not
-    // 2.5: the guards patrol 1.8 m either way along the gate line, so a
-    // 2.5 m radius could be missed by a player walking straight through
-    // the gate while a guard was at the far end of their patrol, and
-    // they would walk on past the gate with nothing firing. At 4 m the
-    // approach to the gate always starts the dialogue, whatever phase
-    // the patrol is in.
-    if (document.getElementById('dialogue').classList.contains('hidden')
+  // The movement gate is the yard being shown, NOT the mission
+  // number: the yard can be on screen without state.mission === 2
+  // (a map drive to the substation during Mission 1 shows the yard
+  // through restoreMissionScene), and gating the walk on the mission
+  // number left both guards standing frozen at their posts on the
+  // live check while the yard rendered around them. Only the
+  // walk-up bluff trigger below stays mission-gated: the shared
+  // arrival lot sits on the same origin coordinates as the yard, so
+  // without that gate the trigger fired inside the lot (a Symposium
+  // arrival put the player 1.7 m from a guard patrol point) while
+  // the yard was hidden.
+  if (mission2.visible && !guardsDown) {
+    updateGuardPatrol(t, dt);
+    if (state.mission === 2
+      && document.getElementById('dialogue').classList.contains('hidden')
       && document.getElementById('valveModal').classList.contains('hidden')
       && document.getElementById('scadaModal').classList.contains('hidden')) {
       for (const gp of guardPatrol) {

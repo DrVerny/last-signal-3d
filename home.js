@@ -9,7 +9,7 @@
 // is a reference only, never a texture.
 
 import * as THREE from 'three';
-import { canvas, renderer, disposeScene, showFrameErrorBanner } from './core.js';
+import { canvas, renderer, disposeScene, showFrameErrorBanner, healMorphsIfDirty, healMorphInfluences } from './core.js';
 import { getBalance, moneyFmt, grantPayout, spendMoney, getEquippedCarDef, getFuel, refillFuel, consumeFuelMiles } from './economy.js';
 import { makeCrowd, makePedestrian, updatePedestrian, showBriefing } from './action.js';
 import { makeSeatedPerson, updateSeatedPerson, onCrowdReady, pickLook } from './crowd.js';
@@ -2387,9 +2387,12 @@ function addStaff(scene, o) {
   const look = pickLook();
   if (o.shirt !== undefined) look.shirt = o.shirt;
   if (o.pants !== undefined) look.pants = o.pants;
-  const p = makePedestrian({ x: o.x, z: o.z, speed: 0, heading: o.heading || 0, idle: true, look, coatColor: o.shirt, legColor: o.pants, skinColor: look.skin });
+  // o.y stands the figure on a raised surface (the symposium stage):
+  // the pedestrian update keeps his feet at baseY instead of the floor.
+  const baseY = o.y || 0;
+  const p = makePedestrian({ x: o.x, z: o.z, speed: 0, heading: o.heading || 0, idle: true, look, coatColor: o.shirt, legColor: o.pants, skinColor: look.skin, baseY });
   if (!p) return null;
-  p.group.position.set(o.x, 0, o.z);
+  p.group.position.set(o.x, baseY, o.z);
   p.phase = 0;
   // A standing staff figure must never be frustum-culled by a stale
   // skinned-mesh bounding sphere: the symposium Host's label floated
@@ -2401,11 +2404,11 @@ function addStaff(scene, o) {
   if (o.uniform) dressUniform(p, o.uniform);
   roomWalkers.push(p);
   const tag = textSprite(o.label, '#2a2118', '#ffd166', '');
-  tag.scale.set(1.8, 0.45, 1); tag.position.set(o.x, 2.15, o.z); scene.add(tag);
+  tag.scale.set(1.8, 0.45, 1); tag.position.set(o.x, 2.15 + baseY, o.z); scene.add(tag);
   // The hit box reaches up to the tag (top at 2.6, tag centre 2.15):
   // a tap aimed at the floating label lands on the box even if the
   // sprite quad itself is missed, so the person always answers.
-  const hb = hitBox(scene, 1.4, 2.6, 1.4, o.x, 1.3, o.z, o.action || 'staff');
+  const hb = hitBox(scene, 1.4, 2.6, 1.4, o.x, 1.3 + baseY, o.z, o.action || 'staff');
   hb.userData.staffRole = o.label;
   hb.userData.staffLine = o.line || 'Can I help you?';
   hb.userData.staffVoice = o.voice || 'staff';
@@ -3332,12 +3335,16 @@ function buildSymposium(scene) {
   // It is locked and needs the symposium key, by the back row.
   addExitDoor(scene, { x: -6, z: 6.9, ry: Math.PI, keyId: 'symposium', keyLabel: 'symposium key', label: 'EXIT - HALL DOOR' });
   addRoomKey(scene, 6.5, 5.5, 'symposium', 'symposium key');
-  // The host, on the floor in front of the stage, facing the house.
-  // Clear of the podium hit box and the front row. A light suit: the
-  // old near-black one read as absent against the dark red stage
-  // skirt in the red-lit hall (the live check saw his gold label
-  // floating with no figure under it).
-  addStaff(scene, { x: 3, z: -3.2, heading: 0, label: 'Host', shirt: 0xd8d2c4, pants: 0x3a3a4a, line: 'Welcome to the New York Symposium. The podium is yours when you are ready.' });
+  // The host, ON the stage beside the podium, facing the house -
+  // where a symposium host stands and where the player looks for
+  // him. (He used to stand on the floor at the foot of the stage,
+  // and the live check never picked him out of the red-lit hall:
+  // only his gold label showed. On the stage, under the warm stage
+  // light, he cannot be missed.) A light suit: the old near-black
+  // one read as absent against the dark red stage skirt in the
+  // red-lit hall (the live check saw his gold label floating with
+  // no figure under it). Stage top is y 1.06 (carpet included).
+  addStaff(scene, { x: 2.2, z: -5.3, y: 1.06, heading: 0, label: 'Host', shirt: 0xd8d2c4, pants: 0x3a3a4a, line: 'Welcome to the New York Symposium. The podium is yours when you are ready.' });
 }
 
 // ---------- Place engine ----------
@@ -4185,6 +4192,10 @@ export function leavePlace() {
 function homeAnimate() {
   if (!homeActive) return;
   homeRaf = requestAnimationFrame(homeAnimate);
+  // Heal any mesh left without morphTargetInfluences by a morph
+  // push since the last frame (a push in an act scene can poison a
+  // sharer clone standing in this room), before rendering.
+  try { healMorphsIfDirty(homeScene); } catch (e) { /* healing is best effort */ }
   // A throw anywhere in the frame (a rigged model, a mixer, a sound
   // call) must not skip the render: the canvas would freeze on the
   // last good frame while the DOM and the game logic kept running,
@@ -4196,6 +4207,9 @@ function homeAnimate() {
   catch (e) {
     try { console.error('[LastSignal frame error]', e); } catch (e2) { /* ignore */ }
     try { showFrameErrorBanner(e && e.message ? e.message : String(e)); } catch (e2) { /* ignore */ }
+    // Heal any morph-poisoned mesh before the retry render, so a
+    // sharer the push sweeps missed fixes itself (see core.js).
+    try { healMorphInfluences(homeScene); } catch (e2) { /* best effort */ }
     try { if (homeScene && homeCamera) renderer.render(homeScene, homeCamera); } catch (e2) { try { showFrameErrorBanner('render: ' + (e2 && e2.message ? e2.message : String(e2))); } catch (e3) { /* ignore */ } }
   }
 }

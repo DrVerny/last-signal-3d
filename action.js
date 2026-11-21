@@ -241,7 +241,7 @@ export function makePedestrian(opts) {
     // queue it for an upgrade to a rigged clone when they arrive.
     try {
       const rigged = makeRiggedPerson(opts);
-      if (rigged) return rigged;
+      if (rigged) { rigged.baseY = (opts && opts.baseY) || 0; return rigged; }
     } catch (e) { /* fall through to the primitive figure */ }
     const o = opts || {};
     // Age is a decade (20s, 30s, 40s, 50s), shared with the rigged
@@ -357,6 +357,7 @@ export function makePedestrian(opts) {
       x: o.x !== undefined ? o.x : (lane ? (Math.random() * (lane.max - lane.min) + lane.min) : (Math.random() * (bounds.maxX - bounds.minX) + bounds.minX)),
       z: o.z !== undefined ? o.z : (lane ? lane.fixed : (Math.random() * (bounds.maxZ - bounds.minZ) + bounds.minZ)),
       speed, phase: Math.random() * 6.28,
+      baseY: o.baseY || 0,
       leader: o.leader || null, latOffset: o.latOffset || 0
     };
     // Queue this primitive for an upgrade to a rigged person when the
@@ -417,12 +418,12 @@ export function updatePedestrian(p, dt) {
     // Atlas, 0 for Jade) to face the movement direction; a rigged
     // person built without one keeps the old PI.
     updateRiggedPerson(p, dt);
-    p.group.position.set(p.x, Math.abs(Math.sin(p.phase)) * 0.03, p.z);
+    p.group.position.set(p.x, (p.baseY || 0) + Math.abs(Math.sin(p.phase)) * 0.03, p.z);
     p.group.rotation.y = p.heading + (p.faceYaw !== undefined ? p.faceYaw : Math.PI);
     p.group.rotation.z = 0;
     return;
   }
-  p.group.position.set(p.x, Math.abs(Math.sin(p.phase)) * 0.03, p.z);
+  p.group.position.set(p.x, (p.baseY || 0) + Math.abs(Math.sin(p.phase)) * 0.03, p.z);
   p.group.rotation.y = p.heading;
   // A slight side-to-side sway, like a real walk.
   p.group.rotation.z = Math.sin(p.phase) * 0.02;

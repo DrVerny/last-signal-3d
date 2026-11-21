@@ -79,6 +79,50 @@ export function hideFrameErrorBanner() {
   try { if (frameErrorBannerEl) frameErrorBannerEl.style.display = 'none'; } catch (e) { /* ignore */ }
 }
 
+// Morph-influence healing. Lip-sync and the face controls push
+// jaw/smile morph attributes onto SHARED model geometries at
+// runtime. A mesh that shares such a geometry but never got its
+// morphTargetInfluences throws inside renderer.render (the WebGL2
+// morph path reads influences.length unguarded) and freezes the
+// canvas on the last good frame. The push sites sweep their own
+// scene and cloneSkinned heals crowd clones, but a sharer in a
+// different scene tree (a prologue crowd clone, a clone path that
+// does not heal) can still slip through - the live fresh run threw
+// from the rental drive onward while every headless audit of the
+// Act II scene was clean. So: every push bumps a generation
+// counter, and every render loop heals its scene once per
+// generation before rendering. The per-frame check is O(1) when
+// nothing was pushed; the heal is one scene traverse per push,
+// not per frame. The render-failure catches also heal and retry,
+// so a poisoned mesh from any future clone path fixes itself on
+// the first bad frame instead of freezing the game.
+let morphGeneration = 0;
+const healedGeneration = new WeakMap();
+export function markMorphsDirty() { morphGeneration++; }
+export function healMorphInfluences(scene) {
+  if (!scene) return 0;
+  let healed = 0;
+  try {
+    scene.traverse(o => {
+      if (!o.isMesh || !o.geometry) return;
+      const ma = o.geometry.morphAttributes;
+      if (!ma) return;
+      const attr = ma.position || ma.normal || ma.color;
+      if (!attr || !attr.length) return;
+      if (!o.morphTargetInfluences || o.morphTargetInfluences.length !== attr.length) {
+        try { o.updateMorphTargets(); healed++; } catch (e) { /* best effort */ }
+      }
+    });
+  } catch (e) { /* healing must never break the loop */ }
+  return healed;
+}
+export function healMorphsIfDirty(scene) {
+  if (!scene) return;
+  if (healedGeneration.get(scene) === morphGeneration) return;
+  healedGeneration.set(scene, morphGeneration);
+  healMorphInfluences(scene);
+}
+
 // Dispose every GPU resource owned by a scene (geometries, materials and
 // their textures) so a finished act does not leak into the next one.
 // Safe to call on a scene that was already disposed. The scene's

@@ -23,6 +23,7 @@
 import * as THREE from './three.module.js';
 import { characterKey } from './gestures.js';
 import { registerFaceHumans, setSpeakingFace, clearFace, measureMouthWorld } from './expression.js';
+import { markMorphsDirty } from './core.js';
 
 // How far the jaw drops at full open, and how far the chin juts forward,
 // in metres. A real open mouth drops the chin about 2 cm.
@@ -222,6 +223,11 @@ function addJawMorphToMesh(mesh, mouthWorld, forwardWorld) {
         }
       });
     } catch (e) { /* best effort */ }
+    // Sharers in OTHER scene trees (a prologue crowd clone, a later
+    // clone path) are not reached by this sweep: bump the morph
+    // generation so every render loop heals its own scene once
+    // before its next render (see core.js healMorphsIfDirty).
+    try { markMorphsDirty(); } catch (e) { /* best effort */ }
     const d = mesh.morphTargetDictionary || {};
     if (typeof d.jawOpen === 'number') {
       mesh.morphTargetInfluences[d.jawOpen] = 0;

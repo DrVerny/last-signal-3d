@@ -21,6 +21,7 @@
 
 import * as THREE from './three.module.js';
 import { characterKey } from './gestures.js';
+import { markMorphsDirty } from './core.js';
 
 // Emotions, as face targets. lift: how far the brows rise, in metres
 // (world). tilt: brow tilt in radians, positive lifts the inner end
@@ -379,6 +380,10 @@ function addSmileMorphToMesh(mesh, mouthWorld, forwardWorld) {
         }
       });
     } catch (e) { /* best effort */ }
+    // Sharers in OTHER scene trees are not reached by this sweep:
+    // bump the morph generation so every render loop heals its own
+    // scene once before its next render (see core.js).
+    try { markMorphsDirty(); } catch (e) { /* best effort */ }
     const d = mesh.morphTargetDictionary || {};
     if (typeof d.smile === 'number') {
       mesh.morphTargetInfluences[d.smile] = 0;
