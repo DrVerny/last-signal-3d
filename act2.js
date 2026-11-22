@@ -1346,7 +1346,12 @@ function placeHuman(group, name, x, z, faceYaw, baseScale) {
   // live check while every rotation-based test passed.
   group.rotation.set(0, faceYaw, 0);
   group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  humans.push({ group, name, baseScale, phase: Math.random() * 6 });
+  // Keep the full build scale: rigged people are built wider than
+  // tall (body.width on X/Z), and the per-frame breathing loop must
+  // preserve that width instead of resetting X/Z to the height
+  // scale (which shrank fat builds by a fifth and buried the
+  // guards' kit inside their bodies).
+  humans.push({ group, name, baseScale, baseScaleX: group.scale.x || baseScale, baseScaleZ: group.scale.z || baseScale, phase: Math.random() * 6 });
   humanGroups.push(group); modelGroups[name] = { group };
   return group;
 }
@@ -1466,13 +1471,13 @@ function dressGuardKit(group, frontSign) {
     brim.position.set(0, bb.max.y - 0.08, front * 0.17); add(brim, 'cap');
     const chestY = bb.min.y + height * 0.74;
     const patch = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.11), new THREE.MeshBasicMaterial({ map: signTexture('SECURITY', '#16233c', '#ffd166', ''), transparent: false }));
-    patch.position.set(0.02, chestY, front * (depth / 2 + 0.02));
+    patch.position.set(0.02, chestY, front * (depth / 2 + 0.035));
     if (front < 0) patch.rotation.y = Math.PI;
     add(patch, 'patch');
     const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.012, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
     badge.rotation.x = Math.PI / 2;
-    badge.position.set(-0.13, chestY + 0.07, front * (depth / 2 + 0.02)); add(badge, 'badge');
-    const belt = new THREE.Mesh(new THREE.BoxGeometry(width * 0.52, 0.07, depth * 0.72), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7 }));
+    badge.position.set(-0.13, chestY + 0.07, front * (depth / 2 + 0.035)); add(badge, 'badge');
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(width * 0.58, 0.07, depth * 0.8), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7 }));
     belt.position.set(0, bb.min.y + height * 0.52, 0); add(belt, 'belt');
   } catch (e) { /* the kit is dressing; never break a guard build */ }
 }
@@ -1491,9 +1496,9 @@ function buildRiggedGuardEntry(gname, gx, gz) {
   let person = null, model = null, look = null;
   for (let attempt = 0; attempt < 6; attempt++) {
     look = Object.assign({}, GUARD_LOOKS[gname] || GUARD_LOOKS.guard1);
-    const p = makeRiggedPerson({ x: gx, z: gz, heading: Math.PI, look });
+    const p = makeRiggedPerson({ x: gx, z: gz, heading: Math.PI, look, sex: 'm' });
     if (!p || !p.group) return null; // crowd models not loaded yet
-    person = p; model = guardModelFor(p);
+    person = p; model = p.model || guardModelFor(p);
     if (model && model.sex === 'm') break;
     // A female rig was picked: discard it (its group was never added
     // to the yard) and roll again - the guards are addressed as
@@ -1507,12 +1512,17 @@ function buildRiggedGuardEntry(gname, gx, gz) {
   // too; belt and braces for the guard line.
   g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
   mission2.add(g);
-  placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1);
+  // From here on the group is in the yard: every step is guarded so
+  // a throw can never leave an orphan figure standing at the post
+  // while the patrol drives a different one. The entry is returned
+  // whatever succeeded.
+  let measuredRigYaw = null, marker = null;
+  try { placeHuman(g, gname, gx, gz, Math.PI, g.scale.y || 1); } catch (e) { g.position.set(gx, 0, gz); }
   // faceYaw rides on the rig: the Atlas crowd rigs face -Z in their
   // own space (faceYaw PI), the Casual rig faces +Z (0). Measured
   // from the rig's own face features when they exist, with the
   // layout table value as the fallback.
-  const measuredRigYaw = measureGuardFaceYaw(g);
+  try { measuredRigYaw = measureGuardFaceYaw(g); } catch (e) { measuredRigYaw = null; }
   // Walk is already playing on the person's mixer (makeRiggedPerson
   // starts it at a random phase). Keep a handle on it plus the
   // matching Idle action so stand-down can crossfade instead of
@@ -1529,9 +1539,11 @@ function buildRiggedGuardEntry(gname, gx, gz) {
   // the man, not the floating "!".
   const guardFaceYaw = measuredRigYaw === null ? (person.faceYaw || 0) : measuredRigYaw;
   dressGuardKit(g, guardFaceYaw === Math.PI ? -1 : 1);
-  const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
-  marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
-  g.add(marker); guardMarkers.push(marker);
+  try {
+    marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
+    marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
+    g.add(marker); guardMarkers.push(marker);
+  } catch (e) { marker = null; }
   // If the Atlas image had not decoded when the look was applied,
   // the guard kept his factory colours; ensureGuards retries the
   // look once the image is ready (see the heal pass there).
@@ -5188,6 +5200,12 @@ function startMission2() {
   // resetView below uses this mission's bounds, not the valve room's.
   inValveRoom = false;
   state.mission = 2; resetView();
+  // Mission 2 always starts with the guards on duty: whatever a
+  // free-roam visit to the yard did before this mission began, the
+  // line patrols and the key card stays hidden until the bluff.
+  guardsDown = false;
+  try { if (keycardMesh) keycardMesh.visible = false; } catch (e) { /* ignore */ }
+  try { for (const m of guardMarkers) m.visible = true; } catch (e) { /* ignore */ }
   // The guards must exist by arrival: if Caleb's model is still in
   // flight, stand in crowd-rig guards so the yard is never empty.
   try { buildFallbackGuards(); } catch (e) { /* guards are best effort */ }
@@ -5248,6 +5266,30 @@ function hideGuardMarkers() { for (const m of guardMarkers) m.visible = false; }
 // main frame loop and from the seated-arrival branch (movement
 // only there - the bluff trigger stays in the main loop).
 function updateGuardPatrol(t, dt) {
+  // Line integrity, every frame the yard is shown: the visible
+  // figures must be exactly the patrol entries. A guard-named
+  // group the patrol does not own (a build that threw after adding
+  // its figure, an upgrade that swapped entries mid-flight) would
+  // stand frozen at its post forever, so sweep it out; a patrol
+  // group that lost its parent goes back in; a short line is
+  // topped up. All cheap: the yard has a few dozen children.
+  try {
+    for (const child of [...mission2.children]) {
+      if ((child.name === 'guard1' || child.name === 'guard2') && !guardPatrol.some(gp => gp.group === child)) mission2.remove(child);
+    }
+    for (const gp of guardPatrol) {
+      if (gp.group && gp.group.parent !== mission2) mission2.add(gp.group);
+      // Look heal, per frame: a guard built before his Atlas image
+      // decoded kept the factory colours, and the heal used to run
+      // only inside ensureGuards - if the image decoded after the
+      // last ensureGuards call, the uniform never landed.
+      if (gp.lookPending && atlasImageReady(gp.lookPending.model)) {
+        try { applyLook(gp.group, gp.lookPending.model, gp.lookPending.look); } catch (e) { /* ignore */ }
+        gp.lookPending = null;
+      }
+    }
+    if (guardPatrol.length < 2) ensureGuards();
+  } catch (e) { /* integrity is best effort; the patrol below still runs */ }
   for (const gp of guardPatrol) {
     const phase = t * 0.45 + gp.phase;
     const w = Math.sin(phase);
@@ -5296,6 +5338,12 @@ function faceGuardsAtPlayer() {
 }
 function guardDialogue() {
   if (guardsDown) { toast('The guards have stood down. The SCADA terminal is yours.'); return; }
+  // The bluff belongs to Mission 2: the yard can be visited during
+  // Mission 1 (a map drive shows it through restoreMissionScene),
+  // and a guard click there must not stand the line down early -
+  // guardsDown is never reset, so an early stand-down left both
+  // guards frozen at their posts for the whole of Mission 2.
+  if (state.mission !== 2) { toast('Private security. They watch the gate and say nothing.'); return; }
   if (state.trust >= 6) {
     showDialogue([
       { who: 'Caleb Bishop', text: 'Afternoon, gentlemen. City inspector. We have a work order on feeder line B - harmonic distortion on the bus. I need five minutes at the terminal.' },
@@ -6290,7 +6338,10 @@ function animateFrame() {
   }
   for (const h of humans) {
     const bt = t * 1.1 + h.phase;
-    h.group.scale.set(h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScale);
+    // Breathe on Y only: X/Z keep the build scale (body width), so
+    // a wide build stays wide and kit sized to the build-time
+    // bounding box stays on the body's surface.
+    h.group.scale.set(h.baseScaleX !== undefined ? h.baseScaleX : h.baseScale, h.baseScale * (1 + Math.sin(bt) * 0.012), h.baseScaleZ !== undefined ? h.baseScaleZ : h.baseScale);
   }
   // Guards patrol the gate line while the yard is shown and they have
   // not stood down, so the yard feels alive and the player can see the

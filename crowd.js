@@ -380,14 +380,15 @@ export function cloneSkinned(source) {
   });
   return clone;
 }
-function pickModel(index) {
+function pickModel(index, sexWanted) {
   if (!crowdModels || !crowdModels.length) return null;
   if (index !== undefined && index !== null) return crowdModels[((index % crowdModels.length) + crowdModels.length) % crowdModels.length];
   // Balance the sexes: pick a sex first (50/50), then a loaded model of
   // that sex, so the crowd is never all men or all women even if only
   // some models loaded. Fall back to any loaded model when none of the
-  // chosen sex is available.
-  const sex = Math.random() < 0.5 ? 'm' : 'f';
+  // chosen sex is available. A caller may ask for one sex outright
+  // (the substation guards are addressed as gentlemen in the bluff).
+  const sex = sexWanted || (Math.random() < 0.5 ? 'm' : 'f');
   const ofSex = crowdModels.filter(m => m.sex === sex);
   const pool = ofSex.length ? ofSex : crowdModels;
   return pool[Math.floor(Math.random() * pool.length)];
@@ -515,6 +516,16 @@ export function repaintAtlas(image, modelFile, look) {
     paint(cells.pants, look.pants);
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
+    // Match the GLTF texture this replaces: glTF UVs are authored
+    // top-down (v=0 at the top of the image) with repeat wrapping
+    // (the models' sampler is REPEAT and their UVs run outside
+    // [0,1]). A CanvasTexture defaults to flipY=true and
+    // ClampToEdgeWrapping, which mirrored every repainted cell to
+    // the palette's white background rows and clamped out-of-range
+    // UVs to the white edge - repainted people rendered white.
+    tex.flipY = false;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
     return tex;
   } catch (e) { return null; }
 }
@@ -620,7 +631,7 @@ export function atlasImageReady(model) {
 // null when no crowd model is loaded yet.
 export function makeRiggedPerson(opts) {
   const o = opts || {};
-  const model = pickModel();
+  const model = pickModel(undefined, o.sex);
   if (!model) return null;
   try {
     const group = cloneSkinned(model.scene);
@@ -735,6 +746,10 @@ export function makeRiggedPerson(opts) {
     const lane = o.lane || null;
     return {
       group, mixer, rootBone, rootRest, headBone, torsoBone, rigged: true, faceYaw, idle: !!o.idle,
+      // The model this person was built from, kept on the person so
+      // callers (the substation guards) can reach the matching Idle
+      // clip and retry the look without reverse-matching clips.
+      model,
       phone: !!o.phone, pockets: !!o.pockets, bags: o.bags || 0, age, stoop: traits.stoop,
       heading, bounds, lane, look, body,
       x: o.x !== undefined ? o.x : (lane ? (Math.random() * (lane.max - lane.min) + lane.min) : (Math.random() * (bounds.maxX - bounds.minX) + bounds.minX)),
