@@ -2023,6 +2023,16 @@ function enterValveRoom() {
 function exitValveRoom() {
   if (!inValveRoom) return;
   inValveRoom = false;
+  // Leaving the room always closes its pressure controls. The key
+  // pickup, the door walk-up and the other yard triggers are gated on
+  // the valve modal being hidden, so a modal left open here would
+  // silently kill every one of them outside with no feedback.
+  try {
+    valveOpen = false;
+    valveReopenAt = Date.now() + 2500;
+    if (valveTimer) { clearInterval(valveTimer); valveTimer = null; }
+    document.getElementById('valveModal').classList.add('hidden');
+  } catch (e) { /* ignore */ }
   camera.position.set(0, 1.7, 2);
   // Sync the stored ground position too: without this the next frame's
   // beginPlayerFrame snaps the player back to his spot inside the room,
@@ -6422,13 +6432,19 @@ function animateFrame() {
     }
   }
   // Station key: walking right up to the hook picks it up, so a missed
-  // click is not a dead end. The radius is tight (0.6 m): at 1.2 m the
-  // walk to the door itself passed through it, so the key was taken
-  // silently on the way in and the door read as needing no key at all.
+  // click is not a dead end. The radius is 0.75 m, not the original
+  // 1.2 m: at 1.2 m the walk to the door itself passed through it, so
+  // the key was taken silently on the way in and the door read as
+  // needing no key at all. At 0.75 m the straight walks from the
+  // parked car and from Caleb to the door still pass clear (both over
+  // 1.3 m from the hook), while a player who walks to the glowing key
+  // and stops a step short of it still gets the pickup - the wall
+  // stops him 0.4 m short of the hook, so the old 0.6 m left only
+  // 0.45 m of sideways tolerance and a near miss got no feedback.
   if (state.mission === 1 && mission1.visible && !inValveRoom && !hasKey('station')
     && document.getElementById('dialogue').classList.contains('hidden')
     && document.getElementById('valveModal').classList.contains('hidden')) {
-    if (playerDist2D(1.5, -0.6) < 0.6) {
+    if (playerDist2D(1.5, -0.6) < 0.75) {
       giveKey('station', 'station key');
       state.inventory.push('Station key'); updateHUD();
       toast('Picked up the station key. The station door is unlocked.');
