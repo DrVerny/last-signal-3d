@@ -474,10 +474,19 @@ export function ageTraits(age) {
 // part that uses it; the outfit stays coherent. Jade's model has
 // separate materials per part (Skin, Face, Hair, Shirt, Pants), so her
 // clones are recoloured by material name instead.
+//
+// Beyond the biggest cell per part, each model wears smaller clothing
+// details on their own cells (measured from the GLBs' vertex geometry:
+// Sam's cap, sleeve bands, trouser leg panels, shoe bands). Those
+// cells are painted with their part's colour too, so a repainted
+// person wears one coherent outfit instead of factory-coloured
+// leftovers (the substation guards kept a mustard factory cap and
+// green trouser panels under their navy uniforms). The black face
+// band cells (eyes/brows) stay unpainted on purpose.
 const ATLAS_CELLS = {
-  'models/rigged/caleb-alt-civilian.glb': { skin: [[1, 0]], hair: [[2, 0]], shirt: [[5, 0]], pants: [[3, 0]] },
-  'models/rigged/nurse-rigged.glb': { skin: [[1, 2], [9, 2]], hair: [[5, 2]], shirt: [[4, 2]], pants: [[3, 2]] },
-  'models/rigged/walter-rigged.glb': { skin: [[15, 0]], hair: [[22, 0]], shirt: [[18, 0]], pants: [[14, 0]] }
+  'models/rigged/caleb-alt-civilian.glb': { skin: [[1, 0]], hair: [[2, 0], [9, 0]], shirt: [[5, 0], [8, 0], [4, 0]], pants: [[3, 0], [7, 0], [10, 0], [6, 0]] },
+  'models/rigged/nurse-rigged.glb': { skin: [[1, 2], [9, 2]], hair: [[5, 2], [0, 2]], shirt: [[4, 2], [2, 2]], pants: [[3, 2], [7, 2], [10, 2], [6, 2]] },
+  'models/rigged/walter-rigged.glb': { skin: [[15, 0]], hair: [[22, 0]], shirt: [[18, 0], [17, 0], [20, 0]], pants: [[14, 0], [21, 0], [16, 0], [19, 0]] }
 };
 const JADE_PART_MATERIALS = { skin: ['Skin', 'Face'], hair: ['Hair'], shirt: ['Shirt'], pants: ['Pants'] };
 // The repainted atlas is drawn at 256px (the source is 512, nearest

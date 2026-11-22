@@ -1437,24 +1437,132 @@ const GUARD_LOOKS = {
 // Dress a guard figure in his security kit: a dark navy cap with a
 // brim, a SECURITY patch and a gold badge on the chest, and a belt.
 // The kit rides in a counter-scaled child group, so its parts are
-// sized in true metres from the figure's own bounding box whichever
+// sized in true metres from the figure's own measurements whichever
 // model (rigged Atlas or Caleb scan) is under it. frontSign is the
 // model's facing in its own space (-1 Atlas rigs, +1 the scan).
-function dressGuardKit(group, frontSign) {
+//
+// The measurements come from the POSED figure (skinned vertices with
+// bone transforms applied), not Box3.setFromObject: that reads the
+// bind-pose geometry box, which is about 0.25 m shorter than the
+// walking figure and misjudges his depth, so the cap landed inside
+// his head and the patch and badge inside his chest - the live
+// check saw no kit at all. The scan has no skeleton, so its plain
+// mesh vertices are the posed figure already.
+function dressGuardKit(group, frontSign, person) {
   try {
     const front = frontSign < 0 ? -1 : 1;
     const savedPos = group.position.clone();
     const savedRot = group.rotation.clone();
     group.position.set(0, 0, 0);
     group.rotation.set(0, 0, 0);
+    // Pose the rig in its neutral Idle stance for the measurement:
+    // the Walk clip's root/hips travel offsets the figure from the
+    // group origin by up to a metre at some phases, which put the
+    // kit beside the body instead of on it. Idle stands him centred
+    // and still, the way the frame loop's root recentre holds him.
+    let restoreWalk = null;
+    if (person && person.mixer) {
+      try {
+        const idleClip = person.model ? THREE.AnimationClip.findByName(person.model.animations || [], 'Idle') : null;
+        const acts = person.mixer._actions || [];
+        const walkAction = acts.length ? acts[0] : null;
+        if (idleClip) {
+          const idleAction = person.mixer.clipAction(idleClip);
+          const savedWeight = walkAction ? walkAction.getEffectiveWeight() : 1;
+          idleAction.reset();
+          idleAction.setEffectiveWeight(1);
+          idleAction.play();
+          if (walkAction) walkAction.setEffectiveWeight(0);
+          person.mixer.update(0.001);
+          restoreWalk = () => {
+            try {
+              idleAction.stop();
+              if (walkAction) walkAction.setEffectiveWeight(savedWeight);
+              person.mixer.update(0.001);
+            } catch (e) { /* ignore */ }
+          };
+        } else {
+          updateRiggedPerson(person, 0);
+        }
+        if (person.rootBone && person.rootRest) {
+          person.rootBone.position.x = person.rootRest.x;
+          person.rootBone.position.z = person.rootRest.z;
+        }
+      } catch (e) { /* measure whatever pose stands */ }
+    }
     group.updateWorldMatrix(true, true);
-    const bb = new THREE.Box3().setFromObject(group);
+    // Sample the figure's vertices in measured space (group at the
+    // origin, rotation zero, build scale applied). Skinned vertices
+    // are transformed by hand (bone world matrix times bone inverse
+    // times the bind matrix): applyBoneTransform's result depends
+    // on bindMatrixInverse freshness, which put the kit beside the
+    // body instead of on it. Plain meshes (the scan) take the mesh
+    // matrix instead.
+    const pts = [];
+    const v = new THREE.Vector3();
+    const tv = new THREE.Vector3();
+    const bm = new THREE.Matrix4();
+    group.traverse(o => {
+      if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
+      const pos = o.geometry.attributes.position;
+      const step = Math.max(1, Math.floor(pos.count / 1500));
+      const si = o.geometry.attributes.skinIndex;
+      const sw = o.geometry.attributes.skinWeight;
+      if (o.isSkinnedMesh && o.skeleton && si && sw) {
+        const bones = o.skeleton.bones;
+        const boneInverses = o.skeleton.boneInverses;
+        for (let i = 0; i < pos.count; i += step) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(o.bindMatrix);
+          const acc = new THREE.Vector3();
+          const ws = [sw.getX(i), sw.getY(i), sw.getZ(i), sw.getW(i)];
+          const is = [si.getX(i), si.getY(i), si.getZ(i), si.getW(i)];
+          for (let k = 0; k < 4; k++) {
+            if (!ws[k] || !bones[is[k]]) continue;
+            bm.multiplyMatrices(bones[is[k]].matrixWorld, boneInverses[is[k]]);
+            acc.addScaledVector(tv.copy(v).applyMatrix4(bm), ws[k]);
+          }
+          pts.push(acc);
+        }
+      } else {
+        for (let i = 0; i < pos.count; i += step) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+          pts.push(v.clone());
+        }
+      }
+    });
     group.position.copy(savedPos);
     group.rotation.copy(savedRot);
-    if (!isFinite(bb.min.y) || !isFinite(bb.max.y) || bb.max.y <= bb.min.y) return;
-    const height = bb.max.y - bb.min.y;
-    const width = bb.max.x - bb.min.x;
-    const depth = bb.max.z - bb.min.z;
+    if (restoreWalk) restoreWalk();
+    if (pts.length < 20) return;
+    const all = new THREE.Box3();
+    for (const p of pts) all.expandByPoint(p);
+    if (!isFinite(all.min.y) || !isFinite(all.max.y) || all.max.y <= all.min.y) return;
+    const height = all.max.y - all.min.y;
+    const centreX = (all.min.x + all.max.x) / 2;
+    const bandBox = (lo, hi, colHalf) => {
+      const b = new THREE.Box3();
+      for (const p of pts) {
+        if (p.y < all.min.y + height * lo || p.y > all.min.y + height * hi) continue;
+        if (colHalf && Math.abs(p.x - centreX) > colHalf) continue;
+        b.expandByPoint(p);
+      }
+      return b;
+    };
+    const headBand = bandBox(0.84, 1.01, 0.35);
+    const chestCol = bandBox(0.60, 0.82, 0.24);
+    const hipsCol = bandBox(0.44, 0.58, 0.30);
+    // The figure's own centre in measured space (the hips band is
+    // the torso core): kit parts sit on him wherever he stands.
+    const cx = (hipsCol.min.x + hipsCol.max.x) / 2;
+    const cz = (hipsCol.min.z + hipsCol.max.z) / 2;
+    const headW = Math.max(0.2, headBand.max.x - headBand.min.x);
+    const headD = Math.max(0.2, headBand.max.z - headBand.min.z);
+    const headR = Math.max(headW, headD) / 2 + 0.015;
+    const chestFront = front > 0 ? chestCol.max.z - cz : cz - chestCol.min.z;
+    const chestY = (chestCol.min.y + chestCol.max.y) / 2;
+    const hipsW = Math.max(0.3, hipsCol.max.x - hipsCol.min.x);
+    const hipsD = Math.max(0.24, hipsCol.max.z - hipsCol.min.z);
+    const hipsY = (hipsCol.min.y + hipsCol.max.y) / 2;
     const kit = new THREE.Group();
     kit.name = 'guardKitGroup';
     kit.scale.set(1 / (group.scale.x || 1), 1 / (group.scale.y || 1), 1 / (group.scale.z || 1));
@@ -1465,20 +1573,19 @@ function dressGuardKit(group, frontSign) {
       mesh.frustumCulled = false; mesh.castShadow = true;
       kit.add(mesh); return mesh;
     };
-    const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.19, 0.09, 12), navy);
-    crown.position.set(0, bb.max.y - 0.03, 0); add(crown, 'cap');
-    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.02, 0.14), new THREE.MeshStandardMaterial({ color: 0x0d0d0d, roughness: 0.4 }));
-    brim.position.set(0, bb.max.y - 0.08, front * 0.17); add(brim, 'cap');
-    const chestY = bb.min.y + height * 0.74;
-    const patch = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.11), new THREE.MeshBasicMaterial({ map: signTexture('SECURITY', '#16233c', '#ffd166', ''), transparent: false }));
-    patch.position.set(0.02, chestY, front * (depth / 2 + 0.035));
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(headR * 0.94, headR, 0.14, 14), navy);
+    crown.position.set(cx, all.max.y + 0.06, cz); add(crown, 'cap');
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(headW * 0.85, 0.02, 0.17), new THREE.MeshStandardMaterial({ color: 0x0d0d0d, roughness: 0.4 }));
+    brim.position.set(cx, all.max.y + 0.0, cz + front * (headD / 2 + 0.06)); add(brim, 'cap');
+    const patch = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.12), new THREE.MeshBasicMaterial({ map: signTexture('SECURITY', '#16233c', '#ffd166', ''), transparent: false }));
+    patch.position.set(cx + 0.03, chestY, cz + front * (chestFront + 0.02));
     if (front < 0) patch.rotation.y = Math.PI;
     add(patch, 'patch');
-    const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.012, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
+    const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.012, 12), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
     badge.rotation.x = Math.PI / 2;
-    badge.position.set(-0.13, chestY + 0.07, front * (depth / 2 + 0.035)); add(badge, 'badge');
-    const belt = new THREE.Mesh(new THREE.BoxGeometry(width * 0.58, 0.07, depth * 0.8), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7 }));
-    belt.position.set(0, bb.min.y + height * 0.52, 0); add(belt, 'belt');
+    badge.position.set(cx - 0.14, chestY + 0.08, cz + front * (chestFront + 0.025)); add(badge, 'badge');
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(hipsW + 0.05, 0.07, hipsD + 0.05), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7 }));
+    belt.position.set(cx, hipsY, cz); add(belt, 'belt');
   } catch (e) { /* the kit is dressing; never break a guard build */ }
 }
 // Build one substation guard as a rigged crowd person in a dark navy
@@ -1538,7 +1645,7 @@ function buildRiggedGuardEntry(gname, gx, gz) {
   // before the marker sprite, so the kit's bounding box measures
   // the man, not the floating "!".
   const guardFaceYaw = measuredRigYaw === null ? (person.faceYaw || 0) : measuredRigYaw;
-  dressGuardKit(g, guardFaceYaw === Math.PI ? -1 : 1);
+  dressGuardKit(g, guardFaceYaw === Math.PI ? -1 : 1, person);
   try {
     marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: guardMarkerTex, color: 0xffd166, transparent: true, depthWrite: false }));
     marker.scale.set(1.15, 1.15, 1); marker.position.set(0, 2.4, 0); marker.name = 'guardMarker';
@@ -2614,6 +2721,11 @@ let scadaQteDone = false; // the surge quick-time fires once per SCADA open
 const FEEDER_START = { A: 70, B: 25, C: 20 };
 const feeders = { A: FEEDER_START.A, B: FEEDER_START.B, C: FEEDER_START.C };
 let hasKeycard = false, hasPassphrase = false, guardsDown = false;
+// The bluff (walk-up or click) waits for the Mission 2 briefing to
+// finish: during the briefing card and the get-out beat the player
+// can already be standing near the gate line, and an early trigger
+// there stood the line down before he ever saw it patrol.
+let mission2BriefingDone = false;
 function buildMission2() {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), stdMat({ color: 0x3a3f42, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; mission2.add(ground);
@@ -5204,6 +5316,7 @@ function startMission2() {
   // free-roam visit to the yard did before this mission began, the
   // line patrols and the key card stays hidden until the bluff.
   guardsDown = false;
+  mission2BriefingDone = false;
   try { if (keycardMesh) keycardMesh.visible = false; } catch (e) { /* ignore */ }
   try { for (const m of guardMarkers) m.visible = true; } catch (e) { /* ignore */ }
   // The guards must exist by arrival: if Caleb's model is still in
@@ -5245,7 +5358,7 @@ function startMission2() {
         { who: 'Jade Morales', text: 'Six PM. Con Edison substation, Long Island City. A logic bomb is sitting in the SCADA system. At eight it cascades - one substation trips, overloads the next, and takes down the Northeast grid.' },
         { who: 'Caleb Bishop', text: 'And the guards are not his people. Private security, hired through a shell company. They do not know what they are protecting.' },
         { who: 'Jade Morales', text: 'So we do not fight them. You walk up as a city inspector. I feed you the jargon through your earpiece. Click a guard to start.' }
-      ], () => { toast('Walk up to a guard (or click one) - Caleb talks his way in.'); });
+      ], () => { mission2BriefingDone = true; toast('Walk up to a guard (or click one) - Caleb talks his way in.'); });
     });
   };
   if (!seatIfDrove(2, startBriefing)) { applyDriveSpawn(2); startBriefing(); }
@@ -5380,6 +5493,10 @@ function guardDialogue() {
   // the same.
   if (parkedSeatActive) { toast('Get out of the car first - the guards are watching the gate.'); return; }
   if (!document.getElementById('dialogue').classList.contains('hidden')) return;
+  // The bluff is the briefing's next step: a guard click during the
+  // briefing card (dialogue not up yet) must not jump the queue and
+  // stand the line down before the player knows why he is here.
+  if (!mission2BriefingDone) { toast('Start the briefing first - then walk up to a guard.'); return; }
   if (state.trust >= 6) {
     showDialogue([
       { who: 'Caleb Bishop', text: 'Afternoon, gentlemen. City inspector. We have a work order on feeder line B - harmonic distortion on the bus. I need five minutes at the terminal.' },
@@ -6401,7 +6518,7 @@ function animateFrame() {
   // the yard was hidden.
   if (mission2.visible) {
     updateGuardPatrol(t, dt);
-    if (!guardsDown && state.mission === 2
+    if (!guardsDown && state.mission === 2 && mission2BriefingDone
       && document.getElementById('dialogue').classList.contains('hidden')
       && document.getElementById('valveModal').classList.contains('hidden')
       && document.getElementById('scadaModal').classList.contains('hidden')) {
