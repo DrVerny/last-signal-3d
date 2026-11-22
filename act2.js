@@ -5239,7 +5239,7 @@ function climbStep() {
       onDone: (done) => {
         climbHolding = false;
         if (done) advanceClimb();
-        else toast('You slip back a step - click the catwalk and hold SPACE to try again.');
+        else toast('You slip back a step - click the catwalk and press and hold to try again.');
       }
     });
     if (!ok) { climbHolding = false; advanceClimb(); }

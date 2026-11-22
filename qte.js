@@ -51,6 +51,12 @@ function cleanup() {
   if (active) {
     try { document.removeEventListener('keydown', active.onKey, true); } catch (e) { /* ignore */ }
     try { document.removeEventListener('keyup', active.onKeyUp, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('pointerdown', active.onDown, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('pointerup', active.onUp, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('pointercancel', active.onUp, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('touchstart', active.onDown, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('touchend', active.onUp, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('touchcancel', active.onUp, true); } catch (e) { /* ignore */ }
     const el = document.getElementById('qtePrompt');
     if (el) {
       try { el.removeEventListener('pointerdown', active.onDown); } catch (e) { /* ignore */ }
@@ -98,6 +104,10 @@ export function runQTE(opts) {
   state.onKeyUp = null;
   try { document.addEventListener('keydown', state.onKey, true); } catch (e) { /* ignore */ }
   try { el.addEventListener('pointerdown', state.onDown); } catch (e) { /* ignore */ }
+  // Touch: a tap anywhere on screen counts as the press, so a finger
+  // does not have to land exactly on the prompt box.
+  try { document.addEventListener('pointerdown', state.onDown, true); } catch (e) { /* ignore */ }
+  try { document.addEventListener('touchstart', state.onDown, true); } catch (e) { /* ignore */ }
   const tick = () => {
     if (active !== state) return;
     const left = deadline - Date.now();
@@ -143,6 +153,14 @@ export function runHoldQTE(opts) {
   try { el.addEventListener('pointerdown', state.onDown); } catch (e) { /* ignore */ }
   try { el.addEventListener('pointerup', state.onUp); } catch (e) { /* ignore */ }
   try { el.addEventListener('pointerleave', state.onUp); } catch (e) { /* ignore */ }
+  // Touch: press and hold anywhere on screen counts, so a finger does
+  // not have to stay exactly on the prompt box to keep climbing.
+  try { document.addEventListener('pointerdown', state.onDown, true); } catch (e) { /* ignore */ }
+  try { document.addEventListener('pointerup', state.onUp, true); } catch (e) { /* ignore */ }
+  try { document.addEventListener('pointercancel', state.onUp, true); } catch (e) { /* ignore */ }
+  try { document.addEventListener('touchstart', state.onDown, true); } catch (e) { /* ignore */ }
+  try { document.addEventListener('touchend', state.onUp, true); } catch (e) { /* ignore */ }
+  try { document.addEventListener('touchcancel', state.onUp, true); } catch (e) { /* ignore */ }
   const tick = () => {
     if (active !== state) return;
     const now = Date.now();
