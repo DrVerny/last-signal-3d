@@ -505,6 +505,7 @@ export function repaintAtlas(image, modelFile, look) {
     try { ctx.imageSmoothingEnabled = false; } catch (e) { /* ignore */ }
     ctx.drawImage(image, 0, 0, TINT_SIZE, TINT_SIZE);
     const cellPx = 16 * (TINT_SIZE / 512); // 16px cells on the 512 atlas
+    const cellRows = 512 / 16; // palette rows on the 512 atlas
     const paint = (list, colour) => {
       if (!list) return;
       ctx.fillStyle = hexCss(colour);
@@ -514,6 +515,29 @@ export function repaintAtlas(image, modelFile, look) {
     paint(cells.hair, look.hair);
     paint(cells.shirt, look.shirt);
     paint(cells.pants, look.pants);
+    // Orientation-proof duplicate: paint the same cells again at the
+    // row-flipped position (row 31-cy). The texture is uploaded with
+    // flipY=false below (proven correct for glTF UVs), but a live
+    // check still saw repainted people in white - the signature of
+    // flipped sampling - so the look must land whichever way a
+    // browser uploads the canvas. The duplicate rows are palette
+    // background on every current model (authored cells sit in rows
+    // 0-2, duplicates in rows 29-31); a row an authored cell uses is
+    // never overwritten, so the correct orientation is untouched.
+    const usedRows = new Set();
+    for (const part of ['skin', 'hair', 'shirt', 'pants']) for (const [, cy] of (cells[part] || [])) usedRows.add(cy);
+    const paintFlipped = (list, colour) => {
+      if (!list) return;
+      ctx.fillStyle = hexCss(colour);
+      for (const [cx, cy] of list) {
+        const ry = cellRows - 1 - cy;
+        if (!usedRows.has(ry)) ctx.fillRect(cx * cellPx, ry * cellPx, cellPx, cellPx);
+      }
+    };
+    paintFlipped(cells.skin, look.skin);
+    paintFlipped(cells.hair, look.hair);
+    paintFlipped(cells.shirt, look.shirt);
+    paintFlipped(cells.pants, look.pants);
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     // Match the GLTF texture this replaces: glTF UVs are authored

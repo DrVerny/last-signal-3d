@@ -5290,6 +5290,31 @@ function updateGuardPatrol(t, dt) {
     }
     if (guardPatrol.length < 2) ensureGuards();
   } catch (e) { /* integrity is best effort; the patrol below still runs */ }
+  // Stood down: the line holds its ground. The guards face the
+  // player and idle where they stand (crossfade Walk -> Idle once),
+  // but the integrity sweep and look heal above have already run -
+  // they used to stop entirely at stand-down because the caller
+  // gated this whole function on !guardsDown, so a guard whose
+  // Atlas image decoded after the bluff kept his factory colours
+  // (or an orphan figure stayed) for the rest of the mission.
+  if (guardsDown) {
+    faceGuardsAtPlayer();
+    for (const gp of guardPatrol) {
+      if (!gp.person) continue;
+      if (!gp.idled && gp.walkAction && gp.idleAction) {
+        gp.idled = true;
+        try {
+          gp.idleAction.reset();
+          gp.idleAction.setEffectiveTimeScale(1);
+          gp.idleAction.setEffectiveWeight(1);
+          gp.idleAction.play();
+          gp.walkAction.crossFadeTo(gp.idleAction, 0.4, false);
+        } catch (e) { /* animation is best effort */ }
+      }
+      try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ }
+    }
+    return;
+  }
   for (const gp of guardPatrol) {
     const phase = t * 0.45 + gp.phase;
     const w = Math.sin(phase);
@@ -5344,6 +5369,17 @@ function guardDialogue() {
   // guardsDown is never reset, so an early stand-down left both
   // guards frozen at their posts for the whole of Mission 2.
   if (state.mission !== 2) { toast('Private security. They watch the gate and say nothing.'); return; }
+  // The bluff is an on-foot conversation: a guard click while the
+  // player is still seated in the parked car (or while another
+  // dialogue is already up) must not start it. The seated click
+  // used to fire the whole bluff before the briefing, standing
+  // the line down before the player ever saw it patrol - the live
+  // check then found both guards frozen at their posts for the
+  // rest of the mission. The walk-up trigger already waits for
+  // the player to be on foot with no dialogue up; clicks now do
+  // the same.
+  if (parkedSeatActive) { toast('Get out of the car first - the guards are watching the gate.'); return; }
+  if (!document.getElementById('dialogue').classList.contains('hidden')) return;
   if (state.trust >= 6) {
     showDialogue([
       { who: 'Caleb Bishop', text: 'Afternoon, gentlemen. City inspector. We have a work order on feeder line B - harmonic distortion on the bus. I need five minutes at the terminal.' },
@@ -6209,8 +6245,10 @@ function animateFrame() {
     updateDoorSwing(dt);
     // The yard stays alive while he sits in the car: guards keep
     // walking their patrol (movement only - the walk-up bluff
-    // trigger must never fire while he is still seated).
-    if (mission2.visible && !guardsDown) updateGuardPatrol(t, dt);
+    // trigger must never fire while he is still seated). The
+    // guardsDown check lives inside updateGuardPatrol now, so the
+    // integrity sweep and look heal run even after stand-down.
+    if (mission2.visible) updateGuardPatrol(t, dt);
     renderer.render(scene, camera);
     return;
   }
@@ -6361,9 +6399,9 @@ function animateFrame() {
   // without that gate the trigger fired inside the lot (a Symposium
   // arrival put the player 1.7 m from a guard patrol point) while
   // the yard was hidden.
-  if (mission2.visible && !guardsDown) {
+  if (mission2.visible) {
     updateGuardPatrol(t, dt);
-    if (state.mission === 2
+    if (!guardsDown && state.mission === 2
       && document.getElementById('dialogue').classList.contains('hidden')
       && document.getElementById('valveModal').classList.contains('hidden')
       && document.getElementById('scadaModal').classList.contains('hidden')) {
@@ -6375,33 +6413,11 @@ function animateFrame() {
       }
     }
   }
-  // Stood down: both guards stay facing the player (the patrol no
-  // longer overwrites their facing, and a fallback rig keeps its idle
-  // animation alive instead of freezing mid-stride). The gate is the
-  // yard being shown, not the mission number: after Mission 2 the
-  // player can drive back to the substation (parking continuity), and
-  // the guards must still face him there instead of freezing at
-  // whatever facing they last held.
-  if (mission2.visible && guardsDown) {
-    faceGuardsAtPlayer();
-    for (const gp of guardPatrol) {
-      if (!gp.person) continue;
-      // Stand down into Idle once per guard: crossfade Walk -> Idle
-      // so the guards breathe where they stand instead of marching
-      // in place (the old fallback wart) or freezing mid-stride.
-      if (!gp.idled && gp.walkAction && gp.idleAction) {
-        gp.idled = true;
-        try {
-          gp.idleAction.reset();
-          gp.idleAction.setEffectiveTimeScale(1);
-          gp.idleAction.setEffectiveWeight(1);
-          gp.idleAction.play();
-          gp.walkAction.crossFadeTo(gp.idleAction, 0.4, false);
-        } catch (e) { /* animation is best effort */ }
-      }
-      try { updateRiggedPerson(gp.person, dt); } catch (e) { /* animation is best effort */ }
-    }
-  }
+  // Stood-down facing and idle now live inside updateGuardPatrol
+  // (called above whenever the yard is shown), so the integrity
+  // sweep and look heal keep running after stand-down instead of
+  // stopping at the old !guardsDown gate. The final facing word
+  // after the gesture pass below is unchanged.
   // The key card sits on guard1's front belt: while it is visible,
   // keep it on him so the player always finds it where he is. He
   // stands down facing the player (see guardDialogue), so the card
