@@ -68,9 +68,22 @@ const _crowdFaceMouth = new THREE.MeshBasicMaterial({ color: 0x8a2a20 });
 const _crowdNoseMat = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
 const _crowdFaceLid = new THREE.MeshBasicMaterial({ color: 0x8a5a3a });
 const _crowdFingerMat = new THREE.MeshBasicMaterial({ color: 0xd9a986 });
+// Skin-matched materials for the nose, lid and fingers: the fixed
+// mid-brown above read wrong on deep and fair skin alike (a pale nose
+// on a dark face, a dark nose on a fair face), so each skin tone gets
+// its own cached material and the features blend with the person.
+const _skinMatCache = new Map();
+function skinMat(hex) {
+  if (!_skinMatCache.has(hex)) _skinMatCache.set(hex, new THREE.MeshBasicMaterial({ color: hex }));
+  return _skinMatCache.get(hex);
+}
 function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex, fitScale) {
   if (!headBone || !totalScale || totalScale <= 0 || !layout) return;
   try {
+    // The nose and lid wear the person's own skin tone, so they blend
+    // with the face instead of standing out lighter or darker.
+    const noseMat = (skinHex !== undefined && skinHex !== null) ? skinMat(skinHex) : _crowdNoseMat;
+    const lidMat = (skinHex !== undefined && skinHex !== null) ? skinMat(skinHex) : _crowdFaceLid;
     // The Head bone sits under the __fit node, so a Head child's true
     // world scale is totalScale times fitScale (0.591 Casual, 0.89
     // Atlas). Sizes use wf() so they render at their true world size
@@ -109,7 +122,7 @@ function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex, fitScale) {
       shine.position.set(wf(0.004), wf(0.005), wf(0.023));
       shine.userData.keepAlive = true;
       eye.add(shine);
-      const lidTop = new THREE.Mesh(new THREE.BoxGeometry(wf(0.040), wf(0.005), wf(0.004)), _crowdFaceLid);
+      const lidTop = new THREE.Mesh(new THREE.BoxGeometry(wf(0.040), wf(0.005), wf(0.004)), lidMat);
       lidTop.position.set(0, wf(0.016), wf(0.021));
       lidTop.userData.keepAlive = true;
       eye.add(lidTop);
@@ -127,12 +140,12 @@ function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex, fitScale) {
     // Nose: a small tip sphere plus a short bridge, skin-coloured.
     // The old 0.06 x 0.09 m box was twice a real nose and would have
     // read as a block once the flip put it on the face.
-    const noseTip = new THREE.Mesh(new THREE.SphereGeometry(wf(0.011), 10, 8), _crowdNoseMat);
+    const noseTip = new THREE.Mesh(new THREE.SphereGeometry(wf(0.011), 10, 8), noseMat);
     noseTip.scale.set(1, 0.85, 1);
     noseTip.position.set(layout.cx, layout.noseY, zs * (layout.noseZ + wf(0.008)));
     noseTip.userData.keepAlive = true;
     grp.add(noseTip);
-    const noseBridge = new THREE.Mesh(new THREE.BoxGeometry(wf(0.009), wf(0.020), wf(0.009)), _crowdNoseMat);
+    const noseBridge = new THREE.Mesh(new THREE.BoxGeometry(wf(0.009), wf(0.020), wf(0.009)), noseMat);
     noseBridge.position.set(layout.cx, layout.noseY + wf(0.012), zs * (layout.noseZ + wf(0.002)));
     noseBridge.userData.keepAlive = true;
     grp.add(noseBridge);
@@ -166,12 +179,14 @@ function addCrowdFaceFeatures(headBone, totalScale, layout, skinHex, fitScale) {
 // measured from the fingertip bones in LowerArm-local space (wrist Y
 // 0.324, fingertips Y 0.49-0.51); the ring finger is interpolated
 // between pinky and middle, and the hand is mirrored left/right.
-function addCrowdFingers(group, rigScale, fitScale) {
+function addCrowdFingers(group, rigScale, fitScale, skinHex) {
   if (!group || !rigScale || rigScale <= 0) return;
   try {
     const fs = (fitScale && fitScale > 0) ? fitScale : 1;
     const w = (worldSize) => worldSize / (fs * rigScale);
-    const fingerMat = _crowdFingerMat;
+    // The fingers wear the person's own skin tone: one fixed light
+    // tone read as pale gloves on dark skin.
+    const fingerMat = (skinHex !== undefined && skinHex !== null) ? skinMat(skinHex) : _crowdFingerMat;
     for (const side of ['L', 'R']) {
       // Casual (Jade): Fist bones, same layout as the player.
       const fist = findBone(group, ['Fist' + side]);
@@ -587,6 +602,17 @@ export function applyLook(group, model, look) {
 // Loaded crowd model entries, for tests and for callers that need to
 // inspect the models (may be null before the models finish loading).
 export function getCrowdModels() { return crowdModels; }
+// Whether a model's Atlas texture image has decoded far enough to
+// repaint (applyLook silently keeps the original material until it
+// has). Callers that build a person the moment the models land - the
+// substation guards - can use this to retry the look once the image
+// is ready instead of leaving the figure in its factory colours.
+export function atlasImageReady(model) {
+  try {
+    const img = atlasImageOf(model);
+    return !!(img && (img.naturalWidth || img.width));
+  } catch (e) { return false; }
+}
 // Build one realistic crowd person from a rigged model. Returns a
 // pedestrian-like object matching the shape action.js makePedestrian
 // returns (group, x, z, speed, phase, heading, bounds, lane, leader),
@@ -669,7 +695,7 @@ export function makeRiggedPerson(opts) {
       const layout = layoutKey ? CROWD_FACE_LAYOUTS[layoutKey] : null;
       const head = findBone(group, ['Head']);
       if (head && layout) addCrowdFaceFeatures(head, (model.headScale || 0.6) * s, layout, look.skin, model.fitScale || 1);
-      addCrowdFingers(group, s, model.fitScale || 1);
+      addCrowdFingers(group, s, model.fitScale || 1, look.skin);
     } catch (e) { /* cosmetic; never break the crowd */ }
     // A phone in the right hand for phone users: a small dark box on the
     // fist bone, with the head tilted down. A shopping bag hangs from the
@@ -848,7 +874,7 @@ export function makeSeatedPerson(opts) {
     // Face and fingers for everyone, as for walkers.
     try {
       if (posed.bones.head && layout) addCrowdFaceFeatures(posed.bones.head, (model.headScale || 0.6) * s, layout, look.skin, model.fitScale || 1);
-      addCrowdFingers(group, s, model.fitScale || 1);
+      addCrowdFingers(group, s, model.fitScale || 1, look.skin);
     } catch (e) { /* cosmetic; never break the crowd */ }
     return {
       group, seated: true, rigged: true, mixer: null,

@@ -3186,6 +3186,10 @@ function buildWindtunnel(scene) {
   buildPhoneBooth(scene);
   const sign = textSprite('WIND TUNNEL LAB', '#2a2118', '#ffd166', 'Engineering lab - run the tunnel');
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 3.0, -5.8); scene.add(sign);
+  // The area sign under it names this part of New York.
+  const areaSign = textSprite('MORNINGSIDE HEIGHTS', '#2a2118', '#ffd166', '');
+  areaSign.name = 'areaSign'; areaSign.userData.areaName = 'MORNINGSIDE HEIGHTS';
+  areaSign.scale.set(4, 1, 1); areaSign.position.set(0, 2.1, -5.8); scene.add(areaSign);
   // The lab door: a real, visible, walkable exit on the south wall.
   // It is locked and needs the wind tunnel key, which is on the workbench.
   addExitDoor(scene, { x: 7, z: 5.9, ry: Math.PI, keyId: 'windtunnel', keyLabel: 'wind tunnel key', label: 'EXIT - LAB DOOR' });
@@ -3276,8 +3280,8 @@ function buildSymposium(scene) {
   screenFrame.position.set(0, 3.0, -6.75); scene.add(screenFrame);
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 3.0), new THREE.MeshStandardMaterial({ map: symposiumScreenTexture(), roughness: 0.4 }));
   screen.position.set(0, 3.0, -6.7); scene.add(screen);
-  // The SYMPOSIUM banner above the stage.
-  const banner = textSprite('SYMPOSIUM', '#7a1a1a', '#ffd166', 'New York City');
+  // The SYMPOSIUM banner above the stage, naming this part of New York.
+  const banner = textSprite('SYMPOSIUM', '#7a1a1a', '#ffd166', 'Astoria, Queens');
   banner.scale.set(6, 1.5, 1); banner.position.set(0, 4.4, -4.2); scene.add(banner);
   // The NYC podium on the stage: a stand with a slanted top, a mic,
   // and an NYC sign. Never any other city's name on it.
