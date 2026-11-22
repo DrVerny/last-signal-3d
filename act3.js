@@ -52,11 +52,11 @@ const state = {
   yaw: 0, pitch: 0
 };
 const OBJ = {
-  1: ['Reach the MTA Rail Control Center terminal', 'Decide how to fix the EBS virus - and seal the choice', 'The choice stays sealed until the end'],
-  2: ['Stand before Judge Ellsworth', 'Hear the sentence - and what comes with it'],
-  3: ['Ride the transport van to lockup', 'When the doors open, run', 'Cross the rooftop - down the fire escape to the SUV'],
-  4: ['Meet Owen Marsh and the ex-city workers', 'See the files, the witnesses, the evidence', 'Agree the plan: the Attorney General\u2019s press conference, 9 AM'],
-  5: ['Step up to the podium', 'Tell the city the truth - and hand over the folder'],
+  1: ['Reach the MTA Rail Control Center terminal: walk to the terminal and click it', 'Decide how to fix the EBS virus - and seal the choice: pick a choice', 'The choice stays sealed until the end'],
+  2: ['Stand before Judge Ellsworth: walk to the judge', 'Hear the sentence - and what comes with it: watch the hearing'],
+  3: ['Ride the transport van to lockup: click the van doors when they come for you', 'When the doors open, run: move with WASD or the on-screen pad', 'Cross the rooftop - down the fire escape to the SUV: climb with press and hold, then run to the SUV'],
+  4: ['Meet Owen Marsh and the ex-city workers: click Owen Marsh', 'See the files, the witnesses, the evidence: click the evidence', 'Agree the plan: the Attorney General\u2019s press conference, 9 AM - pick a choice'],
+  5: ['Step up to the podium: walk to the podium and click it', 'Tell the city the truth - and hand over the folder: pick a choice'],
   6: ['One month later: City Hall steps', 'Dawn on the Williamsburg Bridge - the ending is revealed']
 };
 function setObjectives(doneCount) {
@@ -933,7 +933,7 @@ function updateEscapeAction(dt) {
       const dist = dist2D(camera.position.x, camera.position.z, -4, -2);
       try { showActionBanner('RUN! Reach the glowing LADDER - ' + Math.max(0, Math.ceil(dist)) + ' m to go. Dodge the barriers.'); } catch (e) { /* ignore */ }
       if (dist < 1.3) {
-        escapeClimb('CLIMB UP', 'Hold SPACE to climb the ladder to the rooftop.', () => {
+        escapeClimb('CLIMB UP', 'Hold SPACE or press and hold here to climb the ladder to the rooftop.', () => {
           if (!escapeActionActive) return;
           camY = 3.4; camera.position.set(-4, 3.4, -4);
           escapePhase = 2;
@@ -960,7 +960,7 @@ function updateEscapeAction(dt) {
       const dist = dist2D(camera.position.x, camera.position.z, 1.5, -2);
       try { showActionBanner('Across the rooftop - stay out of the searchlight, reach the FIRE ESCAPE - ' + Math.max(0, Math.ceil(dist)) + ' m.'); } catch (e) { /* ignore */ }
       if (dist < 1.3) {
-        escapeClimb('CLIMB DOWN', 'Hold SPACE to climb down the fire escape.', () => {
+        escapeClimb('CLIMB DOWN', 'Hold SPACE or press and hold here to climb down the fire escape.', () => {
           if (!escapeActionActive) return;
           camY = 1.9; camera.position.set(5.5, 1.9, 2);
           escapePhase = 3;

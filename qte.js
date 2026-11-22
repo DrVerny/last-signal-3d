@@ -32,7 +32,7 @@ function showPrompt(label, sub, keyLabel) {
   try {
     document.getElementById('qteLabel').textContent = label;
     document.getElementById('qteSub').textContent = sub || '';
-    document.getElementById('qteKey').textContent = keyLabel || 'Press SPACE';
+    document.getElementById('qteKey').textContent = keyLabel || 'Press SPACE or tap here';
     document.getElementById('qteBar').style.width = '100%';
     el.classList.remove('hidden');
   } catch (e) { /* prompt is best effort */ }
@@ -79,7 +79,7 @@ function finish(success) {
 export function runQTE(opts) {
   const o = opts || {};
   if (active) return false;
-  const el = showPrompt(o.label || 'NOW!', o.sub || '', o.keyLabel || 'Press SPACE');
+  const el = showPrompt(o.label || 'NOW!', o.sub || '', o.keyLabel || 'Press SPACE or tap here');
   if (!el) { try { if (o.onMiss) o.onMiss(); if (o.onDone) o.onDone(false); } catch (e) { /* ignore */ } return false; }
   const key = (o.key || ' ').toLowerCase();
   const windowMs = o.windowMs || 2500;
@@ -117,7 +117,7 @@ export function runQTE(opts) {
 export function runHoldQTE(opts) {
   const o = opts || {};
   if (active) return false;
-  const el = showPrompt(o.label || 'HOLD IT', o.sub || '', o.keyLabel || 'Hold SPACE');
+  const el = showPrompt(o.label || 'HOLD IT', o.sub || '', o.keyLabel || 'Hold SPACE or press and hold here');
   if (!el) { try { if (o.onDone) o.onDone(false); } catch (e) { /* ignore */ } return false; }
   const key = (o.key || ' ').toLowerCase();
   const holdMs = o.holdMs || 1200;

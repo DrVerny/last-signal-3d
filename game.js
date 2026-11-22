@@ -38,12 +38,12 @@ const state = {
   yaw: 0.23, pitch: 0, camZ: 0 // yaw 0.23 centres the relay in the default view
 };
 const OBJ = [
-  'Ride the 4 train - talk to Caleb',
-  'Survive the blackout - inspect the signal relay',
-  'Repair the relay (match the circuit)',
-  'Count the passengers and help Walter',
-  'Make a sealed choice: which line gets priority power',
-  'Find the RESET circuit board in the car'
+  'Ride the 4 train - talk to Caleb: click Caleb',
+  'Survive the blackout - inspect the signal relay: click the gold relay',
+  'Repair the relay (match the circuit): click the tiles to match the gold pattern',
+  'Count the passengers and help Walter: click the passengers, then Walter',
+  'Make a sealed choice: which line gets priority power - pick a choice',
+  'Find the RESET circuit board in the car: click the green RESET board'
 ];
 function setObjectives(doneCount) {
   document.getElementById('objList').innerHTML = OBJ.map((o, i) =>
@@ -1680,7 +1680,7 @@ function completeTrainRun(auto) {
   try {
     const ok = runHoldQTE({
       label: 'CLIMB OUT',
-      sub: 'Hold SPACE to climb out onto the platform.',
+      sub: 'Hold SPACE or press and hold here to climb out onto the platform.',
       holdMs: 1200, windowMs: 8000,
       onDone: () => { afterRunDialogue(); }
     });

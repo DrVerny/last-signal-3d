@@ -37,23 +37,23 @@ const state = {
   yaw: 0, pitch: 0, climbStep: 0, derrickDown: false, bombDisarmed: false, waterStable: false
 };
 const OBJ1 = [
-  'Reach the Rondout control station - talk to Caleb',
-  'Enter the valve room through the station door',
-  'Balance the pressure: all three lines to 70% or more',
-  'Choose which line runs reduced for 2 hours',
-  'Find the sabotage device - who built it?'
+  'Reach the Rondout control station - talk to Caleb: get out of the car, walk to Caleb',
+  'Enter the valve room through the station door: take the key beside the door, click the door handle',
+  'Balance the pressure: all three lines to 70% or more - click the valve wheels to raise each line',
+  'Choose which line runs reduced for 2 hours - pick a choice',
+  'Find the sabotage device - who built it? Click the device under the staircase'
 ];
 const OBJ2 = [
-  'Get past the guards - Caleb talks, Jade feeds him the jargon',
-  'Find the key card and the passphrase',
-  'Reroute the load before the logic bomb trips at 8:00 PM',
-  'Read what was left on the wall'
+  'Get past the guards - Caleb talks, Jade feeds him the jargon: walk up to the guards',
+  'Find the key card and the passphrase: click the key card on the guard belt, read the log book',
+  'Reroute the load before the logic bomb trips at 8:00 PM: click the SCADA terminal, set the feeders to total 100',
+  'Read what was left on the wall: click the manifesto on the wall'
 ];
 const OBJ3 = [
-  'Climb the maintenance catwalk to the upper deck',
-  'Cross the gap - Caleb freezes',
-  'Face Derrick Shaw on the bridge',
-  'Bring him down without breaking the bridge'
+  'Climb the maintenance catwalk to the upper deck: click the planks, then press and hold',
+  'Cross the gap - Caleb freezes: press SPACE or tap the prompt, then choose',
+  'Face Derrick Shaw on the bridge: click Derrick Shaw',
+  'Bring him down without breaking the bridge: pick a choice in the talk'
 ];
 function setObjectives(list, doneCount) {
   document.getElementById('objList').innerHTML = list.map((o, i) =>
@@ -2332,7 +2332,7 @@ function startArrival() {
   hideTakeRentalButton();
   setTimeOfDay('day'); // Rondout arrival is bright morning.
   currentPlaceKey = 'reservoir';
-  setObjectives(['Take the rental car to the water facility'], 0);
+  setObjectives(['Take the rental car to the water facility: walk to the rental car and click it'], 0);
   updateHUD();
   camera.position.set(ARRIVAL_VIEW.pos[0], ARRIVAL_VIEW.pos[1], ARRIVAL_VIEW.pos[2]);
   // Sync the stored ground position: coming from Act I the stored spot
@@ -4991,7 +4991,7 @@ function openScadaModal() {
       scadaQteDone = true;
       runQTE({
         label: 'SURGE SPIKE!',
-        sub: 'The load is spiking - press SPACE now to steady the feeders.',
+        sub: 'The load is spiking - press SPACE or tap here now to steady the feeders.',
         key: ' ', windowMs: 2500,
         onHit: () => { bombTime = Math.min(90, bombTime + 5); renderScada(); toast('Steady hands - +5 seconds on the bomb.'); },
         onMiss: () => { toast('The surge passes - keep rerouting.'); }
@@ -5199,7 +5199,7 @@ function completeDeckChase(auto) {
   hideActionBanner();
   try { for (const s of chaseSpools) s.mesh.visible = false; } catch (e) { /* ignore */ }
   if (auto) toast('The guards lose you in the dark. The catwalk is ahead.');
-  else toast('You reach the catwalk. Click the planks to climb - hold SPACE to pull yourself up.');
+  else toast('You reach the catwalk. Click the planks to climb - then hold SPACE or press and hold the prompt to pull yourself up.');
 }
 function updateDeckChase(dt) {
   if (!chaseActive) return;
@@ -5234,7 +5234,7 @@ function climbStep() {
   try {
     const ok = runHoldQTE({
       label: 'CLIMB - HAND OVER HAND',
-      sub: 'Hold SPACE to pull yourself up the catwalk. Release to rest, hold to climb.',
+      sub: 'Hold SPACE or press and hold here to pull yourself up the catwalk. Release to rest, hold to climb.',
       holdMs: 1200, windowMs: 8000,
       onDone: (done) => {
         climbHolding = false;
@@ -5268,7 +5268,7 @@ function gapChoice() {
   try {
     const ok = runQTE({
       label: 'CALEB FREEZES!',
-      sub: 'Press SPACE now to steady him before he falls back.',
+      sub: 'Press SPACE or tap here now to steady him before he falls back.',
       key: ' ', windowMs: 2500,
       onHit: () => { trust(1, 'steady hands at the gap'); gapChoiceDialogue(); },
       onMiss: () => { gapChoiceDialogue(); }
