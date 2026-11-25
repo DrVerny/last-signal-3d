@@ -320,6 +320,13 @@ function reparentCast(name, group, x, z, yaw) {
 function cloneCaleb(base, name, coatColor, group, x, z, yaw) {
   const g = base.group.clone(true);
   g.name = name;
+  // Cloning copies the base rotation through its quaternion, and the
+  // Euler comes back in the gimbal-lock alias (-PI, 0, -PI). That alias
+  // stands upright on its own, but anything that writes rotation.x/y
+  // alone (the gesture loop does, every frame) leaves rotation.z at
+  // -PI and flips the figure upside down under the floor. Reset to a
+  // clean Euler first; placeHuman sets the facing yaw below.
+  g.rotation.set(0, 0, 0);
   const coat = new THREE.MeshStandardMaterial({ color: coatColor, roughness: 0.85, metalness: 0.02 });
   g.traverse(o => { if (o.isMesh && o.material && o.material.name && o.material.name.indexOf('casualsuit') !== -1) o.material = coat; });
   g.children = g.children.filter(c => c.position.y <= 1.0); // drop Caleb's cap, brim and badge
@@ -389,7 +396,8 @@ async function loadHumans() {
     // Stand-ins from Caleb's scan, recoloured: the judge, Owen Marsh, the
     // Attorney General, an MTA official, Derrick in the gallery, and the
     // masked leader of the van ambush.
-    cloneCaleb(calebBase, 'judge', 0x1a1a1a, gCourt, 0, -4.5, 0);
+    const judgeG = cloneCaleb(calebBase, 'judge', 0x1a1a1a, gCourt, 0, -4.5, 0);
+    judgeG.position.y = 0.5; // stand on the raised dais behind the bench: head above the bench top
     cloneCaleb(calebBase, 'owen', 0x5a4632, gSafe, -2.5, -2, 0.4);
     cloneCaleb(calebBase, 'ag', 0x222226, gPress, 2.5, -3, Math.PI);
     cloneCaleb(calebBase, 'mta', 0x3a3a40, gControl, 3.5, -1, -0.6);
@@ -582,10 +590,15 @@ function buildCourt() {
     const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.6), new THREE.MeshStandardMaterial({ color: fx < 0 ? 0x1a3a8a : 0x8a1a1a, roughness: 0.9, side: THREE.DoubleSide }));
     flag.position.set(fx + (fx < 0 ? 0.45 : -0.45), 2.2, -4.6); gCourt.add(flag);
   }
-  // Gallery benches.
+  // Gallery benches. The backrest sits behind the sitter (south side)
+  // and low: a seated head is at about 1.3 m, so a back up to 1.1 m
+  // leaves heads and shoulders visible from the door. The old tall
+  // backs (top 1.45, on the north side, in front of a north-facing
+  // sitter) hid every gallery head from the player and the pews read
+  // as empty.
   for (const gz of [1, 3, 5]) for (const gx of [-3.5, 3.5]) {
     box(gCourt, 3, 0.45, 0.8, 0x3a2a18, gx, 0.55, gz, null, { roughness: 0.85 });
-    box(gCourt, 3, 0.9, 0.12, 0x3a2a18, gx, 1.0, gz + 0.35, null, { roughness: 0.85 });
+    box(gCourt, 3, 0.6, 0.12, 0x3a2a18, gx, 0.8, gz - 0.35, null, { roughness: 0.85 });
   }
   // Witness stand + defendant table.
   box(gCourt, 1.4, 1.1, 1.0, 0x4a3423, -3.2, 0.55, -2.5, null, { roughness: 0.8 });
@@ -691,7 +704,7 @@ function buildEscape() {
   const dr = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ color: 0xd8d8d8, roughness: 0.5 }));
   dr.position.set(0.62, 1.2, -3.05); dr.name = 'vanDoors'; dr.userData.clickable = true; bus.add(dr);
   vanDoorL = dl; vanDoorR = dr;
-  hitBox(gEscape, 2.8, 2.6, 0.8, 0, 1.3, -1.1, 'vanDoors');
+  vanDoorsHit = hitBox(gEscape, 2.8, 2.6, 0.8, 0, 1.3, -1.1, 'vanDoors');
   // The militants' van: a dark van rammed nose-first into the bus's left
   // flank. Its nose touches the bus side at (-1.3, 2.3), with a dust puff
   // at the impact point. It pulls away and drifts down the road once the
@@ -724,7 +737,7 @@ function buildEscape() {
   }
   // Rooftop (raised platform) with AC units and a parapet.
   box(gEscape, 10, 0.4, 8, 0x3a3f42, -4, 2.6, -6, null, { roughness: 1 });
-  hitBox(gEscape, 10, 1.4, 8, -4, 3.2, -6, 'rooftop');
+  rooftopHit = hitBox(gEscape, 10, 1.4, 8, -4, 3.2, -6, 'rooftop');
   box(gEscape, 10, 0.5, 0.3, 0x2a2f33, -4, 3.0, -10, null, { roughness: 1 });
   box(gEscape, 1.5, 1.0, 1.5, 0x5a5f62, -6, 3.3, -7, null, { roughness: 0.8, metalness: 0.4 });
   box(gEscape, 1.2, 0.8, 1.2, 0x4a4f52, -2, 3.2, -8, null, { roughness: 0.8, metalness: 0.4 });
@@ -767,6 +780,8 @@ function startEscapeTimer() {
 function stopEscapeTimer() { if (escapeTimer) { clearInterval(escapeTimer); escapeTimer = null; } }
 function startChapter3() {
   state.chapter = 3; state.escapeStep = 0; resetView(); hideToast();
+  if (rooftopHit) rooftopHit.visible = true; // the rooftop click target, hidden again once the player climbs up
+  if (vanDoorsHit) vanDoorsHit.visible = true; // the van-doors click target, hidden again once the doors open
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 3);
   reparentCast('jade', gEscape, -0.9, 3.5, 0);
   reparentCast('caleb', gEscape, 0.9, 3.5, 0);
@@ -794,6 +809,7 @@ function escapeStep(from) {
   if (state.escapeStep === 0) {
     state.escapeStep = 1;
     vanDoorL.position.x = -1.6; vanDoorR.position.x = 1.6; // doors ripped open
+    if (vanDoorsHit) vanDoorsHit.visible = false; // the big doors hitbox sits between the roof and the fire escape: left visible it swallows the later fire-escape click
     try { sfxDoor(); sfxBoom(); } catch (e) { /* ignore */ } // the doors tear off, the ram hits
     // Jade and Caleb step out of the back of the bus, by the leader.
     reparentCast('jade', gEscape, -1.2, -2.2, 0);
@@ -815,14 +831,15 @@ function escapeStep(from) {
     ], () => { startEscapeAction(); }); // the escape becomes an action run, not just clicks
   } else if (state.escapeStep === 1) {
     state.escapeStep = 2;
-    camY = 3.4; camera.position.set(-4, 3.4, -4);
+    camY = 3.4; camera.position.set(-4, 3.4, -4); setPlayerPos(-4, -4); // keep the teleport: beginPlayerFrame snaps the camera back to the stored position every frame
+    if (rooftopHit) rooftopHit.visible = false; // the player teleports inside this hitbox: left visible it swallows every later click, including the fire-escape click
     showDialogue([
       { who: 'System', text: 'Across the rooftop, past the AC units, the city spread out below. The leader stops at the edge. Below: a fire escape leading to an alley. A black SUV waits.' },
       { who: 'Leader', text: 'Down. Now.' }
     ], () => toast('Click the fire escape stairs to climb down.'));
   } else if (state.escapeStep === 2) {
     state.escapeStep = 3;
-    camY = 1.9; camera.position.set(5.5, 1.9, 2);
+    camY = 1.9; camera.position.set(5.5, 1.9, 2); setPlayerPos(5.5, 2); // keep the teleport: beginPlayerFrame snaps the camera back to the stored position every frame
     showDialogue([
       { who: 'System', text: 'Down the fire escape, into the alley. The SUV doors open. You pile in. The SUV peels out.' },
       { who: 'Caleb Bishop', text: 'No! But I would like to go on record saying this is insane!' },
@@ -841,7 +858,7 @@ function escapeStep(from) {
 // player clicks ahead the action syncs to the new step, so this beat can
 // never block progress. While a dialogue is open the action pauses.
 let escapeActionActive = false, escapePhase = 0, escapeInvuln = 0, escapeClimbing = false;
-let escapeMarkers = {}, escapeBarriers = [], escapeLight = null, escapeBeam = null, escapeBeamX = -4;
+let escapeMarkers = {}, escapeBarriers = [], escapeLight = null, escapeBeam = null, escapeBeamX = -4, rooftopHit = null, vanDoorsHit = null;
 function buildEscapeAction() {
   if (escapeMarkers.ladder) return;
   try {
@@ -935,7 +952,8 @@ function updateEscapeAction(dt) {
       if (dist < 1.3) {
         escapeClimb('CLIMB UP', 'Hold SPACE or press and hold here to climb the ladder to the rooftop.', () => {
           if (!escapeActionActive) return;
-          camY = 3.4; camera.position.set(-4, 3.4, -4);
+          camY = 3.4; camera.position.set(-4, 3.4, -4); setPlayerPos(-4, -4); // keep the teleport: beginPlayerFrame snaps the camera back to the stored position every frame
+          if (rooftopHit) rooftopHit.visible = false; // the player teleports inside this hitbox: left visible it swallows every later click, including the fire-escape click
           escapePhase = 2;
           if (escapeMarkers.ladder) escapeMarkers.ladder.visible = false;
           for (const b of escapeBarriers) b.mesh.visible = false;
@@ -962,7 +980,7 @@ function updateEscapeAction(dt) {
       if (dist < 1.3) {
         escapeClimb('CLIMB DOWN', 'Hold SPACE or press and hold here to climb down the fire escape.', () => {
           if (!escapeActionActive) return;
-          camY = 1.9; camera.position.set(5.5, 1.9, 2);
+          camY = 1.9; camera.position.set(5.5, 1.9, 2); setPlayerPos(5.5, 2); // keep the teleport: beginPlayerFrame snaps the camera back to the stored position every frame
           escapePhase = 3;
           if (escapeMarkers.fire) escapeMarkers.fire.visible = false;
           if (escapeLight) escapeLight.intensity = 0;
