@@ -168,6 +168,32 @@ export function metalTex(rx, ry, base) {
   }, rx, ry);
 }
 
+// Glossy car paint: the highlight is baked into the texture, because
+// with no env map in the scene a dark standard material goes flat
+// black no matter how low the metalness is. A broad soft sky
+// reflection across the upper half plus a crisp horizon line reads as
+// glossy paint from rear and side views.
+export function paintTex(rx, ry, base) {
+  const b = base || '#33383f';
+  return makeTex(256, 256, (ctx, w, h) => {
+    const rand = rng(71);
+    ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, 'rgba(255,255,255,0.32)');
+    g.addColorStop(0.35, 'rgba(255,255,255,0.08)');
+    g.addColorStop(0.55, 'rgba(0,0,0,0.05)');
+    g.addColorStop(1, 'rgba(0,0,0,0.30)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.38)'; ctx.fillRect(0, h * 0.30, w, 3);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(0, h * 0.30 + 3, w, 2);
+    for (let i = 0; i < 120; i++) {
+      ctx.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.06)';
+      ctx.fillRect(rand() * w, 0, 1, h);
+    }
+    speckle(ctx, w, h, rand, 400, '#c8ccd0', '#22262a');
+  }, rx, ry);
+}
+
 // Brushed steel: bright base with fine horizontal streaks and a soft
 // diagonal highlight. Rails, fire escape, tripod legs, barriers. The
 // streaks are strong enough to read on a small mesh at a distance.
@@ -216,25 +242,59 @@ export function glassTex(rx, ry) {
 // coarse and high-contrast on purpose: on a small flag at a few metres
 // a fine weave is sub-pixel and the cloth reads as a flat colour block.
 // The large-scale blotches and fold bands are what read at distance.
-export function fabricTex(rx, ry, base) {
+// Fabric: strong large-scale variation (dye blotches, wide fold
+// bands) so it reads as cloth at the distance the player actually
+// sees it from. The old 2 px weave was sub-pixel at 10 m and the
+// courtroom flags read as flat colour rectangles, and the hearing
+// advances before anyone can walk up close - so the fabric must read
+// from the gallery, not from a close-up that never happens. Optional
+// emblem variant, drawn once per flag (call sites must use repeat
+// 1,1 for emblems): 'stars' is a star canton, 'seal' is a gold ring
+// emblem. A gold fringe at the bottom edge and a header band at the
+// top frame the cloth.
+export function fabricTex(rx, ry, base, variant) {
   const b = base || '#5a2a2a';
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(113);
     ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       const x = rand() * w, y = rand() * h, r = 40 + rand() * 70;
       const g = ctx.createRadialGradient(x, y, 2, x, y, r);
-      g.addColorStop(0, rand() < 0.5 ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)');
+      g.addColorStop(0, rand() < 0.5 ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.18)');
       g.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
     }
-    for (let i = 0; i < 6; i++) {
-      const x = (i + 0.5) * w / 6 + (rand() - 0.5) * 12;
-      const g = ctx.createLinearGradient(x - 18, 0, x + 18, 0);
+    // Wide vertical fold bands: the large-scale light and shadow
+    // that reads as draped cloth from across the room.
+    for (let i = 0; i < 5; i++) {
+      const x = (i + 0.5) * w / 5 + (rand() - 0.5) * 10;
+      const g = ctx.createLinearGradient(x - 26, 0, x + 26, 0);
       g.addColorStop(0, 'rgba(0,0,0,0)');
-      g.addColorStop(0.5, i % 2 ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)');
+      g.addColorStop(0.5, i % 2 ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.24)');
       g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g; ctx.fillRect(x - 18, 0, 36, h);
+      ctx.fillStyle = g; ctx.fillRect(x - 26, 0, 52, h);
+    }
+    // Header band at the top, gold fringe at the bottom edge.
+    ctx.fillStyle = shade(b, 0.55); ctx.fillRect(0, 0, w, 10);
+    ctx.fillStyle = '#c8a83a'; ctx.fillRect(0, h - 14, w, 14);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    for (let x = 4; x < w; x += 8) ctx.fillRect(x, h - 14, 2, 14);
+    if (variant === 'stars') {
+      // Star canton in the upper hoist quarter: white stars on a
+      // deeper blue field.
+      ctx.fillStyle = shade(b, 0.7); ctx.fillRect(0, 10, w * 0.45, h * 0.5);
+      ctx.fillStyle = '#f2f2f2';
+      for (let r = 0; r < 4; r++) for (let c = 0; c < 5; c++) {
+        const sx = 14 + c * 22 + (r % 2 ? 11 : 0), sy = 26 + r * 28;
+        ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    if (variant === 'seal') {
+      // Gold ring emblem in the centre.
+      ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.arc(w / 2, h / 2 - 6, 42, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#d4af37';
+      ctx.beginPath(); ctx.arc(w / 2, h / 2 - 6, 14, 0, Math.PI * 2); ctx.fill();
     }
     ctx.fillStyle = 'rgba(0,0,0,0.16)';
     for (let y = 0; y < h; y += 2) ctx.fillRect(0, y, w, 1);
@@ -244,26 +304,44 @@ export function fabricTex(rx, ry, base) {
   }, rx, ry);
 }
 
-// Carpet: dense short fibre strokes in two close tones over a mottled
-// base. Press hall floor. The old version's fine dots were too faint to
-// read; the strokes are what make it carpet instead of a flat slab.
+// Carpet: large-scale tile pattern and long strong fibre strokes, so
+// it reads as carpet at the distance the player sees the floor from.
+// The old 2-3 px strokes at low alpha were sub-pixel at that distance
+// and the floor read as mottled dark slab. Each canvas holds 4x4
+// carpet tiles with per-tile tone variation and visible seams.
 export function carpetTex(rx, ry, base) {
-  const b = base || '#3a2a3e';
+  const b = base || '#6b5648';
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(127);
     ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
+    // Carpet tiles: 4x4 per canvas, alternating tone, dark seams.
+    // The tone gap is deliberately wide: a long fibre layer sits on
+    // top of the tiles, and a narrow gap gets buried under it.
+    for (let ty = 0; ty < 4; ty++) for (let tx = 0; tx < 4; tx++) {
+      ctx.fillStyle = (tx + ty) % 2 ? shade(b, 1.3) : shade(b, 0.62);
+      ctx.globalAlpha = 0.8;
+      ctx.fillRect(tx * 64, ty * 64, 64, 64);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    for (let i = 0; i <= 4; i++) {
+      ctx.fillRect(i * 64 - 1, 0, 2, h);
+      ctx.fillRect(0, i * 64 - 1, w, 2);
+    }
     for (let i = 0; i < 6; i++) {
       const x = rand() * w, y = rand() * h, r = 40 + rand() * 60;
       const g = ctx.createRadialGradient(x, y, 2, x, y, r);
-      g.addColorStop(0, rand() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)');
+      g.addColorStop(0, rand() < 0.5 ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.09)');
       g.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
     }
-    for (let i = 0; i < 9000; i++) {
-      ctx.strokeStyle = rand() < 0.5 ? shade(b, 1.35) : shade(b, 0.65);
-      ctx.globalAlpha = 0.12 + rand() * 0.18;
+    // Long fibre strokes in two contrasting tones, strong enough to
+    // read: length 6-14 px, alpha 0.2-0.4.
+    for (let i = 0; i < 6000; i++) {
+      ctx.strokeStyle = rand() < 0.5 ? shade(b, 1.5) : shade(b, 0.55);
+      ctx.globalAlpha = 0.2 + rand() * 0.2;
       ctx.lineWidth = 1;
-      const x = rand() * w, y = rand() * h, a = rand() * Math.PI, l = 2 + rand() * 3;
+      const x = rand() * w, y = rand() * h, a = rand() * Math.PI, l = 6 + rand() * 8;
       ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); ctx.stroke();
     }
     ctx.globalAlpha = 1;

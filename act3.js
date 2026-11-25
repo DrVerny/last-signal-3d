@@ -10,7 +10,7 @@ import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing } from './action.js';
 import { grantPayout } from './economy.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, resolveMove, addBoxCollider } from './player.js';
-import { concreteTex, asphaltTex, brickTex, woodTex, metalTex, steelTex, glassTex, fabricTex, carpetTex, plasterTex, roofTex, tileTex } from './textures.js';
+import { concreteTex, asphaltTex, brickTex, woodTex, metalTex, steelTex, glassTex, fabricTex, carpetTex, plasterTex, roofTex, tileTex, paintTex } from './textures.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -155,9 +155,14 @@ function glowTexture() {
   });
 }
 const GLOW_TEX = glowTexture();
-function signTexture(text, bg, fg, sub) {
+function signTexture(text, bg, fg, sub, panel) {
   return canvasTexture(512, 128, (ctx, w, h) => {
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    // panel: a semi-transparent fill (e.g. 'rgba(0,0,0,0.45)') for
+    // title cards that float over a scene - the scene shows through
+    // behind the text instead of a solid black rectangle. Wall signs
+    // omit it and keep the solid plaque.
+    ctx.fillStyle = panel || bg; ctx.fillRect(0, 0, w, h);
+    if (panel) { ctx.strokeStyle = 'rgba(212,175,55,0.85)'; ctx.lineWidth = 4; ctx.strokeRect(4, 4, w - 8, h - 8); }
     ctx.fillStyle = fg; ctx.font = 'bold 52px Arial'; ctx.textAlign = 'center'; ctx.fillText(text, w / 2, 62);
     if (sub) { ctx.font = '26px Arial'; ctx.fillText(sub, w / 2, 102); }
     ctx.textAlign = 'left';
@@ -599,12 +604,17 @@ function buildCourt() {
   hitBox(gCourt, 5.5, 2, 1.6, 0, 1.1, -4.2, 'bench');
   const seal = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.06, 20), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
   seal.rotation.x = Math.PI / 2; seal.position.set(0, 1.5, -3.55); gCourt.add(seal);
-  // Flags either side of the bench.
+  // Flags either side of the bench. Big enough and bold enough to
+  // read as fabric from the gallery, 11 m away: the old 0.9 m flags
+  // with a 2 px weave read as flat colour rectangles at that distance,
+  // and the hearing advances before anyone can walk up close. The
+  // emblem (stars on the blue flag, gold seal on the red) and the gold
+  // fringe are what make them read as flags, not coloured blocks.
   for (const fx of [-3.6, 3.6]) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.6, 8), stdMat({ color: 0xd4af37, metalness: 0.8, roughness: 0.4 }));
     pole.position.set(fx, 1.3, -4.6); gCourt.add(pole);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.6), new THREE.MeshStandardMaterial({ map: fabricTex(2, 1, fx < 0 ? '#1a3a8a' : '#8a1a1a'), roughness: 0.9, side: THREE.DoubleSide }));
-    flag.position.set(fx + (fx < 0 ? 0.45 : -0.45), 2.2, -4.6); gCourt.add(flag);
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.9), new THREE.MeshStandardMaterial({ map: fabricTex(1, 1, fx < 0 ? '#1a3a8a' : '#8a1a1a', fx < 0 ? 'stars' : 'seal'), roughness: 0.9, side: THREE.DoubleSide }));
+    flag.position.set(fx + (fx < 0 ? 0.7 : -0.7), 2.0, -4.6); gCourt.add(flag);
   }
   // Gallery benches. The backrest sits behind the sitter (south side)
   // and low: a seated head is at about 1.3 m, so a back up to 1.1 m
@@ -900,11 +910,16 @@ function buildEscape() {
   }
   hitBox(gEscape, 1.6, 3.0, 3.0, 1.5, 1.5, -0.5, 'fireEscape');
   // Black SUV waiting in the alley: glossy black paint, glass cabin.
-  // The old near-black paint at metalness 0.6 read as a flat black box
-  // from rear and side (no env map in the scene, so high metalness goes
-  // black). Lighter paint, lower metalness, brighter glass.
-  box(gEscape, 2.0, 1.4, 4.4, 0x0a0a0a, 5.5, 0.9, -1, 'suv', { map: metalTex(2, 1, '#191c22'), roughness: 0.3, metalness: 0.35 });
+  // The paint highlight is baked into the texture (paintTex): with no
+  // env map in the scene a dark standard material goes flat black no
+  // matter how low the metalness is. Chrome beltline and bumpers give
+  // the body its edges back.
+  box(gEscape, 2.0, 1.4, 4.4, 0x33383f, 5.5, 0.9, -1, 'suv', { map: paintTex(2, 1, '#33383f'), roughness: 0.22, metalness: 0.15 });
   box(gEscape, 1.8, 0.7, 2.2, 0x111418, 5.5, 1.9, -1, null, { map: glassTex(), roughness: 0.05, metalness: 0.3 });
+  const chromeTex = steelTex(1, 1, '#b8bcc0');
+  for (const sx of [-1.01, 1.01]) box(gEscape, 0.04, 0.08, 4.2, 0xb8bcc0, 5.5 + sx, 1.15, -1, null, { map: chromeTex, roughness: 0.3, metalness: 0.6 });
+  box(gEscape, 2.02, 0.2, 0.12, 0xb8bcc0, 5.5, 0.45, 1.22, null, { map: chromeTex, roughness: 0.3, metalness: 0.6 });
+  box(gEscape, 2.02, 0.2, 0.12, 0xb8bcc0, 5.5, 0.45, -3.22, null, { map: chromeTex, roughness: 0.3, metalness: 0.6 });
   hitBox(gEscape, 2.6, 2.2, 5.0, 5.5, 1.0, -1, 'suv');
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('QUEENSBORO PLAZA', '#111111', '#e8e8e8', 'AFTERNOON'), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 5.5, -8); gEscape.add(sign);
@@ -1212,8 +1227,11 @@ function startChapter4() {
 // ---------- Chapter 5: The Press Conference ----------
 let flashSprites = [];
 function buildPress() {
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), stdMat({ map: carpetTex(8, 8, '#4a4d55'), roughness: 1 }));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), stdMat({ map: carpetTex(8, 8, '#6b5648'), roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; gPress.add(ground);
+  // Red carpet runner to the podium: the unmistakable carpet signal.
+  // It runs from the crowd to the podium, passing under the barrier.
+  box(gPress, 2.2, 0.02, 9, 0x7a2020, 0, 0.01, 1.5, null, { map: carpetTex(1, 4, '#7a2020'), roughness: 1 });
   // Podium with microphones.
   box(gPress, 1.6, 1.2, 0.8, 0x2a2118, 0, 0.6, -2, 'podium', { map: woodTex(2, 1, '#3a2a18', '#241a10'), roughness: 0.7 });
   hitBox(gPress, 2.2, 1.8, 1.4, 0, 0.8, -2, 'podium');
@@ -1237,15 +1255,23 @@ function buildPress() {
     const fl = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
     fl.scale.set(1.6, 1.6, 1); fl.position.set(cx, 1.6, cz - 0.4); gPress.add(fl); flashSprites.push(fl);
   }
-  // Crowd: a row of simple dark figures (low boxes) behind a barrier.
-  // The barrier is bright brushed steel: at metalness 0.7 with no env
-  // map it went black and read as a row of dark bollards.
+  // Crowd: a row of press figures behind the barrier. They are PEOPLE,
+  // not bollards: varied shirts, skin tones, shoulders and heights, so
+  // the row reads as a crowd at a glance. The old version was seven
+  // identical near-black tapered cylinders with tan sphere heads, and
+  // in play it read as a row of bollards in front of the steel bar.
   box(gPress, 10, 0.9, 0.3, 0x8a8a8a, 0, 0.45, 4.5, null, { map: steelTex(4, 1, '#9aa0a6'), roughness: 0.45, metalness: 0.3 });
+  const pressShirts = ['#2a3a55', '#3a3a3a', '#4a3528', '#2a4030', '#4a2a30', '#35424a', '#24344d'];
+  const pressSkins = ['#2e1a0e', '#5a3a22', '#8a5a3a', '#a06a42', '#e8c8a8'];
   for (let i = 0; i < 7; i++) {
-    const p = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 1.1, 8), stdMat({ color: 0x2a2a30, roughness: 0.9 }));
-    p.position.set(-4.5 + i * 1.5, 0.55, 5.2); gPress.add(p);
-    const h = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), stdMat({ color: 0xc8a080, roughness: 0.8 }));
-    h.position.set(-4.5 + i * 1.5, 1.25, 5.2); gPress.add(h);
+    const hgt = 1.0 + (i % 3) * 0.08;
+    const shirt = pressShirts[i % pressShirts.length];
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, hgt, 8), stdMat({ color: shirt, roughness: 0.9 }));
+    p.position.set(-4.5 + i * 1.5, hgt / 2, 5.2); gPress.add(p);
+    const sh = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 0.3), stdMat({ color: shirt, roughness: 0.9 }));
+    sh.position.set(-4.5 + i * 1.5, hgt - 0.08, 5.2); gPress.add(sh);
+    const h = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), stdMat({ color: pressSkins[i % pressSkins.length], roughness: 0.8 }));
+    h.position.set(-4.5 + i * 1.5, hgt + 0.12, 5.2); gPress.add(h);
   }
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('STATE ATTORNEY GENERAL', '#111111', '#e8e8e8', 'PRESS CONFERENCE - 9:00 AM'), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 4.8, -4.6); gPress.add(sign);
@@ -1392,7 +1418,7 @@ function buildBridge() {
     const hl = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.3), new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a0, emissiveIntensity: 1.5 }));
     hl.position.set(12.37, 0.3, hz); trainMesh.add(hl);
   }
-  trainMesh.position.set(-30, 2.5, -30); trainMesh.name = 'train'; gBridge.add(trainMesh);
+  trainMesh.position.set(-30, 2.67, -30); trainMesh.name = 'train'; gBridge.add(trainMesh);
   // The train is solid: the track corridor it runs in.
   addBoxCollider(ch6Colliders, -45, -31.6, 45, -28.4);
   // The 4 train runs on a real track: a ballast deck, two steel rails and
@@ -1404,19 +1430,24 @@ function buildBridge() {
   const trackRailSteel = steelTex(20, 1);
   for (const rz of [-30.75, -29.25]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(90, 0.1, 0.08), stdMat({ map: trackRailSteel, metalness: 0.9, roughness: 0.25 }));
-    rail.position.set(0, 1.78, rz); gBridge.add(rail);
+    rail.position.set(0, 1.95, rz); gBridge.add(rail);
   }
-  // Sleepers: mid-brown wood, so the separate ties read against the dark
-  // ballast deck. The old near-black wood vanished into the deck.
+  // Sleepers: tall enough to stand proud of the ballast deck, so the
+  // separate ties read from the player's deck 30 m away. The old 0.08 m
+  // ties only poked 0.06 m above the ballast and vanished at a grazing
+  // angle, even after the round 2 re-tint. The rails sit on the ties
+  // and the train rides on the rails, so the whole stack rises
+  // together by 0.17 m: tie tops 1.90, rail tops 2.00, wheel bottoms
+  // 2.00, exactly as before.
   const tieWood = woodTex(1, 1, '#4a3220', '#2c1e10');
-  for (let sx = -44; sx <= 44; sx += 1.4) box(gBridge, 0.3, 0.08, 2.2, 0x1a1a1a, sx, 1.72, -30, null, { map: tieWood, roughness: 1 });
+  for (let sx = -44; sx <= 44; sx += 1.4) box(gBridge, 0.45, 0.2, 2.6, 0x1a1a1a, sx, 1.8, -30, null, { map: tieWood, roughness: 1 });
   const pillarConcrete = concreteTex(1, 2);
   for (const px of [-30, -10, 10, 30]) box(gBridge, 0.8, 4, 0.8, 0x3a3f42, px, -0.5, -30, null, { map: pillarConcrete, roughness: 0.95 });
   // The click target rides WITH the train: the old static hit box sat at
   // x=0 while the train moved, so only the leading car was clickable when
   // it happened to pass x=0. Now the whole train is clickable anywhere.
   hitBox(trainMesh, 15, 3, 3, 5.1, 0, 0, 'train');
-  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('WILLIAMSBURG BRIDGE - DAWN', '#111111', '#ffd166', 'ONE MONTH LATER'), transparent: true, depthWrite: false }));
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('WILLIAMSBURG BRIDGE - DAWN', '#111111', '#ffd166', 'ONE MONTH LATER', 'rgba(0,0,0,0.45)'), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 6, -14); gBridge.add(sign);
   blobShadow(gBridge, -0.8, 4, 0.9, 0.9, 0.55);
   blobShadow(gBridge, 0.8, 4, 0.9, 0.9, 0.55);
