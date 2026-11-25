@@ -498,6 +498,9 @@ function buildControl() {
   hitBox(gControl, 6, 2.2, 0.6, 0, 3.6, -4.6, 'ebs');
   // Terminal desk where the fix is entered.
   box(gControl, 3.2, 0.9, 1.0, 0x2a2f33, 0, 0.45, 1.5, null, { roughness: 0.6, metalness: 0.3 });
+  // The desk is solid: the player stops at its edge instead of walking
+  // straight through it and into the terminal screen.
+  addBoxCollider(ch1Colliders, -1.6, 1.0, 1.6, 2.0);
   const term = box(gControl, 1.6, 1.0, 0.1, 0x111111, 0, 1.3, 1.4, 'terminal', { roughness: 0.3 });
   term.rotation.x = -0.2;
   const termScreen = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.8), new THREE.MeshStandardMaterial({ color: 0x061a12, emissive: 0x2aff7a, emissiveIntensity: 0.6, roughness: 0.3 }));
@@ -1385,18 +1388,20 @@ window.__ls3.interact = interact;
 const chapterTargets = {};
 
 // ---------- Wall colliders (see player.js) ----------
-// Only two Act III obstacles sit inside the walkable bounds and are
-// solid enough to block the player: the police bus in the Ch 3 escape
-// street and the podium in the Ch 5 press hall. Everything else is
-// either beyond the view bounds (the Ch 1/2/4 back walls, the Ch 6
-// parapets), a click target the player must reach (the SUV, whose
-// arrival trigger is a 1.5 m radius around its centre, and the fire
-// escape), or a low rail the player steps over (the press crowd
-// barrier, and the Ch 3 militant van, which drives away). No Act III
-// scene has a doorway: exits are by click, dialogue or timer.
+// Only three Act III obstacles sit inside the walkable bounds and are
+// solid enough to block the player: the terminal desk in the Ch 1 control
+// room, the police bus in the Ch 3 escape street and the podium in the
+// Ch 5 press hall. Everything else is either beyond the view bounds (the
+// Ch 1/2/4 back walls, the Ch 6 parapets), a click target the player must
+// reach (the SUV, whose arrival trigger is a 1.5 m radius around its
+// centre, and the fire escape), or a low rail the player steps over (the
+// press crowd barrier, and the Ch 3 militant van, which drives away). No
+// Act III scene has a doorway: exits are by click, dialogue or timer.
+let ch1Colliders = [];
 let ch3Colliders = [];
 let ch5Colliders = [];
 function act3Colliders() {
+  if (state.chapter === 1) return ch1Colliders;
   if (state.chapter === 3) return ch3Colliders;
   if (state.chapter === 5) return ch5Colliders;
   return [];
