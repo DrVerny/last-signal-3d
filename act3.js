@@ -10,7 +10,7 @@ import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing } from './action.js';
 import { grantPayout } from './economy.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, resolveMove, addBoxCollider } from './player.js';
-import { concreteTex, asphaltTex, brickTex, woodTex, metalTex, steelTex, glassTex, fabricTex, carpetTex, plasterTex, roofTex, tileTex, paintTex } from './textures.js';
+import { concreteTex, asphaltTex, brickTex, woodTex, metalTex, steelTex, glassTex, cabinGlassTex, fabricTex, carpetTex, plasterTex, roofTex, tileTex, paintTex } from './textures.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -163,8 +163,28 @@ function signTexture(text, bg, fg, sub, panel) {
     // omit it and keep the solid plaque.
     ctx.fillStyle = panel || bg; ctx.fillRect(0, 0, w, h);
     if (panel) { ctx.strokeStyle = 'rgba(212,175,55,0.85)'; ctx.lineWidth = 4; ctx.strokeRect(4, 4, w - 8, h - 8); }
-    ctx.fillStyle = fg; ctx.font = 'bold 52px Arial'; ctx.textAlign = 'center'; ctx.fillText(text, w / 2, 62);
-    if (sub) { ctx.font = '26px Arial'; ctx.fillText(sub, w / 2, 102); }
+    // Auto-fit: the old fixed 52px font overflowed the 512px canvas for
+    // every long sign (WILLIAMSBURG BRIDGE - DAWN is ~820px at 52px),
+    // so both ends clipped - the Ch 6 card read "AMSBURG BRIDGE".
+    // Shrink until the text fits with a margin. measureText is real in
+    // the browser; fall back to a per-character estimate when it is not
+    // (the harness stub canvas returns a constant 10 for every string).
+    ctx.fillStyle = fg; ctx.textAlign = 'center';
+    const fitFont = (t, maxSize, weight) => {
+      let s = maxSize;
+      const widthAt = (size) => {
+        ctx.font = (weight ? weight + ' ' : '') + size + 'px Arial';
+        let tw = 0;
+        try { tw = ctx.measureText(t).width; } catch (e) { tw = 0; }
+        if (!tw || tw < t.length * 4) tw = t.length * size * 0.58;
+        return tw;
+      };
+      while (s > 18 && widthAt(s) > w - 32) s -= 2;
+      ctx.font = (weight ? weight + ' ' : '') + s + 'px Arial';
+      return s;
+    };
+    fitFont(text, 52, 'bold'); ctx.fillText(text, w / 2, 62);
+    if (sub) { fitFont(sub, 26, ''); ctx.fillText(sub, w / 2, 102); }
     ctx.textAlign = 'left';
   });
 }
@@ -915,7 +935,11 @@ function buildEscape() {
   // matter how low the metalness is. Chrome beltline and bumpers give
   // the body its edges back.
   box(gEscape, 2.0, 1.4, 4.4, 0x33383f, 5.5, 0.9, -1, 'suv', { map: paintTex(2, 1, '#33383f'), roughness: 0.22, metalness: 0.15 });
-  box(gEscape, 1.8, 0.7, 2.2, 0x111418, 5.5, 1.9, -1, null, { map: glassTex(), roughness: 0.05, metalness: 0.3 });
+  // Cabin: bright sky-blue glass, stepped in 0.2 m per side from the
+  // body so it reads as a greenhouse, not more bodywork. The old dark
+  // glass (#1a2836) was darker than the glossy body and vanished into
+  // it from the rear view at 3 m - the only view the player gets.
+  box(gEscape, 1.6, 0.7, 2.2, 0x111418, 5.5, 1.9, -1, null, { map: cabinGlassTex(), roughness: 0.05, metalness: 0.15 });
   const chromeTex = steelTex(1, 1, '#b8bcc0');
   for (const sx of [-1.01, 1.01]) box(gEscape, 0.04, 0.08, 4.2, 0xb8bcc0, 5.5 + sx, 1.15, -1, null, { map: chromeTex, roughness: 0.3, metalness: 0.6 });
   box(gEscape, 2.02, 0.2, 0.12, 0xb8bcc0, 5.5, 0.45, 1.22, null, { map: chromeTex, roughness: 0.3, metalness: 0.6 });
@@ -1377,6 +1401,14 @@ function buildBridge() {
     const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 30, 8), stdMat({ map: deckRailSteel, metalness: 0.85, roughness: 0.35 }));
     rail.rotation.x = Math.PI / 2; rail.position.set(sx, 1.1, -2); gBridge.add(rail);
   }
+  // Posts under the deck handrails: the old rails were floating 30 m
+  // cylinders with nothing under them, so from the deck they read as
+  // continuous bars. Real bridge railings have posts.
+  for (const sx of [-1.9, 1.9]) {
+    for (let pz = -16; pz <= 12; pz += 2.5) {
+      box(gBridge, 0.08, 1.1, 0.08, 0x8a9094, sx, 0.55, pz, null, { map: deckRailSteel, metalness: 0.85, roughness: 0.35 });
+    }
+  }
   // The 4 train crossing on a distant bridge, full of passengers, moving.
   // Shaped cars, not plain boxes: a roof, lit windows on both sides, a
   // belt stripe, and two bogies per car with visible round wheels and
@@ -1432,23 +1464,27 @@ function buildBridge() {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(90, 0.1, 0.08), stdMat({ map: trackRailSteel, metalness: 0.9, roughness: 0.25 }));
     rail.position.set(0, 1.95, rz); gBridge.add(rail);
   }
-  // Sleepers: tall enough to stand proud of the ballast deck, so the
-  // separate ties read from the player's deck 30 m away. The old 0.08 m
-  // ties only poked 0.06 m above the ballast and vanished at a grazing
-  // angle, even after the round 2 re-tint. The rails sit on the ties
-  // and the train rides on the rails, so the whole stack rises
-  // together by 0.17 m: tie tops 1.90, rail tops 2.00, wheel bottoms
-  // 2.00, exactly as before.
-  const tieWood = woodTex(1, 1, '#4a3220', '#2c1e10');
-  for (let sx = -44; sx <= 44; sx += 1.4) box(gBridge, 0.45, 0.2, 2.6, 0x1a1a1a, sx, 1.8, -30, null, { map: tieWood, roughness: 1 });
+  // Sleepers: light warm wood, wider and closer together, so the
+  // separate ties read from the player's deck 30 m away. The round 3
+  // ties were dark brown on a dark ballast deck and their 0.45x0.2 m
+  // end faces vanished at that distance - the trackside view passed
+  // but the deck view saw only continuous bars. Tie tops stay 1.90,
+  // so the rails (tops 2.00) and the train do not move.
+  const tieWood = woodTex(1, 1, '#8a6a42', '#5a3a22');
+  for (let sx = -44; sx <= 44; sx += 1.0) box(gBridge, 0.6, 0.25, 2.6, 0x1a1a1a, sx, 1.775, -30, null, { map: tieWood, roughness: 1 });
   const pillarConcrete = concreteTex(1, 2);
   for (const px of [-30, -10, 10, 30]) box(gBridge, 0.8, 4, 0.8, 0x3a3f42, px, -0.5, -30, null, { map: pillarConcrete, roughness: 0.95 });
   // The click target rides WITH the train: the old static hit box sat at
   // x=0 while the train moved, so only the leading car was clickable when
   // it happened to pass x=0. Now the whole train is clickable anywhere.
   hitBox(trainMesh, 15, 3, 3, 5.1, 0, 0, 'train');
-  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('WILLIAMSBURG BRIDGE - DAWN', '#111111', '#ffd166', 'ONE MONTH LATER', 'rgba(0,0,0,0.45)'), transparent: true, depthWrite: false }));
-  sign.scale.set(5, 1.25, 1); sign.position.set(0, 6, -14); gBridge.add(sign);
+  // Title card: lighter panel (0.30, was 0.45) and lowered to y 4.2 so
+  // the sun glow sits behind it from the deck - at y 6 the sightline
+  // through the card passed above the glow, so even a translucent
+  // panel read as opaque dark. The auto-fit in signTexture keeps the
+  // full WILLIAMSBURG BRIDGE - DAWN on the card.
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('WILLIAMSBURG BRIDGE - DAWN', '#111111', '#ffd166', 'ONE MONTH LATER', 'rgba(0,0,0,0.30)'), transparent: true, depthWrite: false }));
+  sign.scale.set(5, 1.25, 1); sign.position.set(0, 4.2, -14); gBridge.add(sign);
   blobShadow(gBridge, -0.8, 4, 0.9, 0.9, 0.55);
   blobShadow(gBridge, 0.8, 4, 0.9, 0.9, 0.55);
 }

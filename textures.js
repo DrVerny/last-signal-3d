@@ -237,6 +237,35 @@ export function glassTex(rx, ry) {
   }, rx, ry);
 }
 
+// Cabin glass for the escape SUV: much brighter sky-blue glass than
+// the dark window glass used elsewhere. The cabin sits on a glossy
+// black body and the player only ever sees it from the rear/side at
+// 3 m, so the glass must be clearly LIGHTER than the body - the old
+// dark glass (#1a2836) vanished into the black paint and the cabin
+// read as more bodywork. Bright sky gradient, a strong white sky band
+// at the top and bold diagonal reflections.
+export function cabinGlassTex(rx, ry) {
+  return makeTex(256, 256, (ctx, w, h) => {
+    const rand = rng(131);
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, '#a8c8e8');
+    g.addColorStop(0.45, '#5a84ac');
+    g.addColorStop(1, '#2c4a68');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    const sky = ctx.createLinearGradient(0, 0, 0, h * 0.35);
+    sky.addColorStop(0, 'rgba(230,242,252,0.85)'); sky.addColorStop(1, 'rgba(230,242,252,0)');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, w, h * 0.35);
+    for (let i = 0; i < 4; i++) {
+      ctx.fillStyle = 'rgba(255,255,255,' + (0.35 + rand() * 0.2) + ')';
+      ctx.beginPath();
+      const x0 = rand() * w;
+      ctx.moveTo(x0, 0); ctx.lineTo(x0 + 30, 0); ctx.lineTo(x0 - 70, h); ctx.lineTo(x0 - 100, h);
+      ctx.closePath(); ctx.fill();
+    }
+    speckle(ctx, w, h, rand, 150, '#c8dcec', '#1a3048');
+  }, rx, ry);
+}
+
 // Woven fabric: crosshatch weave over a dyed base, with dye variation
 // and hanging folds. Flags, cot canvas, crowd clothing. The weave is
 // coarse and high-contrast on purpose: on a small flag at a few metres
