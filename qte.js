@@ -46,24 +46,29 @@ function hidePrompt() {
   } catch (e) { /* ignore */ }
 }
 
-function cleanup() {
+function cleanup(st) {
   if (rafId) { try { cancelAnimationFrame(rafId); } catch (e) { /* ignore */ } rafId = 0; }
-  if (active) {
-    try { document.removeEventListener('keydown', active.onKey, true); } catch (e) { /* ignore */ }
-    try { document.removeEventListener('keyup', active.onKeyUp, true); } catch (e) { /* ignore */ }
-    try { document.removeEventListener('pointerdown', active.onDown, true); } catch (e) { /* ignore */ }
-    try { document.removeEventListener('pointerup', active.onUp, true); } catch (e) { /* ignore */ }
-    try { document.removeEventListener('pointercancel', active.onUp, true); } catch (e) { /* ignore */ }
-    try { document.removeEventListener('touchstart', active.onDown, true); } catch (e) { /* ignore */ }
-    try { document.removeEventListener('touchend', active.onUp, true); } catch (e) { /* ignore */ }
-    try { document.removeEventListener('touchcancel', active.onUp, true); } catch (e) { /* ignore */ }
+  // The state to clean MUST be passed in: finish() clears `active`
+  // first, so reading `active` here used to see null and skip every
+  // removeEventListener - stale document handlers then stayed attached
+  // for the rest of the session, calling preventDefault() on every
+  // later pointerdown/touchstart. That leak is live on the site now.
+  const a = st || active;
+  if (a) {
+    try { document.removeEventListener('keydown', a.onKey, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('keyup', a.onKeyUp, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('pointerdown', a.onDown, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('pointerup', a.onUp, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('pointercancel', a.onUp, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('touchstart', a.onDown, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('touchend', a.onUp, true); } catch (e) { /* ignore */ }
+    try { document.removeEventListener('touchcancel', a.onUp, true); } catch (e) { /* ignore */ }
     const el = document.getElementById('qtePrompt');
     if (el) {
-      try { el.removeEventListener('pointerdown', active.onDown); } catch (e) { /* ignore */ }
-      try { el.removeEventListener('pointerup', active.onUp); } catch (e) { /* ignore */ }
-      try { el.removeEventListener('pointerleave', active.onUp); } catch (e) { /* ignore */ }
+      try { el.removeEventListener('pointerdown', a.onDown); } catch (e) { /* ignore */ }
+      try { el.removeEventListener('pointerup', a.onUp); } catch (e) { /* ignore */ }
     }
-    active = null;
+    if (active === a) active = null;
   }
   hidePrompt();
 }
@@ -72,7 +77,7 @@ function finish(success) {
   if (!active) return;
   const a = active;
   active = null;
-  cleanup();
+  cleanup(a);
   try {
     if (success) { try { sfxQteGood(); } catch (e) { /* ignore */ } if (a.onHit) a.onHit(); }
     else { try { sfxQteMiss(); } catch (e) { /* ignore */ } if (a.onMiss) a.onMiss(); }
@@ -134,7 +139,11 @@ export function runHoldQTE(opts) {
   const windowMs = o.windowMs || 8000;
   const deadline = Date.now() + windowMs;
   const bar = document.getElementById('qteBar');
-  let progress = 0, held = false, lastT = Date.now();
+  // startHeld: the finger/key that triggered this prompt is already
+  // down (a press-and-hold on the catwalk planks starts the climb
+  // directly). That press fired before these listeners were added,
+  // so without this the hold would only start on the NEXT press.
+  let progress = 0, held = !!o.startHeld, lastT = Date.now();
   const state = { onHit: null, onMiss: null, onDone: o.onDone, onKey: null, onDown: null, onUp: null, onKeyUp: null };
   active = state;
   const setBar = () => { try { if (bar) bar.style.width = (progress * 100) + '%'; } catch (e) { /* ignore */ } };
@@ -152,13 +161,20 @@ export function runHoldQTE(opts) {
   try { document.addEventListener('keyup', state.onKeyUp, true); } catch (e) { /* ignore */ }
   try { el.addEventListener('pointerdown', state.onDown); } catch (e) { /* ignore */ }
   try { el.addEventListener('pointerup', state.onUp); } catch (e) { /* ignore */ }
-  try { el.addEventListener('pointerleave', state.onUp); } catch (e) { /* ignore */ }
+  // No pointerleave cancel: a finger held on the prompt drifts a
+  // little, and drifting off the edge of the small prompt box used to
+  // end the hold and drain the bar - on a phone that read as the
+  // climb slipping back for no reason. Only lifting the finger ends it.
   // Touch: press and hold anywhere on screen counts, so a finger does
   // not have to stay exactly on the prompt box to keep climbing.
   try { document.addEventListener('pointerdown', state.onDown, true); } catch (e) { /* ignore */ }
   try { document.addEventListener('pointerup', state.onUp, true); } catch (e) { /* ignore */ }
   try { document.addEventListener('pointercancel', state.onUp, true); } catch (e) { /* ignore */ }
-  try { document.addEventListener('touchstart', state.onDown, true); } catch (e) { /* ignore */ }
+  // passive:false so preventDefault() actually stops the long-press
+  // callout / scroll that a 1.2 s finger hold triggers on a phone;
+  // a document touchstart listener is passive by default on mobile
+  // Chrome, and the cancelled touch used to end the hold mid-climb.
+  try { document.addEventListener('touchstart', state.onDown, { capture: true, passive: false }); } catch (e) { /* ignore */ }
   try { document.addEventListener('touchend', state.onUp, true); } catch (e) { /* ignore */ }
   try { document.addEventListener('touchcancel', state.onUp, true); } catch (e) { /* ignore */ }
   const tick = () => {

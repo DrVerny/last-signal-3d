@@ -50,7 +50,7 @@ const OBJ2 = [
   'Read what was left on the wall: click the manifesto on the wall'
 ];
 const OBJ3 = [
-  'Climb the maintenance catwalk to the upper deck: click the planks, then press and hold',
+  'Climb the maintenance catwalk to the upper deck: press and hold the planks',
   'Cross the gap - Caleb freezes: press SPACE or tap the prompt, then choose',
   'Face Derrick Shaw on the bridge: click Derrick Shaw',
   'Bring him down without breaking the bridge: pick a choice in the talk'
@@ -5785,7 +5785,7 @@ function startMission3() {
   showDialogue([
     { who: 'Jade Morales', text: 'Eleven-thirty PM. Verrazzano-Narrows Bridge, upper deck. Derrick Shaw is up there with four shaped charges on the main cables - not enough to drop the bridge, enough to close it for months.' },
     { who: 'Caleb Bishop', text: 'And he is live-streaming. Full public audit of all city infrastructure in forty-eight hours, or he detonates.' },
-    { who: 'Jade Morales', text: 'My dad welded this bridge. We climb the maintenance catwalk. Click the catwalk planks to climb - and mind the gap.' }
+    { who: 'Jade Morales', text: 'My dad welded this bridge. We climb the maintenance catwalk. Press and hold the catwalk planks to climb - and mind the gap.' }
   ], () => { startDeckChase(); });
   });
 }
@@ -5812,7 +5812,7 @@ function completeDeckChase(auto) {
   hideActionBanner();
   try { for (const s of chaseSpools) s.mesh.visible = false; } catch (e) { /* ignore */ }
   if (auto) toast('The guards lose you in the dark. The catwalk is ahead.');
-  else toast('You reach the catwalk. Click the planks to climb - then hold SPACE or press and hold the prompt to pull yourself up.');
+  else toast('You reach the catwalk. Press and hold the planks to climb - keep holding until the bar fills.');
 }
 function updateDeckChase(dt) {
   if (!chaseActive) return;
@@ -5840,15 +5840,15 @@ function updateDeckChase(dt) {
 // to pull yourself up. Releasing pauses the pull; the window is generous
 // and a slip just means trying again - never a fail state, never blocked.
 let climbHolding = false, gapQteDone = false, gapActive = false;
-function climbStep() {
+function climbStep(startHeld) {
   if (state.climbStep >= 3) { gapChoice(); return; }
   if (climbHolding) return;
   climbHolding = true;
   try {
     const ok = runHoldQTE({
       label: 'CLIMB - HAND OVER HAND',
-      sub: 'Hold SPACE or press and hold here to pull yourself up the catwalk. Release to rest, hold to climb.',
-      holdMs: 1200, windowMs: 8000,
+      sub: 'Press and hold here - or keep holding the planks - to pull yourself up the catwalk. Release to rest, hold to climb.',
+      holdMs: 1200, windowMs: 8000, startHeld: !!startHeld,
       onDone: (done) => {
         climbHolding = false;
         if (done) advanceClimb();
@@ -5869,7 +5869,7 @@ function advanceClimb() {
   ];
   showDialogue([{ who: 'System', text: lines[state.climbStep - 1] }], () => {
     if (state.climbStep === 3) { setObjectives(OBJ3, 1); gapChoice(); }
-    else toast('Click the catwalk planks to keep climbing.');
+    else toast('Press and hold the catwalk planks to keep climbing.');
   });
 }
 function gapChoice() {
@@ -6068,6 +6068,37 @@ canvas.addEventListener('pointerup', e => {
   lastTapAt = Date.now();
   handleTap(e.clientX, e.clientY);
 });
+// Press-and-hold on the catwalk starts the climb with the same finger.
+// On a phone the natural gesture is to press the planks and keep
+// holding, but the old code only started the hold on the *next* press,
+// after the tap that opened the prompt - so a hold on the planks did
+// nothing visible and the climb looked broken. A quick tap (<350 ms)
+// still goes through the normal click path above; a drag still looks
+// around (movement over 10 px cancels the timer); the chase and any
+// open dialogue block it, as they block taps.
+let catwalkHoldTimer = 0, catwalkHoldX = 0, catwalkHoldY = 0;
+canvas.addEventListener('pointerdown', e => {
+  if (!actActive || state.mission !== 3 || chaseActive || climbHolding || state.climbStep >= 3) return;
+  if (!document.getElementById('dialogue').classList.contains('hidden')) return;
+  if (!document.getElementById('valveModal').classList.contains('hidden')) return;
+  if (!document.getElementById('scadaModal').classList.contains('hidden')) return;
+  mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hits = ray.intersectObjects([window._catwalkHit, ...(window._catwalkPlanks || [])].filter(t => t && t.visible !== false), false);
+  if (!hits.length) return;
+  catwalkHoldX = e.clientX; catwalkHoldY = e.clientY;
+  clearTimeout(catwalkHoldTimer);
+  catwalkHoldTimer = setTimeout(() => {
+    catwalkHoldTimer = 0;
+    if (document.getElementById('dialogue').classList.contains('hidden')) climbStep(true);
+  }, 350);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!catwalkHoldTimer) return;
+  if (Math.abs(e.clientX - catwalkHoldX) + Math.abs(e.clientY - catwalkHoldY) > 10) { clearTimeout(catwalkHoldTimer); catwalkHoldTimer = 0; }
+});
+canvas.addEventListener('pointerup', () => { if (catwalkHoldTimer) { clearTimeout(catwalkHoldTimer); catwalkHoldTimer = 0; } });
+canvas.addEventListener('pointercancel', () => { if (catwalkHoldTimer) { clearTimeout(catwalkHoldTimer); catwalkHoldTimer = 0; } });
 // Distance from the PLAYER (his ground position) to a point. Click
 // handlers run outside the animate loop, where camera.position is
 // the render camera - up to 4 m behind him in third person - so

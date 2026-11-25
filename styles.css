@@ -72,7 +72,7 @@
 #flashBtn{position:fixed;bottom:152px;right:12px;z-index:7;background:rgba(8,14,20,.85);color:#ffd166;border:1px solid #4a3f1e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:11px;letter-spacing:1px}
 #flashBtn:hover{background:#1d2a33}
 #flashBtn.flash-on{border-color:#ffd166;background:#2a2410}
-#qtePrompt{position:fixed;left:50%;top:22%;transform:translateX(-50%);z-index:25;background:rgba(8,14,20,.95);border:2px solid #ffd166;border-radius:12px;padding:16px 24px;text-align:center;min-width:280px;max-width:92vw;cursor:pointer}
+#qtePrompt{position:fixed;left:50%;top:22%;transform:translateX(-50%);z-index:25;background:rgba(8,14,20,.95);border:2px solid #ffd166;border-radius:12px;padding:16px 24px;text-align:center;min-width:280px;max-width:92vw;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 #qteLabel{color:#ffd166;font-weight:bold;font-size:22px;letter-spacing:2px}
 #qteSub{color:#e8e8e8;font-size:14px;margin-top:6px;line-height:1.4}
 #qteBarWrap{height:10px;background:#1a2a33;border-radius:5px;overflow:hidden;margin-top:12px}
