@@ -656,6 +656,50 @@ let policeLightL = null, policeLightR = null; // flashing roof bar on the police
 let militantVan = null; // the militants' van, animated in the chase
 let ramPuff = null; // dust at the spot where the van rammed the bus
 const dustPuffs = []; // drifting dust sprites, reused
+// A real wheel: a dark tyre with a lighter steel hubcap and a sidewall
+// ring on both faces, so it reads as a wheel from the side instead of a
+// flat black disc buried under the body. axis 'x' is for road vehicles
+// (axle across the body); axis 'z' is for the train (axle across the track).
+function makeWheel(r, w, axis) {
+  const g = new THREE.Group();
+  const tyre = new THREE.Mesh(new THREE.CylinderGeometry(r, r, w, 20), stdMat({ color: 0x0d0d0d, roughness: 0.95 }));
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.5, r * 0.5, w + 0.06, 16), stdMat({ color: 0xa8adb2, metalness: 0.8, roughness: 0.35 }));
+  if (axis === 'z') { tyre.rotation.x = Math.PI / 2; hub.rotation.x = Math.PI / 2; }
+  else { tyre.rotation.z = Math.PI / 2; hub.rotation.z = Math.PI / 2; }
+  tyre.castShadow = true; g.add(tyre); g.add(hub);
+  for (const s of [-1, 1]) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(r * 0.72, r * 0.07, 8, 20), stdMat({ color: 0x2e2e2e, roughness: 0.9 }));
+    if (axis === 'z') ring.position.z = s * (w / 2 + 0.01);
+    else { ring.rotation.y = Math.PI / 2; ring.position.x = s * (w / 2 + 0.01); }
+    g.add(ring);
+  }
+  return g;
+}
+// A fender arch over a road wheel: a half-torus in the wheel plane, top
+// half only, in the body colour, so the wheel sits in an arch instead of
+// disappearing under a flat body side.
+function makeFenderArch(r, color) {
+  const arch = new THREE.Mesh(new THREE.TorusGeometry(r, 0.09, 8, 16, Math.PI), stdMat({ color, roughness: 0.5, metalness: 0.25 }));
+  arch.rotation.y = Math.PI / 2;
+  return arch;
+}
+// The militant van is solid: a live axis-aligned box that follows it.
+// The van is parked against the bus at first, then pulls away and drifts
+// down the road right across the player's run to the ladder, so without
+// this it drives straight through him. Updated every frame in
+// updateVanChase and once at build; act3Colliders() includes it only
+// while the player is on the street (on the rooftop he is above it).
+const vanCollider = { x0: 0, z0: 0, x1: 0, z1: 0 };
+function updateVanCollider() {
+  if (!militantVan) return;
+  const th = militantVan.rotation.y;
+  const hw = 1.1 * Math.abs(Math.cos(th)) + 2.3 * Math.abs(Math.sin(th));
+  const hd = 1.1 * Math.abs(Math.sin(th)) + 2.3 * Math.abs(Math.cos(th));
+  vanCollider.x0 = militantVan.position.x - hw;
+  vanCollider.x1 = militantVan.position.x + hw;
+  vanCollider.z0 = militantVan.position.z - hd;
+  vanCollider.z1 = militantVan.position.z + hd;
+}
 // The militant van's chase: rammed into the bus, then it pulls back, turns
 // onto the road and drifts away down the street, looping behind the camera.
 const vanChase = { phase: 'rammed', t: 0, fromX: 0, fromZ: 0, fromYaw: 0, toX: 0, toZ: 0, toYaw: 0, z: 0, spawnT: 0 };
@@ -679,8 +723,21 @@ function buildEscape() {
   // POLICE lettering, barred windows, flashing roof bar, rear doors (the
   // click target, same name as the old van doors so the escape still works).
   const bus = new THREE.Group(); bus.position.set(0, 0, 2); gEscape.add(bus);
-  const busBody = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6), stdMat({ map: metalTex(2, 1, '#1a2a4a'), roughness: 0.45, metalness: 0.3 }));
+  const busBody = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6), stdMat({ map: metalTex(2, 1, '#22395e'), roughness: 0.45, metalness: 0.2 }));
   busBody.position.set(0, 1.4, 0); busBody.castShadow = true; busBody.receiveShadow = true; bus.add(busBody);
+  // Roof cap and bumpers, so the body reads as a bus and not a plain box.
+  const busRoof = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.18, 5.9), stdMat({ color: 0x2c4a72, roughness: 0.5, metalness: 0.2 }));
+  busRoof.position.set(0, 2.78, 0); busRoof.castShadow = true; bus.add(busRoof);
+  for (const bz of [3.02, -3.02]) {
+    const bumper = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.25, 0.3), stdMat({ color: 0xc8ccd0, metalness: 0.8, roughness: 0.3 }));
+    bumper.position.set(0, 0.35, bz); bus.add(bumper);
+  }
+  for (const hx of [-0.85, 0.85]) {
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.18, 0.08), new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a0, emissiveIntensity: 1.5 }));
+    hl.position.set(hx, 0.75, 3.06); bus.add(hl);
+    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.18, 0.08), new THREE.MeshStandardMaterial({ color: 0xaa0000, emissive: 0xff2020, emissiveIntensity: 1.2 }));
+    tl.position.set(hx, 0.75, -3.06); bus.add(tl);
+  }
   // The bus is solid: the player runs around it to the ladder, not
   // through it. The ladder marker (-4, -2) sits well west of the bus,
   // so the run path stays open.
@@ -710,9 +767,15 @@ function buildEscape() {
   policeLightL.position.set(-0.32, 2.82, 1.6); bus.add(policeLightL);
   policeLightR = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 0.4), new THREE.MeshStandardMaterial({ color: 0x0000aa, emissive: 0x2040ff, emissiveIntensity: 1.2, roughness: 0.3 }));
   policeLightR.position.set(0.32, 2.82, 1.6); bus.add(policeLightR);
-  for (const [wx, wz] of [[-1.15, -1.8], [1.15, -1.8], [-1.15, 2.0], [1.15, 2.0]]) {
-    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.3, 16), stdMat({ color: 0x111111, roughness: 0.9 }));
-    wh.rotation.z = Math.PI / 2; wh.position.set(wx, 0.45, wz); wh.castShadow = true; bus.add(wh);
+  // Real tyres: large, outboard of the body side so they read as wheels
+  // from the side, with a steel hubcap and a fender arch over each one.
+  // The old wheels were flat black discs flush with the body side, hidden
+  // under the dark body on a dark street.
+  for (const [wx, wz] of [[-1.33, -1.8], [1.33, -1.8], [-1.33, 2.0], [1.33, 2.0]]) {
+    const wh = makeWheel(0.55, 0.35, 'x');
+    wh.position.set(wx, 0.55, wz); bus.add(wh);
+    const arch = makeFenderArch(0.67, 0x22395e);
+    arch.position.set(wx > 0 ? 1.31 : -1.31, 0.55, wz); bus.add(arch);
   }
   const doorMetal = metalTex(1, 1, '#c8c8c8');
   const dl = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ map: doorMetal, roughness: 0.5, metalness: 0.2 }));
@@ -728,16 +791,24 @@ function buildEscape() {
   militantVan = new THREE.Group();
   militantVan.position.set(-3.0, 0, 0.8); militantVan.rotation.y = 0.85;
   gEscape.add(militantVan);
-  const mvBody = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.0, 4.6), stdMat({ map: metalTex(2, 1, '#0d0d0f'), roughness: 0.4, metalness: 0.4 }));
+  // Dark grey-blue, not near-black: the old #0d0d0f body with metalness
+  // 0.4 was invisible against the near-black street, especially on a
+  // phone screen. A light side stripe gives the silhouette an edge.
+  const mvBody = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.0, 4.6), stdMat({ map: metalTex(2, 1, '#3d4756'), roughness: 0.55, metalness: 0.12 }));
   mvBody.position.set(0, 1.15, 0); mvBody.castShadow = true; mvBody.receiveShadow = true; militantVan.add(mvBody);
-  const mvCab = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.9, 0.8), stdMat({ map: metalTex(1, 1, '#14161a'), roughness: 0.3, metalness: 0.4 }));
+  const mvStripe = new THREE.Mesh(new THREE.BoxGeometry(2.24, 0.18, 4.62), stdMat({ color: 0x7a8694, roughness: 0.5, metalness: 0.15 }));
+  mvStripe.position.set(0, 1.35, 0); militantVan.add(mvStripe);
+  const mvCab = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.9, 0.8), stdMat({ map: metalTex(1, 1, '#2f3a48'), roughness: 0.5, metalness: 0.12 }));
   mvCab.position.set(0, 1.35, 2.0); militantVan.add(mvCab);
   const mvShield = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.7), new THREE.MeshStandardMaterial({ map: glassTex(), roughness: 0.1, metalness: 0.5 }));
   mvShield.position.set(0, 1.4, 2.42); militantVan.add(mvShield);
-  for (const [wx, wz] of [[-1.0, -1.5], [1.0, -1.5], [-1.0, 1.5], [1.0, 1.5]]) {
-    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.28, 14), stdMat({ color: 0x111111, roughness: 0.9 }));
-    wh.rotation.z = Math.PI / 2; wh.position.set(wx, 0.38, wz); militantVan.add(wh);
+  for (const [wx, wz] of [[-1.12, -1.5], [1.12, -1.5], [-1.12, 1.5], [1.12, 1.5]]) {
+    const wh = makeWheel(0.42, 0.3, 'x');
+    wh.position.set(wx, 0.42, wz); militantVan.add(wh);
+    const arch = makeFenderArch(0.54, 0x3d4756);
+    arch.position.set(wx > 0 ? 1.11 : -1.11, 0.42, wz); militantVan.add(arch);
   }
+  updateVanCollider(); // the van is solid from the moment it is parked here
   for (const hx of [-0.7, 0.7]) {
     const hl = new THREE.Mesh(new THREE.CircleGeometry(0.12, 12), new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a0, emissiveIntensity: 1.5 }));
     hl.position.set(hx, 0.9, 2.32); militantVan.add(hl);
@@ -751,6 +822,62 @@ function buildEscape() {
     s.scale.set(0.6, 0.6, 1); s.position.set(0, -10, 0); gEscape.add(s);
     dustPuffs.push({ sprite: s, life: 0, maxLife: 1 });
   }
+  // A proper police car (sedan) parked on the east side of the street:
+  // the scene had a bus and a van but no police car. White body with a
+  // black hood and trunk, POLICE on the doors, a red/blue light bar, four
+  // real tyres, bumpers and headlights. Parked clear of the ladder run,
+  // the fire-escape path and the SUV approach; it does not drive. It is
+  // solid, like the bus.
+  const policeCar = new THREE.Group();
+  policeCar.position.set(4.5, 0, 8); policeCar.rotation.y = 0.15;
+  policeCar.name = 'policeCar'; gEscape.add(policeCar);
+  const pcBody = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.55, 4.4), stdMat({ color: 0xe8e8e8, roughness: 0.4, metalness: 0.3 }));
+  pcBody.position.set(0, 0.62, 0); pcBody.castShadow = true; pcBody.receiveShadow = true; policeCar.add(pcBody);
+  const pcHood = new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.1, 1.0), stdMat({ color: 0x14161a, roughness: 0.4, metalness: 0.3 }));
+  pcHood.position.set(0, 0.92, -1.6); policeCar.add(pcHood);
+  const pcTrunk = new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.1, 0.9), stdMat({ color: 0x14161a, roughness: 0.4, metalness: 0.3 }));
+  pcTrunk.position.set(0, 0.92, 1.6); policeCar.add(pcTrunk);
+  const pcCabin = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.55, 2.2), stdMat({ color: 0xe8e8e8, roughness: 0.4, metalness: 0.3 }));
+  pcCabin.position.set(0, 1.15, 0.1); pcCabin.castShadow = true; policeCar.add(pcCabin);
+  const pcGlass = glassTex();
+  const pcShield = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.5), new THREE.MeshStandardMaterial({ map: pcGlass, roughness: 0.1, metalness: 0.5 }));
+  pcShield.position.set(0, 1.2, -1.02); pcShield.rotation.x = -0.25; policeCar.add(pcShield);
+  const pcRear = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.5), new THREE.MeshStandardMaterial({ map: pcGlass, roughness: 0.1, metalness: 0.5 }));
+  pcRear.position.set(0, 1.2, 1.22); pcRear.rotation.y = Math.PI; pcRear.rotation.x = 0.25; policeCar.add(pcRear);
+  for (const sx of [-1, 1]) {
+    const pcWin = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 0.45), new THREE.MeshStandardMaterial({ map: pcGlass, roughness: 0.1, metalness: 0.5 }));
+    pcWin.position.set(sx * 0.81, 1.2, 0.1); pcWin.rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2; policeCar.add(pcWin);
+    const pcPlate = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.4), new THREE.MeshStandardMaterial({ map: signTexture('POLICE', '#f8f8f8', '#14161a', ''), roughness: 0.6 }));
+    pcPlate.position.set(sx * 0.92, 0.72, 0.1); pcPlate.rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2; policeCar.add(pcPlate);
+    const pcWheel = makeWheel(0.34, 0.24, 'x');
+    pcWheel.position.set(sx * 0.85, 0.34, -1.35); policeCar.add(pcWheel);
+    const pcWheel2 = makeWheel(0.34, 0.24, 'x');
+    pcWheel2.position.set(sx * 0.85, 0.34, 1.35); policeCar.add(pcWheel2);
+    const pcArch = makeFenderArch(0.46, 0xe8e8e8);
+    pcArch.position.set(sx * 0.91, 0.34, -1.35); policeCar.add(pcArch);
+    const pcArch2 = makeFenderArch(0.46, 0xe8e8e8);
+    pcArch2.position.set(sx * 0.91, 0.34, 1.35); policeCar.add(pcArch2);
+    const pcHead = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.3), new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a0, emissiveIntensity: 1.5 }));
+    pcHead.position.set(sx * 0.55, 0.7, -2.21); policeCar.add(pcHead);
+    const pcTail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.3), new THREE.MeshStandardMaterial({ color: 0xaa0000, emissive: 0xff2020, emissiveIntensity: 1.2 }));
+    pcTail.position.set(sx * 0.55, 0.7, 2.21); policeCar.add(pcTail);
+  }
+  const pcBarBase = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.1, 0.35), stdMat({ color: 0x111111, roughness: 0.4 }));
+  pcBarBase.position.set(0, 1.48, 0.1); policeCar.add(pcBarBase);
+  const pcLightL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.3), new THREE.MeshStandardMaterial({ color: 0xaa0000, emissive: 0xff2020, emissiveIntensity: 1.2, roughness: 0.3 }));
+  pcLightL.position.set(-0.28, 1.56, 0.1); policeCar.add(pcLightL);
+  const pcLightR = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.3), new THREE.MeshStandardMaterial({ color: 0x0000aa, emissive: 0x2040ff, emissiveIntensity: 1.2, roughness: 0.3 }));
+  pcLightR.position.set(0.28, 1.56, 0.1); policeCar.add(pcLightR);
+  for (const bz of [-2.15, 2.15]) {
+    const pcBumper = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.18, 0.3), stdMat({ color: 0xc8ccd0, metalness: 0.8, roughness: 0.3 }));
+    pcBumper.position.set(0, 0.35, bz); policeCar.add(pcBumper);
+  }
+  const pcGrille = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.2, 0.06), stdMat({ color: 0x222222, metalness: 0.6, roughness: 0.4 }));
+  pcGrille.position.set(0, 0.6, -2.21); policeCar.add(pcGrille);
+  // Parked at (4.5, 8), angled 0.15 rad: axis-aligned footprint
+  // x 3.28..5.72, z 5.69..10.31. Clear of the spawn walk (x 0), the
+  // ladder run and the SUV approach.
+  addBoxCollider(ch3Colliders, 3.28, 5.69, 5.72, 10.31);
   // Rooftop (raised platform) with AC units and a parapet: gravel
   // membrane on top, concrete parapet, brushed-metal AC boxes.
   box(gEscape, 10, 0.4, 8, 0x3a3f42, -4, 2.6, -6, null, { map: roofTex(4, 3), roughness: 1 });
@@ -1167,6 +1294,7 @@ function updateVanChase(dt, t) {
     militantVan.position.x = vanChase.fromX + (vanChase.toX - vanChase.fromX) * e;
     militantVan.position.z = vanChase.fromZ + (vanChase.toZ - vanChase.fromZ) * e;
     militantVan.rotation.y = vanChase.fromYaw + (vanChase.toYaw - vanChase.fromYaw) * e;
+    updateVanCollider();
     if (ramPuff) ramPuff.material.opacity = Math.max(0, 0.5 - k * 0.5);
     if (k >= 1) { vanChase.phase = 'drift'; vanChase.z = militantVan.position.z; vanChase.spawnT = 0; }
     return;
@@ -1182,6 +1310,7 @@ function updateVanChase(dt, t) {
   militantVan.position.x = -2.0 + weave * 1.0;
   const slip = 0.28 * Math.sin(vanChase.z * 0.25 + 0.8);
   militantVan.rotation.y = Math.PI + slip;
+  updateVanCollider();
   vanChase.spawnT -= dt;
   if (vanChase.spawnT <= 0) {
     vanChase.spawnT = 0.07;
@@ -1194,27 +1323,63 @@ function updateVanChase(dt, t) {
 // ---------- Chapter 6: The Aftermath + The Bridge at dawn ----------
 function buildBridge() {
   // Dawn sky: warm gradient plane behind the deck, low sun glow.
-  const sky = new THREE.Mesh(new THREE.PlaneGeometry(160, 50), new THREE.MeshBasicMaterial({ color: 0x2a1a2a }));
+  // Lightened so the dawn actually reads: the old 0x2a1a2a sky and the
+  // 92%-black end card together left the bridge nearly invisible.
+  const sky = new THREE.Mesh(new THREE.PlaneGeometry(160, 50), new THREE.MeshBasicMaterial({ color: 0x5a3a4d }));
   sky.position.set(0, 18, -55); gBridge.add(sky);
   const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffb36a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
   sunGlow.scale.set(26, 12, 1); sunGlow.position.set(0, 4, -50); gBridge.add(sunGlow);
   // Bridge deck + railings.
-  box(gBridge, 4, 0.5, 30, 0x3a3f42, 0, -0.25, -2, null, { map: asphaltTex(1, 10, '#33363a'), roughness: 0.95 });
+  box(gBridge, 4, 0.5, 30, 0x3a3f42, 0, -0.25, -2, null, { map: asphaltTex(1, 10, '#45484d'), roughness: 0.95 });
   const deckRailSteel = steelTex(1, 8);
   for (const sx of [-1.9, 1.9]) {
     const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 30, 8), stdMat({ map: deckRailSteel, metalness: 0.85, roughness: 0.35 }));
     rail.rotation.x = Math.PI / 2; rail.position.set(sx, 1.1, -2); gBridge.add(rail);
   }
   // The 4 train crossing on a distant bridge, full of passengers, moving.
+  // Shaped cars, not plain boxes: a roof, lit windows on both sides, a
+  // belt stripe, and two bogies per car with visible round wheels and
+  // hubs, so the train reads as a train on its track. The cars ride above
+  // the railhead on the bogies, like a real train.
   trainMesh = new THREE.Group();
-  const trainMetal = metalTex(2, 1, '#2a5a3a');
+  const trainMetal = metalTex(2, 1, '#3d7a4e');
   for (let i = 0; i < 4; i++) {
-    const car = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 1.6), new THREE.MeshStandardMaterial({ map: trainMetal, roughness: 0.45, metalness: 0.4 }));
-    car.position.set(i * 3.4, 0, 0); trainMesh.add(car);
-    const win = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffd166, emissiveIntensity: 0.8 }));
-    win.position.set(i * 3.4, 0.2, 0.85); trainMesh.add(win);
+    const cx = i * 3.4;
+    const car = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 1.6), new THREE.MeshStandardMaterial({ map: trainMetal, roughness: 0.45, metalness: 0.25 }));
+    car.position.set(cx, 0.55, 0); car.castShadow = true; trainMesh.add(car);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.18, 1.5), stdMat({ color: 0x8a9094, roughness: 0.5, metalness: 0.4 }));
+    roof.position.set(cx, 1.32, 0); trainMesh.add(roof);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(3.02, 0.18, 1.62), stdMat({ color: 0xd8d8d8, roughness: 0.5, metalness: 0.2 }));
+    stripe.position.set(cx, 0.75, 0); trainMesh.add(stripe);
+    for (const wz of [0.85, -0.85]) {
+      const win = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffd166, emissiveIntensity: 0.8 }));
+      win.position.set(cx, 0.75, wz);
+      if (wz < 0) win.rotation.y = Math.PI;
+      trainMesh.add(win);
+    }
+    // Two bogies per car, each with four visible wheels sitting on the rails.
+    for (const bx of [cx - 0.9, cx + 0.9]) {
+      const bogie = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.45, 1.3), stdMat({ color: 0x1a1a1a, roughness: 0.9 }));
+      bogie.position.set(bx, -0.38, 0); trainMesh.add(bogie);
+      for (const wx of [bx - 0.45, bx + 0.45]) for (const wz of [0.85, -0.85]) {
+        const wh = makeWheel(0.32, 0.18, 'z');
+        wh.position.set(wx, -0.35, wz); trainMesh.add(wh);
+      }
+    }
+  }
+  // Front cab on the leading car (car 3, +x end): a nose, a windshield
+  // and headlights, so the train has a front.
+  const cabNose = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.2, 1.5), new THREE.MeshStandardMaterial({ map: trainMetal, roughness: 0.45, metalness: 0.25 }));
+  cabNose.position.set(12.0, 0.55, 0); trainMesh.add(cabNose);
+  const cabGlass = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.7), new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffd166, emissiveIntensity: 0.8 }));
+  cabGlass.position.set(12.36, 0.8, 0); cabGlass.rotation.y = Math.PI / 2; trainMesh.add(cabGlass);
+  for (const hz of [-0.5, 0.5]) {
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.3), new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a0, emissiveIntensity: 1.5 }));
+    hl.position.set(12.37, 0.3, hz); trainMesh.add(hl);
   }
   trainMesh.position.set(-30, 2.5, -30); trainMesh.name = 'train'; gBridge.add(trainMesh);
+  // The train is solid: the track corridor it runs in.
+  addBoxCollider(ch6Colliders, -45, -31.6, 45, -28.4);
   // The 4 train runs on a real track: a ballast deck, two steel rails and
   // sleepers, carried on pillars, so the moving train reads as a train on
   // a track and not a box floating over the river.
@@ -1233,7 +1398,7 @@ function buildBridge() {
   // The click target rides WITH the train: the old static hit box sat at
   // x=0 while the train moved, so only the leading car was clickable when
   // it happened to pass x=0. Now the whole train is clickable anywhere.
-  hitBox(trainMesh, 14, 3, 3, 5.1, 0, 0, 'train');
+  hitBox(trainMesh, 15, 3, 3, 5.1, 0, 0, 'train');
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('WILLIAMSBURG BRIDGE - DAWN', '#111111', '#ffd166', 'ONE MONTH LATER'), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 6, -14); gBridge.add(sign);
   blobShadow(gBridge, -0.8, 4, 0.9, 0.9, 0.55);
@@ -1247,9 +1412,13 @@ function startChapter6() {
   for (const [n, g] of Object.entries(GROUPS)) g.visible = (parseInt(n, 10) === 6);
   reparentCast('jade', gBridge, -0.8, 4, Math.PI);
   reparentCast('caleb', gBridge, 0.8, 4, Math.PI);
-  // Dawn light: warm sun, soft sky.
-  sun.intensity = 1.4; sun.color.set(0xffd9a0); ambient.intensity = 0.55; hemi.intensity = 0.5;
-  scene.background = new THREE.Color(0x2a1a2a); scene.fog.density = 0.008;
+  // Dawn light: warm sun, soft sky. Brightened so the bridge, the deck
+  // and the train actually read: the old levels (sun 1.4, ambient 0.55,
+  // fog 0.008, background 0x2a1a2a) left the scene nearly black behind
+  // the end card on the user's phone. Still dawn, not noon: warm tones,
+  // soft shadows, the low sun glow stays.
+  sun.intensity = 2.3; sun.color.set(0xffd9a0); ambient.intensity = 0.85; hemi.intensity = 0.75;
+  scene.background = new THREE.Color(0x4a3040); scene.fog.density = 0.005;
   setObjectives(0); updateHUD();
   setAmbient('dawn'); // soft wind and birds at dawn on the bridge
   setTension(0.15);
@@ -1425,10 +1594,20 @@ const chapterTargets = {};
 let ch1Colliders = [];
 let ch3Colliders = [];
 let ch5Colliders = [];
+let ch6Colliders = []; // the distant train track corridor: the player is
+// bounded to the deck, so he can never reach it, but the train is solid
+// in the collision system like every other vehicle.
 function act3Colliders() {
   if (state.chapter === 1) return ch1Colliders;
-  if (state.chapter === 3) return ch3Colliders;
+  if (state.chapter === 3) {
+    // On the rooftop the player is above the street: the street-level
+    // van must not block him up there, so its live box is only included
+    // while he is on the street.
+    if (escapePhase === 2 && camY > 3) return ch3Colliders;
+    return ch3Colliders.concat([vanCollider]);
+  }
   if (state.chapter === 5) return ch5Colliders;
+  if (state.chapter === 6) return ch6Colliders;
   return [];
 }
 
