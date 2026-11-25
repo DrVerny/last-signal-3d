@@ -1443,12 +1443,28 @@ function animate() {
     // put it back on the player before moving, or movement starts from
     // the wrong place.
     beginPlayerFrame(camera, camY);
-    const sp = 0.05;
+    // Speed per second, not per frame: a fixed step per frame made
+    // walking speed depend on the frame rate (3 m/s at 60 fps, 0.5 m/s
+    // at 10 fps), so on a slow device the player crawls. dt is seconds,
+    // so the 60 fps step (0.05) scales by dt * 60.
+    const sp = 0.05 * dt * 60;
     const mv = moveDelta(keys, state.yaw, sp);
     const resolved = resolveMove(camera.position.x, camera.position.z, mv.dx, mv.dz, act3Colliders());
     camera.position.x = resolved.x; camera.position.z = resolved.z;
     camera.position.x = Math.max(camBounds.x[0], Math.min(camBounds.x[1], camera.position.x));
     camera.position.z = Math.max(camBounds.z[0], Math.min(camBounds.z[1], camera.position.z));
+    // Rooftop crossing (phase 2): keep the player on the raised slab.
+    // The slab spans x [-9,1], z [-10,-2]; without this the player walks
+    // off the edge and wanders the street bounds in mid-air at camY 3.4,
+    // with no way to tell where the roof ends. Inset by the player
+    // radius (0.35) so the player stops at the edge. The fire-escape
+    // trigger (1.5,-2) stays reachable: the clamped corner (0.65,-2.35)
+    // is 0.92 m away, inside the 1.3 m trigger radius. Gated on camY
+    // too, so Reset view (camY 2.4) still puts the player on the street.
+    if (escapePhase === 2 && camY > 3) {
+      camera.position.x = Math.max(-8.65, Math.min(0.65, camera.position.x));
+      camera.position.z = Math.max(-9.65, Math.min(-2.35, camera.position.z));
+    }
     camera.rotation.order = 'YXZ';
     const sway = document.getElementById('dialogue').classList.contains('hidden') ? 1 : 0.4;
     camera.rotation.y = state.yaw + Math.sin(t * 0.7) * 0.004 * sway;
@@ -1513,7 +1529,9 @@ function animate() {
   // Skipped during the bridge exterior shot, which has its own camera.
   if (!bridgeShot.active) {
     const mv2 = moveDelta(keys, state.yaw, 1);
-    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: camY });
+    // Raised floors: on the rooftop (phase 2) the slab top is 2.8, so
+    // the avatar stands on it instead of at y 0 under the slab.
+    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: camY, groundY: (state.chapter === 3 && escapePhase === 2) ? 2.8 : 0 });
   }
   renderer.render(scene, camera);
 }

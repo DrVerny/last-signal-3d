@@ -1197,9 +1197,14 @@ export function applyPlayerPresence(o) {
   if (o.moving && (o.moveDx || o.moveDz)) faceYaw = Math.atan2(o.moveDx, o.moveDz);
   // The avatar is built facing +z, so rotation.y = faceYaw faces it that way.
   a.rotation.y = faceYaw;
+  // The avatar's feet sit on the ground the player walks on (o.groundY,
+  // 0 on a street-level floor). A raised floor like the Act III rooftop
+  // (slab top 2.8) needs it, or the avatar stands at y 0, buried under
+  // the slab and invisible in third person.
+  const groundY = o.groundY || 0;
   // A small step bob while walking, so the walk reads.
   const bobY = o.moving ? Math.abs(Math.sin((o.t || 0) * 7)) * 0.03 : 0;
-  a.position.set(o.x, bobY, o.z);
+  a.position.set(o.x, groundY + bobY, o.z);
   updateAvatarWalk(o.moving, o.dt || 0.016);
   // Third-person camera: behind the avatar relative to the look yaw, and
   // above it. Forward is (-sin yaw, -cos yaw), so behind is the opposite.
@@ -1236,9 +1241,10 @@ export function applyPlayerPresence(o) {
   // Look at the avatar's chest, slightly ahead so the view leads
   // forward. At 1.35 m the 1.68 m player is framed head to feet; the
   // old 1.45 m aim was tuned for a 1.75 m player and put the feet at
-  // the bottom edge of the frame.
+  // the bottom edge of the frame. On a raised floor the aim rises with
+  // the ground, or the camera stares at the slab under the avatar.
   const fx = -Math.sin(o.yaw), fz = -Math.cos(o.yaw);
-  o.camera.lookAt(o.x + fx * 1.2, 1.35, o.z + fz * 1.2);
+  o.camera.lookAt(o.x + fx * 1.2, groundY + 1.35, o.z + fz * 1.2);
   return true;
 }
 
