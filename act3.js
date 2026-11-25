@@ -10,6 +10,7 @@ import { runHoldQTE } from './qte.js';
 import { showActionBanner, hideActionBanner, flashScreen, dist2D, makeActionMarker, showBriefing } from './action.js';
 import { grantPayout } from './economy.js';
 import { moveDelta, applyPlayerPresence, beginPlayerFrame, setPlayerPos, resolveMove, addBoxCollider } from './player.js';
+import { concreteTex, asphaltTex, brickTex, woodTex, metalTex, steelTex, glassTex, fabricTex, carpetTex, plasterTex, roofTex, tileTex } from './textures.js';
 // THE LAST SIGNAL - Act III: The Human Signal - 3D prototype
 // Chapters from the script (short original dialogue in its spirit; no long
 // verbatim copying): 1. The Control Center (the final sealed choice),
@@ -210,7 +211,12 @@ camera.position.set(0, 1.7, 8);
 const ambient = new THREE.AmbientLight(0xbfc8d4, 0.5); scene.add(ambient);
 const hemi = new THREE.HemisphereLight(0xd8a8a0, 0x2a2418, 0.45); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffd9a0, 1.1); sun.position.set(-14, 7, 8);
-sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024); scene.add(sun);
+sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024);
+// The default shadow frustum is only 10 m across, so shadows vanished a
+// few steps from the origin. Widen it to cover the play areas, or the new
+// textures sit in flat light. A small bias keeps the textures from
+// shimmering with shadow acne.
+sun.shadow.camera.left = -20; sun.shadow.camera.right = 20; sun.shadow.camera.top = 20; sun.shadow.camera.bottom = -20; sun.shadow.bias = -0.0005; scene.add(sun);
 function stdMat(opts) { return new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.8, metalness: 0.05 }, opts)); }
 function box(parent, w, h, d, color, x, y, z, name, matOpts) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matOpts ? stdMat(matOpts) : stdMat({ color }));
@@ -480,9 +486,9 @@ function ebsTick() {
 setInterval(ebsTick, 1000);
 let ebsScreen;
 function buildControl() {
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ color: 0x1a1e22, roughness: 0.9 }));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ map: tileTex(6, 6), roughness: 0.85 }));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; gControl.add(floor);
-  box(gControl, 20, 4, 0.4, 0x2a2f33, 0, 2, -5, null, { roughness: 0.9 });
+  box(gControl, 20, 4, 0.4, 0x2a2f33, 0, 2, -5, null, { map: plasterTex(8, 2, '#3a4046'), roughness: 0.9 });
   // Monitor wall: city systems at a glance.
   const screens = [
     ['TRANSIT  80%', '#2aff7a'], ['WATER  75%', '#2aff7a'],
@@ -496,12 +502,12 @@ function buildControl() {
   ebsScreen = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 1.6), new THREE.MeshStandardMaterial({ map: screenTexture(['EBS VIRUS DETECTED', 'TRIGGERS IN 12:00:00', 'FAKE ALL-CLEAR + EVACUATION'], '#ff3a2a'), roughness: 0.4, emissive: 0xffffff, emissiveIntensity: 0.35, emissiveMap: screenTexture(['EBS VIRUS DETECTED', 'TRIGGERS IN 12:00:00', 'FAKE ALL-CLEAR + EVACUATION'], '#ff3a2a') }));
   ebsScreen.position.set(0, 3.6, -4.75); ebsScreen.name = 'ebs'; ebsScreen.userData.clickable = true; gControl.add(ebsScreen);
   hitBox(gControl, 6, 2.2, 0.6, 0, 3.6, -4.6, 'ebs');
-  // Terminal desk where the fix is entered.
-  box(gControl, 3.2, 0.9, 1.0, 0x2a2f33, 0, 0.45, 1.5, null, { roughness: 0.6, metalness: 0.3 });
+  // Terminal desk where the fix is entered: dark wood, not a grey slab.
+  box(gControl, 3.2, 0.9, 1.0, 0x2a2f33, 0, 0.45, 1.5, null, { map: woodTex(2, 1, '#4a3423', '#2e2012'), roughness: 0.6, metalness: 0.1 });
   // The desk is solid: the player stops at its edge instead of walking
   // straight through it and into the terminal screen.
   addBoxCollider(ch1Colliders, -1.6, 1.0, 1.6, 2.0);
-  const term = box(gControl, 1.6, 1.0, 0.1, 0x111111, 0, 1.3, 1.4, 'terminal', { roughness: 0.3 });
+  const term = box(gControl, 1.6, 1.0, 0.1, 0x111111, 0, 1.3, 1.4, 'terminal', { map: metalTex(1, 1, '#1a1d20'), roughness: 0.35, metalness: 0.5 });
   term.rotation.x = -0.2;
   const termScreen = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.8), new THREE.MeshStandardMaterial({ color: 0x061a12, emissive: 0x2aff7a, emissiveIntensity: 0.6, roughness: 0.3 }));
   termScreen.position.set(0, 1.32, 1.34); termScreen.rotation.x = -0.2; gControl.add(termScreen);
@@ -576,12 +582,12 @@ function startChapter1() {
 
 // ---------- Chapter 2: The Courtroom ----------
 function buildCourt() {
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(24, 24), stdMat({ color: 0x5a4632, roughness: 0.7 }));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(24, 24), stdMat({ map: woodTex(10, 10, '#6b4a2c', '#4a3018'), roughness: 0.65 }));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; gCourt.add(floor);
-  box(gCourt, 16, 3.4, 0.4, 0x4a3423, 0, 1.7, -5, null, { roughness: 0.85 });
+  box(gCourt, 16, 3.4, 0.4, 0x4a3423, 0, 1.7, -5, null, { map: woodTex(8, 2, '#4a3423', '#33241a'), roughness: 0.8 });
   // Judge's bench, raised, with the seal.
-  box(gCourt, 6, 0.5, 2, 0x3a2a18, 0, 0.25, -4, null, { roughness: 0.8 });
-  const bench = box(gCourt, 5, 1.2, 1.2, 0x4a3423, 0, 1.1, -4.2, 'bench', { roughness: 0.7 });
+  box(gCourt, 6, 0.5, 2, 0x3a2a18, 0, 0.25, -4, null, { map: woodTex(3, 1, '#3a2a18', '#241a10'), roughness: 0.8 });
+  const bench = box(gCourt, 5, 1.2, 1.2, 0x4a3423, 0, 1.1, -4.2, 'bench', { map: woodTex(3, 1, '#5a3a22', '#3a2412'), roughness: 0.6 });
   bench.rotation.y = 0;
   hitBox(gCourt, 5.5, 2, 1.6, 0, 1.1, -4.2, 'bench');
   const seal = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.06, 20), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.25 }));
@@ -590,7 +596,7 @@ function buildCourt() {
   for (const fx of [-3.6, 3.6]) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.6, 8), stdMat({ color: 0xd4af37, metalness: 0.8, roughness: 0.4 }));
     pole.position.set(fx, 1.3, -4.6); gCourt.add(pole);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.6), new THREE.MeshStandardMaterial({ color: fx < 0 ? 0x1a3a8a : 0x8a1a1a, roughness: 0.9, side: THREE.DoubleSide }));
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.6), new THREE.MeshStandardMaterial({ map: fabricTex(2, 1, fx < 0 ? '#1a3a8a' : '#8a1a1a'), roughness: 0.9, side: THREE.DoubleSide }));
     flag.position.set(fx + (fx < 0 ? 0.45 : -0.45), 2.2, -4.6); gCourt.add(flag);
   }
   // Gallery benches. The backrest sits behind the sitter (south side)
@@ -599,16 +605,18 @@ function buildCourt() {
   // backs (top 1.45, on the north side, in front of a north-facing
   // sitter) hid every gallery head from the player and the pews read
   // as empty.
+  const pewWood = woodTex(2, 1, '#3a2a18', '#241a10');
   for (const gz of [1, 3, 5]) for (const gx of [-3.5, 3.5]) {
-    box(gCourt, 3, 0.45, 0.8, 0x3a2a18, gx, 0.55, gz, null, { roughness: 0.85 });
-    box(gCourt, 3, 0.6, 0.12, 0x3a2a18, gx, 0.8, gz - 0.35, null, { roughness: 0.85 });
+    box(gCourt, 3, 0.45, 0.8, 0x3a2a18, gx, 0.55, gz, null, { map: pewWood, roughness: 0.85 });
+    box(gCourt, 3, 0.6, 0.12, 0x3a2a18, gx, 0.8, gz - 0.35, null, { map: pewWood, roughness: 0.85 });
   }
   // Witness stand + defendant table.
-  box(gCourt, 1.4, 1.1, 1.0, 0x4a3423, -3.2, 0.55, -2.5, null, { roughness: 0.8 });
-  box(gCourt, 3.4, 0.75, 1.2, 0x2a2118, 0, 0.38, 2.2, null, { roughness: 0.8 });
+  box(gCourt, 1.4, 1.1, 1.0, 0x4a3423, -3.2, 0.55, -2.5, null, { map: woodTex(1, 1, '#4a3423', '#33241a'), roughness: 0.8 });
+  box(gCourt, 3.4, 0.75, 1.2, 0x2a2118, 0, 0.38, 2.2, null, { map: woodTex(2, 1, '#2a2118', '#1a140c'), roughness: 0.8 });
   // Counsel tables: prosecution on the left, defence on the right.
-  box(gCourt, 1.6, 0.75, 1.0, 0x2a2118, -2.6, 0.38, 1.6, null, { roughness: 0.8 });
-  box(gCourt, 1.6, 0.75, 1.0, 0x2a2118, 2.6, 0.38, 1.6, null, { roughness: 0.8 });
+  const counselWood = woodTex(1, 1, '#2a2118', '#1a140c');
+  box(gCourt, 1.6, 0.75, 1.0, 0x2a2118, -2.6, 0.38, 1.6, null, { map: counselWood, roughness: 0.8 });
+  box(gCourt, 1.6, 0.75, 1.0, 0x2a2118, 2.6, 0.38, 1.6, null, { map: counselWood, roughness: 0.8 });
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('NEW YORK SUPREME COURT', '#111111', '#e8e8e8', ''), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 4.4, -4.8); gCourt.add(sign);
   blobShadow(gCourt, 0, 2.5, 1.2, 1.2, 0.5);
@@ -652,16 +660,17 @@ const dustPuffs = []; // drifting dust sprites, reused
 // onto the road and drifts away down the street, looping behind the camera.
 const vanChase = { phase: 'rammed', t: 0, fromX: 0, fromZ: 0, fromYaw: 0, toX: 0, toZ: 0, toYaw: 0, z: 0, spawnT: 0 };
 function buildEscape() {
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ color: 0x2a2f33, roughness: 1 }));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ map: concreteTex(8, 8), roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; gEscape.add(ground);
   // The road: a marked asphalt strip running the length of the scene, so the
   // chase plays out on a street the camera can see, not a blank floor.
   const road = new THREE.Mesh(new THREE.PlaneGeometry(7, 34), new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.95 }));
   road.rotation.x = -Math.PI / 2; road.position.set(0, 0.02, 0); road.receiveShadow = true; gEscape.add(road);
-  for (const sx of [-1, 1]) box(gEscape, 2.2, 0.14, 34, 0x4a4d4f, sx * 4.6, 0.07, 0, null, { roughness: 1 }); // sidewalks
+  for (const sx of [-1, 1]) box(gEscape, 2.2, 0.14, 34, 0x4a4d4f, sx * 4.6, 0.07, 0, null, { map: concreteTex(1, 12, '#5a5d60'), roughness: 1 }); // sidewalks
   // Street lamps along the road.
+  const poleMetal = metalTex(1, 2, '#2a2f33');
   for (const [lx, lz] of [[4.2, -6], [-4.2, 0], [4.2, 6]]) {
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 4.5, 8), stdMat({ color: 0x2a2f33, metalness: 0.6, roughness: 0.5 }));
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 4.5, 8), stdMat({ map: poleMetal, metalness: 0.6, roughness: 0.5 }));
     pole.position.set(lx, 2.25, lz); gEscape.add(pole);
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.25), new THREE.MeshStandardMaterial({ color: 0x333333, emissive: 0xffc978, emissiveIntensity: 0.9 }));
     head.position.set(lx + (lx > 0 ? -0.3 : 0.3), 4.5, lz); gEscape.add(head);
@@ -670,13 +679,13 @@ function buildEscape() {
   // POLICE lettering, barred windows, flashing roof bar, rear doors (the
   // click target, same name as the old van doors so the escape still works).
   const bus = new THREE.Group(); bus.position.set(0, 0, 2); gEscape.add(bus);
-  const busBody = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6), stdMat({ color: 0x1a2a4a, roughness: 0.5, metalness: 0.25 }));
+  const busBody = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6), stdMat({ map: metalTex(2, 1, '#1a2a4a'), roughness: 0.45, metalness: 0.3 }));
   busBody.position.set(0, 1.4, 0); busBody.castShadow = true; busBody.receiveShadow = true; bus.add(busBody);
   // The bus is solid: the player runs around it to the ladder, not
   // through it. The ladder marker (-4, -2) sits well west of the bus,
   // so the run path stays open.
   addBoxCollider(ch3Colliders, -1.3, -1, 1.3, 5);
-  const busBand = new THREE.Mesh(new THREE.BoxGeometry(2.62, 0.55, 6.02), stdMat({ color: 0xe8e8e8, roughness: 0.5 }));
+  const busBand = new THREE.Mesh(new THREE.BoxGeometry(2.62, 0.55, 6.02), stdMat({ map: metalTex(2, 1, '#d8d8d8'), roughness: 0.5, metalness: 0.1 }));
   busBand.position.set(0, 1.55, 0); bus.add(busBand);
   for (const sx of [-1, 1]) {
     const plate = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.7), new THREE.MeshStandardMaterial({ map: signTexture('POLICE', '#f8f8f8', '#1a2a4a', ''), roughness: 0.6 }));
@@ -684,8 +693,11 @@ function buildEscape() {
   }
   const shield = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.9), new THREE.MeshStandardMaterial({ color: 0x0a141e, roughness: 0.15, metalness: 0.5 }));
   shield.position.set(0, 1.7, 3.02); bus.add(shield);
+  // One shared glass texture for all bus windows: the same pane repeated,
+  // not a fresh canvas per window.
+  const winGlass = glassTex();
   for (const sx of [-1, 1]) for (const wz of [-2, -0.6, 0.8, 2.2]) {
-    const win = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.7), new THREE.MeshStandardMaterial({ color: 0x0a141e, roughness: 0.2, metalness: 0.4 }));
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.7), new THREE.MeshStandardMaterial({ map: winGlass, roughness: 0.1, metalness: 0.5 }));
     win.position.set(sx * 1.31, 1.95, wz); win.rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2; bus.add(win);
     for (const bx of [-0.3, 0, 0.3]) {
       const bar = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.7, 0.03), stdMat({ color: 0x888888, metalness: 0.8, roughness: 0.3 }));
@@ -702,9 +714,10 @@ function buildEscape() {
     const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.3, 16), stdMat({ color: 0x111111, roughness: 0.9 }));
     wh.rotation.z = Math.PI / 2; wh.position.set(wx, 0.45, wz); wh.castShadow = true; bus.add(wh);
   }
-  const dl = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ color: 0xd8d8d8, roughness: 0.5 }));
+  const doorMetal = metalTex(1, 1, '#c8c8c8');
+  const dl = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ map: doorMetal, roughness: 0.5, metalness: 0.2 }));
   dl.position.set(-0.62, 1.2, -3.05); dl.name = 'vanDoors'; dl.userData.clickable = true; bus.add(dl);
-  const dr = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ color: 0xd8d8d8, roughness: 0.5 }));
+  const dr = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ map: doorMetal, roughness: 0.5, metalness: 0.2 }));
   dr.position.set(0.62, 1.2, -3.05); dr.name = 'vanDoors'; dr.userData.clickable = true; bus.add(dr);
   vanDoorL = dl; vanDoorR = dr;
   vanDoorsHit = hitBox(gEscape, 2.8, 2.6, 0.8, 0, 1.3, -1.1, 'vanDoors');
@@ -715,11 +728,11 @@ function buildEscape() {
   militantVan = new THREE.Group();
   militantVan.position.set(-3.0, 0, 0.8); militantVan.rotation.y = 0.85;
   gEscape.add(militantVan);
-  const mvBody = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.0, 4.6), stdMat({ color: 0x0d0d0f, roughness: 0.4, metalness: 0.4 }));
+  const mvBody = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.0, 4.6), stdMat({ map: metalTex(2, 1, '#0d0d0f'), roughness: 0.4, metalness: 0.4 }));
   mvBody.position.set(0, 1.15, 0); mvBody.castShadow = true; mvBody.receiveShadow = true; militantVan.add(mvBody);
-  const mvCab = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.9, 0.8), stdMat({ color: 0x14161a, roughness: 0.3, metalness: 0.4 }));
+  const mvCab = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.9, 0.8), stdMat({ map: metalTex(1, 1, '#14161a'), roughness: 0.3, metalness: 0.4 }));
   mvCab.position.set(0, 1.35, 2.0); militantVan.add(mvCab);
-  const mvShield = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.7), new THREE.MeshStandardMaterial({ color: 0x0a141e, roughness: 0.15, metalness: 0.5 }));
+  const mvShield = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.7), new THREE.MeshStandardMaterial({ map: glassTex(), roughness: 0.1, metalness: 0.5 }));
   mvShield.position.set(0, 1.4, 2.42); militantVan.add(mvShield);
   for (const [wx, wz] of [[-1.0, -1.5], [1.0, -1.5], [-1.0, 1.5], [1.0, 1.5]]) {
     const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.28, 14), stdMat({ color: 0x111111, roughness: 0.9 }));
@@ -738,20 +751,22 @@ function buildEscape() {
     s.scale.set(0.6, 0.6, 1); s.position.set(0, -10, 0); gEscape.add(s);
     dustPuffs.push({ sprite: s, life: 0, maxLife: 1 });
   }
-  // Rooftop (raised platform) with AC units and a parapet.
-  box(gEscape, 10, 0.4, 8, 0x3a3f42, -4, 2.6, -6, null, { roughness: 1 });
+  // Rooftop (raised platform) with AC units and a parapet: gravel
+  // membrane on top, concrete parapet, brushed-metal AC boxes.
+  box(gEscape, 10, 0.4, 8, 0x3a3f42, -4, 2.6, -6, null, { map: roofTex(4, 3), roughness: 1 });
   rooftopHit = hitBox(gEscape, 10, 1.4, 8, -4, 3.2, -6, 'rooftop');
-  box(gEscape, 10, 0.5, 0.3, 0x2a2f33, -4, 3.0, -10, null, { roughness: 1 });
-  box(gEscape, 1.5, 1.0, 1.5, 0x5a5f62, -6, 3.3, -7, null, { roughness: 0.8, metalness: 0.4 });
-  box(gEscape, 1.2, 0.8, 1.2, 0x4a4f52, -2, 3.2, -8, null, { roughness: 0.8, metalness: 0.4 });
+  box(gEscape, 10, 0.5, 0.3, 0x2a2f33, -4, 3.0, -10, null, { map: concreteTex(4, 1, '#2a2f33'), roughness: 1 });
+  box(gEscape, 1.5, 1.0, 1.5, 0x5a5f62, -6, 3.3, -7, null, { map: metalTex(1, 1, '#5a5f62'), roughness: 0.7, metalness: 0.4 });
+  box(gEscape, 1.2, 0.8, 1.2, 0x4a4f52, -2, 3.2, -8, null, { map: metalTex(1, 1, '#4a4f52'), roughness: 0.7, metalness: 0.4 });
   // Fire escape stairs down from the rooftop to the alley.
+  const stepSteel = steelTex(1, 1, '#2a2e33');
   for (let i = 0; i < 5; i++) {
-    box(gEscape, 1.2, 0.08, 0.5, 0x1a1d20, 1.5, 2.6 - i * 0.5, -2.5 + i * 0.9, i === 2 ? 'fireEscape' : null, { roughness: 0.7, metalness: 0.5 });
+    box(gEscape, 1.2, 0.08, 0.5, 0x1a1d20, 1.5, 2.6 - i * 0.5, -2.5 + i * 0.9, i === 2 ? 'fireEscape' : null, { map: stepSteel, roughness: 0.5, metalness: 0.7 });
   }
   hitBox(gEscape, 1.6, 3.0, 3.0, 1.5, 1.5, -0.5, 'fireEscape');
-  // Black SUV waiting in the alley.
-  box(gEscape, 2.0, 1.4, 4.4, 0x0a0a0a, 5.5, 0.9, -1, 'suv', { roughness: 0.3, metalness: 0.5 });
-  box(gEscape, 1.8, 0.7, 2.2, 0x111418, 5.5, 1.9, -1, null, { roughness: 0.2, metalness: 0.4 });
+  // Black SUV waiting in the alley: glossy black paint, glass cabin.
+  box(gEscape, 2.0, 1.4, 4.4, 0x0a0a0a, 5.5, 0.9, -1, 'suv', { map: metalTex(2, 1, '#0d0d10'), roughness: 0.25, metalness: 0.6 });
+  box(gEscape, 1.8, 0.7, 2.2, 0x111418, 5.5, 1.9, -1, null, { map: glassTex(), roughness: 0.1, metalness: 0.5 });
   hitBox(gEscape, 2.6, 2.2, 5.0, 5.5, 1.0, -1, 'suv');
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('QUEENSBORO PLAZA', '#111111', '#e8e8e8', 'AFTERNOON'), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 5.5, -8); gEscape.add(sign);
@@ -871,8 +886,9 @@ function buildEscapeAction() {
     if (escapeMarkers.fire) { escapeMarkers.fire.position.set(1.5, 3.8, -2); escapeMarkers.fire.visible = false; gEscape.add(escapeMarkers.fire); }
     escapeMarkers.suv = makeActionMarker('SUV', '#7ac74f');
     if (escapeMarkers.suv) { escapeMarkers.suv.position.set(5.5, 1.8, -1); escapeMarkers.suv.visible = false; gEscape.add(escapeMarkers.suv); }
+    const barrierWood = woodTex(1, 1, '#4a3620', '#2e2010');
     for (const z of [-2, -3.5, -0.5]) {
-      const b = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), new THREE.MeshStandardMaterial({ color: 0x3a2a18, roughness: 0.9 }));
+      const b = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), new THREE.MeshStandardMaterial({ map: barrierWood, roughness: 0.9 }));
       b.position.set(0, 0.35, z); b.castShadow = true; b.visible = false;
       gEscape.add(b);
       escapeBarriers.push({ mesh: b, z, phase: z * 1.3, speed: 0.9 + Math.random() * 0.3 });
@@ -1005,9 +1021,9 @@ function updateEscapeAction(dt) {
 
 // ---------- Chapter 4: The Safehouse ----------
 function buildSafe() {
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), stdMat({ color: 0x3a3630, roughness: 1 }));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), stdMat({ map: concreteTex(7, 7, '#3a3630', '#2a2724'), roughness: 1 }));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; gSafe.add(floor);
-  box(gSafe, 20, 4.5, 0.4, 0x4a4640, 0, 2.25, -5, null, { roughness: 1 });
+  box(gSafe, 20, 4.5, 0.4, 0x4a4640, 0, 2.25, -5, null, { map: brickTex(11, 4, '#6a4a3a', '#9a8a76'), roughness: 0.95 });
   // Evidence map on the wall.
   const map = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 2.5), new THREE.MeshStandardMaterial({ map: mapTexture(), roughness: 0.9 }));
   map.position.set(-4, 2, -4.75); map.name = 'evidenceMap'; map.userData.clickable = true; gSafe.add(map);
@@ -1019,8 +1035,9 @@ function buildSafe() {
   }
   hitBox(gSafe, 4.5, 1.4, 0.6, 3, 1.6, -4.6, 'monitors');
   // Crates, cots, and the folder stack.
-  for (const [cx, cz] of [[-6, 2], [-5, 3.2], [5, 3]]) box(gSafe, 1.2, 1.0, 1.2, 0x5a4632, cx, 0.5, cz, null, { roughness: 0.95 });
-  box(gSafe, 1.8, 0.4, 0.7, 0x3a4a3a, -6, 0.25, -1, null, { roughness: 0.9 });
+  const crateWood = woodTex(1, 1, '#6a5232', '#4a3620');
+  for (const [cx, cz] of [[-6, 2], [-5, 3.2], [5, 3]]) box(gSafe, 1.2, 1.0, 1.2, 0x5a4632, cx, 0.5, cz, null, { map: crateWood, roughness: 0.95 });
+  box(gSafe, 1.8, 0.4, 0.7, 0x3a4a3a, -6, 0.25, -1, null, { map: fabricTex(2, 1, '#3a4a3a'), roughness: 0.95 });
   const files = box(gSafe, 0.5, 0.25, 0.35, 0xd8c98a, -5, 1.15, 3.2, 'files', { roughness: 0.85 });
   files.rotation.y = 0.4;
   hitBox(gSafe, 1.2, 1.0, 1.2, -5, 1.1, 3.2, 'files');
@@ -1055,10 +1072,10 @@ function startChapter4() {
 // ---------- Chapter 5: The Press Conference ----------
 let flashSprites = [];
 function buildPress() {
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), stdMat({ color: 0x6a6f72, roughness: 1 }));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), stdMat({ map: carpetTex(8, 8, '#4a4d55'), roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; gPress.add(ground);
   // Podium with microphones.
-  box(gPress, 1.6, 1.2, 0.8, 0x2a2118, 0, 0.6, -2, 'podium', { roughness: 0.8 });
+  box(gPress, 1.6, 1.2, 0.8, 0x2a2118, 0, 0.6, -2, 'podium', { map: woodTex(2, 1, '#3a2a18', '#241a10'), roughness: 0.7 });
   hitBox(gPress, 2.2, 1.8, 1.4, 0, 0.8, -2, 'podium');
   // The podium is solid: the player steps up to it and clicks it, he
   // does not walk through it. Progression is by click, so blocking the
@@ -1069,18 +1086,19 @@ function buildPress() {
     mic.position.set(mx, 1.45, -1.9); mic.rotation.x = 0.4; gPress.add(mic);
   }
   // Cameras on tripods, with flash sprites.
+  const legSteel = steelTex(1, 2);
   for (const [cx, cz] of [[-3, 2], [0, 3], [3, 2]]) {
-    const cam = box(gPress, 0.5, 0.35, 0.7, 0x1a1d20, cx, 1.5, cz, null, { roughness: 0.4 });
+    const cam = box(gPress, 0.5, 0.35, 0.7, 0x1a1d20, cx, 1.5, cz, null, { map: metalTex(1, 1, '#1a1d20'), roughness: 0.4, metalness: 0.4 });
     cam.rotation.y = cx === 0 ? 0 : (cx < 0 ? 0.5 : -0.5);
     for (const [lx, lz] of [[-0.2, 0.2], [0.2, 0.2]]) {
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.5, 6), stdMat({ color: 0x222222, metalness: 0.6, roughness: 0.5 }));
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.5, 6), stdMat({ map: legSteel, metalness: 0.7, roughness: 0.4 }));
       leg.position.set(cx + lx, 0.75, cz + lz); leg.rotation.z = lx * 0.8; gPress.add(leg);
     }
     const fl = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
     fl.scale.set(1.6, 1.6, 1); fl.position.set(cx, 1.6, cz - 0.4); gPress.add(fl); flashSprites.push(fl);
   }
   // Crowd: a row of simple dark figures (low boxes) behind a barrier.
-  box(gPress, 10, 0.9, 0.3, 0x8a8a8a, 0, 0.45, 4.5, null, { roughness: 0.8, metalness: 0.4 });
+  box(gPress, 10, 0.9, 0.3, 0x8a8a8a, 0, 0.45, 4.5, null, { map: steelTex(4, 1, '#7a7d80'), roughness: 0.5, metalness: 0.7 });
   for (let i = 0; i < 7; i++) {
     const p = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 1.1, 8), stdMat({ color: 0x2a2a30, roughness: 0.9 }));
     p.position.set(-4.5 + i * 1.5, 0.55, 5.2); gPress.add(p);
@@ -1181,15 +1199,17 @@ function buildBridge() {
   const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW_TEX, color: 0xffb36a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
   sunGlow.scale.set(26, 12, 1); sunGlow.position.set(0, 4, -50); gBridge.add(sunGlow);
   // Bridge deck + railings.
-  box(gBridge, 4, 0.5, 30, 0x3a3f42, 0, -0.25, -2, null, { roughness: 0.9 });
+  box(gBridge, 4, 0.5, 30, 0x3a3f42, 0, -0.25, -2, null, { map: asphaltTex(1, 10, '#33363a'), roughness: 0.95 });
+  const deckRailSteel = steelTex(1, 8);
   for (const sx of [-1.9, 1.9]) {
-    const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 30, 8), stdMat({ color: 0x6a747a, metalness: 0.8, roughness: 0.4 }));
+    const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 30, 8), stdMat({ map: deckRailSteel, metalness: 0.85, roughness: 0.35 }));
     rail.rotation.x = Math.PI / 2; rail.position.set(sx, 1.1, -2); gBridge.add(rail);
   }
   // The 4 train crossing on a distant bridge, full of passengers, moving.
   trainMesh = new THREE.Group();
+  const trainMetal = metalTex(2, 1, '#2a5a3a');
   for (let i = 0; i < 4; i++) {
-    const car = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 1.6), new THREE.MeshStandardMaterial({ color: 0x2a5a3a, roughness: 0.5, metalness: 0.4 }));
+    const car = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 1.6), new THREE.MeshStandardMaterial({ map: trainMetal, roughness: 0.45, metalness: 0.4 }));
     car.position.set(i * 3.4, 0, 0); trainMesh.add(car);
     const win = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.6), new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffd166, emissiveIntensity: 0.8 }));
     win.position.set(i * 3.4, 0.2, 0.85); trainMesh.add(win);
@@ -1198,13 +1218,18 @@ function buildBridge() {
   // The 4 train runs on a real track: a ballast deck, two steel rails and
   // sleepers, carried on pillars, so the moving train reads as a train on
   // a track and not a box floating over the river.
-  box(gBridge, 90, 0.4, 3.2, 0x2a2f33, 0, 1.5, -30, null, { roughness: 0.95 });
+  box(gBridge, 90, 0.4, 3.2, 0x2a2f33, 0, 1.5, -30, null, { map: concreteTex(20, 1, '#2a2f33'), roughness: 0.95 });
+  // One shared texture per repeated element: a fresh canvas per sleeper
+  // would be ~64 canvases of 512x512 for the same dark wood.
+  const trackRailSteel = steelTex(20, 1);
   for (const rz of [-30.75, -29.25]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(90, 0.1, 0.08), stdMat({ color: 0x9aa2a8, metalness: 0.9, roughness: 0.25 }));
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(90, 0.1, 0.08), stdMat({ map: trackRailSteel, metalness: 0.9, roughness: 0.25 }));
     rail.position.set(0, 1.78, rz); gBridge.add(rail);
   }
-  for (let sx = -44; sx <= 44; sx += 1.4) box(gBridge, 0.3, 0.08, 2.2, 0x1a1a1a, sx, 1.72, -30, null, { roughness: 1 });
-  for (const px of [-30, -10, 10, 30]) box(gBridge, 0.8, 4, 0.8, 0x3a3f42, px, -0.5, -30, null, { roughness: 0.95 });
+  const tieWood = woodTex(1, 1, '#241a12', '#120c06');
+  for (let sx = -44; sx <= 44; sx += 1.4) box(gBridge, 0.3, 0.08, 2.2, 0x1a1a1a, sx, 1.72, -30, null, { map: tieWood, roughness: 1 });
+  const pillarConcrete = concreteTex(1, 2);
+  for (const px of [-30, -10, 10, 30]) box(gBridge, 0.8, 4, 0.8, 0x3a3f42, px, -0.5, -30, null, { map: pillarConcrete, roughness: 0.95 });
   // The click target rides WITH the train: the old static hit box sat at
   // x=0 while the train moved, so only the leading car was clickable when
   // it happened to pass x=0. Now the whole train is clickable anywhere.
