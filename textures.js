@@ -116,8 +116,11 @@ export function brickTex(rx, ry, base, mortar) {
 
 // Wood planks: horizontal boards with grain strokes, board separators and
 // the occasional knot. Floors, benches, pews, tables, crates, sleepers.
-export function woodTex(rx, ry, base, dark, planks) {
-  const b = base || '#6b4a2c', d = dark || '#4a3018', n = planks || 6;
+// The optional grain factor (default 1) scales the grain-stroke contrast:
+// a desk top or sleeper seen up close needs grain 1.8 to read, while
+// ordinary furniture reads at 1.
+export function woodTex(rx, ry, base, dark, planks, grain) {
+  const b = base || '#6b4a2c', d = dark || '#4a3018', n = planks || 6, g = grain || 1;
   return makeTex(512, 512, (ctx, w, h) => {
     const rand = rng(51);
     ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
@@ -126,18 +129,18 @@ export function woodTex(rx, ry, base, dark, planks) {
       const y = p * ph;
       ctx.fillStyle = shade(b, 0.9 + rand() * 0.2);
       ctx.fillRect(0, y, w, ph);
-      ctx.strokeStyle = 'rgba(30,18,8,0.35)'; ctx.lineWidth = 1;
-      for (let g = 0; g < 5; g++) {
+      ctx.strokeStyle = 'rgba(30,18,8,' + Math.min(0.85, 0.35 * g).toFixed(2) + ')'; ctx.lineWidth = 1;
+      for (let gg = 0; gg < 5; gg++) {
         const gy = y + 4 + rand() * (ph - 8);
         ctx.beginPath(); ctx.moveTo(0, gy);
-        for (let x = 0; x <= w; x += 32) ctx.lineTo(x, gy + Math.sin(x * 0.02 + g) * 2 + (rand() - 0.5) * 2);
+        for (let x = 0; x <= w; x += 32) ctx.lineTo(x, gy + Math.sin(x * 0.02 + gg) * 2 + (rand() - 0.5) * 2);
         ctx.stroke();
       }
       ctx.fillStyle = d; ctx.fillRect(0, y, w, 2);
       ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(0, y + 2, w, 1);
       if (rand() < 0.6) {
         const kx = rand() * w, ky = y + ph / 2;
-        ctx.strokeStyle = 'rgba(30,18,8,0.5)'; ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(30,18,8,' + Math.min(0.85, 0.5 * g).toFixed(2) + ')'; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.ellipse(kx, ky, 7, 4, 0, 0, Math.PI * 2); ctx.stroke();
         ctx.beginPath(); ctx.ellipse(kx, ky, 3, 2, 0, 0, Math.PI * 2); ctx.stroke();
       }
@@ -166,15 +169,20 @@ export function metalTex(rx, ry, base) {
 }
 
 // Brushed steel: bright base with fine horizontal streaks and a soft
-// diagonal highlight. Rails, fire escape, tripod legs, barriers.
+// diagonal highlight. Rails, fire escape, tripod legs, barriers. The
+// streaks are strong enough to read on a small mesh at a distance.
 export function steelTex(rx, ry, base) {
   const b = base || '#9aa2a8';
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(83);
     ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
-    for (let i = 0; i < 180; i++) {
-      ctx.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.09)';
+    for (let i = 0; i < 240; i++) {
+      ctx.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.14)';
       ctx.fillRect(0, rand() * h, w, 1);
+    }
+    for (let i = 0; i < 12; i++) {
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.fillRect(0, rand() * h, w, 2);
     }
     const g = ctx.createLinearGradient(0, 0, w, h);
     g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.5, 'rgba(255,255,255,0.10)'); g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -182,102 +190,162 @@ export function steelTex(rx, ry, base) {
   }, rx, ry);
 }
 
-// Window glass: dark blue-grey with diagonal reflection streaks. Used
-// with a standard material at low roughness; the streaks keep a pane
-// from reading as a flat black slab.
+// Window glass: dark blue-grey with strong diagonal reflection streaks
+// and a sky band at the top. Used with a standard material at low
+// roughness; the streaks keep a pane from reading as a flat black slab.
 export function glassTex(rx, ry) {
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(97);
-    ctx.fillStyle = '#0e1a24'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#1a2836'; ctx.fillRect(0, 0, w, h);
     for (let i = 0; i < 3; i++) {
-      ctx.fillStyle = 'rgba(180,210,235,' + (0.10 + rand() * 0.08) + ')';
+      ctx.fillStyle = 'rgba(180,210,235,' + (0.20 + rand() * 0.12) + ')';
       ctx.beginPath();
       const x0 = rand() * w;
       ctx.moveTo(x0, 0); ctx.lineTo(x0 + 26, 0); ctx.lineTo(x0 - 60, h); ctx.lineTo(x0 - 86, h);
       ctx.closePath(); ctx.fill();
     }
+    const g = ctx.createLinearGradient(0, 0, 0, h * 0.35);
+    g.addColorStop(0, 'rgba(200,220,240,0.16)'); g.addColorStop(1, 'rgba(200,220,240,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h * 0.35);
     speckle(ctx, w, h, rand, 200, '#8aa8c0', '#05080c');
   }, rx, ry);
 }
 
-// Woven fabric: crosshatch weave over a dyed base. Flags, cot canvas,
-// crowd clothing.
+// Woven fabric: crosshatch weave over a dyed base, with dye variation
+// and hanging folds. Flags, cot canvas, crowd clothing. The weave is
+// coarse and high-contrast on purpose: on a small flag at a few metres
+// a fine weave is sub-pixel and the cloth reads as a flat colour block.
+// The large-scale blotches and fold bands are what read at distance.
 export function fabricTex(rx, ry, base) {
   const b = base || '#5a2a2a';
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(113);
     ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = 'rgba(0,0,0,0.10)';
-    for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1);
-    ctx.fillStyle = 'rgba(255,255,255,0.07)';
-    for (let x = 0; x < w; x += 3) ctx.fillRect(x, 0, 1, h);
-    speckle(ctx, w, h, rand, 600, '#c8a0a0', '#1a0c0c');
+    for (let i = 0; i < 5; i++) {
+      const x = rand() * w, y = rand() * h, r = 40 + rand() * 70;
+      const g = ctx.createRadialGradient(x, y, 2, x, y, r);
+      g.addColorStop(0, rand() < 0.5 ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    for (let i = 0; i < 6; i++) {
+      const x = (i + 0.5) * w / 6 + (rand() - 0.5) * 12;
+      const g = ctx.createLinearGradient(x - 18, 0, x + 18, 0);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(0.5, i % 2 ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.fillRect(x - 18, 0, 36, h);
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
+    for (let y = 0; y < h; y += 2) ctx.fillRect(0, y, w, 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    for (let x = 0; x < w; x += 2) ctx.fillRect(x, 0, 1, h);
+    speckle(ctx, w, h, rand, 900, '#c8a0a0', '#1a0c0c');
   }, rx, ry);
 }
 
-// Carpet: dense short speckle in two close tones. Press hall floor.
+// Carpet: dense short fibre strokes in two close tones over a mottled
+// base. Press hall floor. The old version's fine dots were too faint to
+// read; the strokes are what make it carpet instead of a flat slab.
 export function carpetTex(rx, ry, base) {
   const b = base || '#3a2a3e';
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(127);
     ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
-    speckle(ctx, w, h, rand, 6000, shade(b, 1.25), shade(b, 0.75));
+    for (let i = 0; i < 6; i++) {
+      const x = rand() * w, y = rand() * h, r = 40 + rand() * 60;
+      const g = ctx.createRadialGradient(x, y, 2, x, y, r);
+      g.addColorStop(0, rand() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    for (let i = 0; i < 9000; i++) {
+      ctx.strokeStyle = rand() < 0.5 ? shade(b, 1.35) : shade(b, 0.65);
+      ctx.globalAlpha = 0.12 + rand() * 0.18;
+      ctx.lineWidth = 1;
+      const x = rand() * w, y = rand() * h, a = rand() * Math.PI, l = 2 + rand() * 3;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
   }, rx, ry);
 }
 
 // Plaster wall: warm off-white with soft blotches and faint vertical
 // streaks. Interior walls that should read as painted plaster, not paint.
+// The variation is deliberately strong: at 0.06 alpha the old blotches
+// were invisible at a glance and the wall read as flat paint.
 export function plasterTex(rx, ry, base) {
   const b = base || '#c9bfa9';
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(131);
     ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 16; i++) {
       const x = rand() * w, y = rand() * h, r = 30 + rand() * 60;
       const g = ctx.createRadialGradient(x, y, 2, x, y, r);
       const light = rand() < 0.5;
-      g.addColorStop(0, light ? 'rgba(255,255,255,0.06)' : 'rgba(60,50,40,0.06)');
+      g.addColorStop(0, light ? 'rgba(255,255,255,0.12)' : 'rgba(60,50,40,0.12)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
     }
-    for (let i = 0; i < 20; i++) {
-      ctx.fillStyle = 'rgba(60,50,40,0.04)';
+    for (let i = 0; i < 4; i++) {
+      const y = rand() * h;
+      const g = ctx.createLinearGradient(0, y - 14, 0, y + 14);
+      g.addColorStop(0, 'rgba(255,255,255,0)');
+      g.addColorStop(0.5, rand() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(60,50,40,0.05)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, y - 14, w, 28);
+    }
+    for (let i = 0; i < 28; i++) {
+      ctx.fillStyle = 'rgba(60,50,40,0.08)';
       ctx.fillRect(rand() * w, 0, 1 + rand() * 2, h);
     }
-    speckle(ctx, w, h, rand, 800, '#e8e0d0', '#8a7a62');
+    speckle(ctx, w, h, rand, 1200, '#e8e0d0', '#8a7a62');
   }, rx, ry);
 }
 
-// Roof membrane: dark grey with gravel speckle and seam grid. The
-// rooftop slab top.
+// Roof membrane: dark grey with gravel speckle. The rooftop slab top.
+// The old version's regular seam grid read as a dark tile floor; the
+// grid is gone and the gravel is now thousands of visible stones in
+// varied greys, large and bright enough to read at normal distance.
 export function roofTex(rx, ry, base) {
   const b = base || '#3a3d40';
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(149);
     ctx.fillStyle = b; ctx.fillRect(0, 0, w, h);
-    speckle(ctx, w, h, rand, 2500, '#6a6e72', '#1c1e20');
-    ctx.fillStyle = 'rgba(0,0,0,0.30)';
-    for (let x = 0; x <= w; x += 64) ctx.fillRect(x, 0, 2, h);
-    for (let y = 0; y <= h; y += 64) ctx.fillRect(0, y, w, 2);
+    const tones = ['#6a6e72', '#55585c', '#7d8185', '#2c2e30', '#8a8e92', '#45484b'];
+    for (let i = 0; i < 3800; i++) {
+      ctx.fillStyle = tones[(rand() * tones.length) | 0];
+      ctx.globalAlpha = 0.45 + rand() * 0.4;
+      const r = 1 + rand() * 2.5;
+      ctx.beginPath(); ctx.ellipse(rand() * w, rand() * h, r, r * (0.6 + rand() * 0.6), rand() * Math.PI, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
     for (let i = 0; i < 4; i++) {
       const x = rand() * w, y = rand() * h, r = 25 + rand() * 40;
       const g = ctx.createRadialGradient(x, y, 2, x, y, r);
       g.addColorStop(0, 'rgba(20,20,22,0.12)'); g.addColorStop(1, 'rgba(20,20,22,0)');
       ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
     }
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    for (let x = 0; x <= w; x += 128) ctx.fillRect(x, 0, 2, h);
+    for (let y = 0; y <= h; y += 128) ctx.fillRect(0, y, w, 2);
+    speckle(ctx, w, h, rand, 1200, '#7a7e82', '#1c1e20');
   }, rx, ry);
 }
 
-// Dark floor tiles: grout grid with per-tile tone jitter. Control room.
-export function tileTex(rx, ry, base, grout, tiles) {
-  const b = base || '#20242a', g = grout || '#3a4048', n = tiles || 4;
+// Floor tiles: a real checkerboard - tiles alternate between the base
+// tone and a contrasting tone (default: the base lightened 1.8x), with
+// grout joints and per-tile tone jitter. The old version used one tone
+// for every tile, so the floor read as all-black with grey grout.
+export function tileTex(rx, ry, base, grout, tiles, alt) {
+  const b = base || '#20242a', g = grout || '#3a4048', n = tiles || 4, a = alt || shade(b, 1.8);
   return makeTex(256, 256, (ctx, w, h) => {
     const rand = rng(163);
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
     const s = w / n;
     for (let ty = 0; ty < n; ty++) {
       for (let tx = 0; tx < n; tx++) {
-        ctx.fillStyle = shade(b, 0.9 + rand() * 0.2);
+        ctx.fillStyle = shade(((tx + ty) % 2 === 0) ? b : a, 0.9 + rand() * 0.2);
         ctx.fillRect(tx * s + 2, ty * s + 2, s - 4, s - 4);
         ctx.fillStyle = 'rgba(255,255,255,0.05)';
         ctx.fillRect(tx * s + 2, ty * s + 2, s - 4, 2);

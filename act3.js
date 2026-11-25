@@ -486,7 +486,7 @@ function ebsTick() {
 setInterval(ebsTick, 1000);
 let ebsScreen;
 function buildControl() {
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ map: tileTex(6, 6), roughness: 0.85 }));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), stdMat({ map: tileTex(6, 6, '#23272e', '#0f1216', 4, '#5c626a'), roughness: 0.85 }));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; gControl.add(floor);
   box(gControl, 20, 4, 0.4, 0x2a2f33, 0, 2, -5, null, { map: plasterTex(8, 2, '#3a4046'), roughness: 0.9 });
   // Monitor wall: city systems at a glance.
@@ -503,7 +503,14 @@ function buildControl() {
   ebsScreen.position.set(0, 3.6, -4.75); ebsScreen.name = 'ebs'; ebsScreen.userData.clickable = true; gControl.add(ebsScreen);
   hitBox(gControl, 6, 2.2, 0.6, 0, 3.6, -4.6, 'ebs');
   // Terminal desk where the fix is entered: dark wood, not a grey slab.
-  box(gControl, 3.2, 0.9, 1.0, 0x2a2f33, 0, 0.45, 1.5, null, { map: woodTex(2, 1, '#4a3423', '#2e2012'), roughness: 0.6, metalness: 0.1 });
+  // BoxGeometry maps one texture to every face, so a single material
+  // left the top reading as a flat slab while the sides showed grain.
+  // The top face gets its own strong-grain wood (material index 2, +y);
+  // same geometry, same position, same collider as before.
+  const deskSideMat = stdMat({ map: woodTex(2, 1, '#4a3423', '#2e2012'), roughness: 0.6, metalness: 0.1 });
+  const deskTopMat = stdMat({ map: woodTex(1, 1, '#5a4028', '#33240f', 4, 1.8), roughness: 0.55, metalness: 0.1 });
+  const desk = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.9, 1.0), [deskSideMat, deskSideMat, deskTopMat, deskSideMat, deskSideMat, deskSideMat]);
+  desk.position.set(0, 0.45, 1.5); desk.castShadow = true; desk.receiveShadow = true; gControl.add(desk);
   // The desk is solid: the player stops at its edge instead of walking
   // straight through it and into the terminal screen.
   addBoxCollider(ch1Colliders, -1.6, 1.0, 1.6, 2.0);
@@ -885,15 +892,19 @@ function buildEscape() {
   box(gEscape, 10, 0.5, 0.3, 0x2a2f33, -4, 3.0, -10, null, { map: concreteTex(4, 1, '#2a2f33'), roughness: 1 });
   box(gEscape, 1.5, 1.0, 1.5, 0x5a5f62, -6, 3.3, -7, null, { map: metalTex(1, 1, '#5a5f62'), roughness: 0.7, metalness: 0.4 });
   box(gEscape, 1.2, 0.8, 1.2, 0x4a4f52, -2, 3.2, -8, null, { map: metalTex(1, 1, '#4a4f52'), roughness: 0.7, metalness: 0.4 });
-  // Fire escape stairs down from the rooftop to the alley.
-  const stepSteel = steelTex(1, 1, '#2a2e33');
+  // Fire escape stairs down from the rooftop to the alley. Light brushed
+  // steel: the old near-black steel read as a flat black platform.
+  const stepSteel = steelTex(1, 1, '#767c82');
   for (let i = 0; i < 5; i++) {
-    box(gEscape, 1.2, 0.08, 0.5, 0x1a1d20, 1.5, 2.6 - i * 0.5, -2.5 + i * 0.9, i === 2 ? 'fireEscape' : null, { map: stepSteel, roughness: 0.5, metalness: 0.7 });
+    box(gEscape, 1.2, 0.08, 0.5, 0x1a1d20, 1.5, 2.6 - i * 0.5, -2.5 + i * 0.9, i === 2 ? 'fireEscape' : null, { map: stepSteel, roughness: 0.5, metalness: 0.4 });
   }
   hitBox(gEscape, 1.6, 3.0, 3.0, 1.5, 1.5, -0.5, 'fireEscape');
   // Black SUV waiting in the alley: glossy black paint, glass cabin.
-  box(gEscape, 2.0, 1.4, 4.4, 0x0a0a0a, 5.5, 0.9, -1, 'suv', { map: metalTex(2, 1, '#0d0d10'), roughness: 0.25, metalness: 0.6 });
-  box(gEscape, 1.8, 0.7, 2.2, 0x111418, 5.5, 1.9, -1, null, { map: glassTex(), roughness: 0.1, metalness: 0.5 });
+  // The old near-black paint at metalness 0.6 read as a flat black box
+  // from rear and side (no env map in the scene, so high metalness goes
+  // black). Lighter paint, lower metalness, brighter glass.
+  box(gEscape, 2.0, 1.4, 4.4, 0x0a0a0a, 5.5, 0.9, -1, 'suv', { map: metalTex(2, 1, '#191c22'), roughness: 0.3, metalness: 0.35 });
+  box(gEscape, 1.8, 0.7, 2.2, 0x111418, 5.5, 1.9, -1, null, { map: glassTex(), roughness: 0.05, metalness: 0.3 });
   hitBox(gEscape, 2.6, 2.2, 5.0, 5.5, 1.0, -1, 'suv');
   const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTexture('QUEENSBORO PLAZA', '#111111', '#e8e8e8', 'AFTERNOON'), transparent: true, depthWrite: false }));
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 5.5, -8); gEscape.add(sign);
@@ -1164,7 +1175,9 @@ function buildSafe() {
   // Crates, cots, and the folder stack.
   const crateWood = woodTex(1, 1, '#6a5232', '#4a3620');
   for (const [cx, cz] of [[-6, 2], [-5, 3.2], [5, 3]]) box(gSafe, 1.2, 1.0, 1.2, 0x5a4632, cx, 0.5, cz, null, { map: crateWood, roughness: 0.95 });
-  box(gSafe, 1.8, 0.4, 0.7, 0x3a4a3a, -6, 0.25, -1, null, { map: fabricTex(2, 1, '#3a4a3a'), roughness: 0.95 });
+  // The cot: lighter olive canvas, so it reads against the dark concrete
+  // floor instead of vanishing into it. Same position and size as before.
+  box(gSafe, 1.8, 0.4, 0.7, 0x3a4a3a, -6, 0.25, -1, null, { map: fabricTex(2, 1, '#6a7a58'), roughness: 0.95 });
   const files = box(gSafe, 0.5, 0.25, 0.35, 0xd8c98a, -5, 1.15, 3.2, 'files', { roughness: 0.85 });
   files.rotation.y = 0.4;
   hitBox(gSafe, 1.2, 1.0, 1.2, -5, 1.1, 3.2, 'files');
@@ -1225,7 +1238,9 @@ function buildPress() {
     fl.scale.set(1.6, 1.6, 1); fl.position.set(cx, 1.6, cz - 0.4); gPress.add(fl); flashSprites.push(fl);
   }
   // Crowd: a row of simple dark figures (low boxes) behind a barrier.
-  box(gPress, 10, 0.9, 0.3, 0x8a8a8a, 0, 0.45, 4.5, null, { map: steelTex(4, 1, '#7a7d80'), roughness: 0.5, metalness: 0.7 });
+  // The barrier is bright brushed steel: at metalness 0.7 with no env
+  // map it went black and read as a row of dark bollards.
+  box(gPress, 10, 0.9, 0.3, 0x8a8a8a, 0, 0.45, 4.5, null, { map: steelTex(4, 1, '#9aa0a6'), roughness: 0.45, metalness: 0.3 });
   for (let i = 0; i < 7; i++) {
     const p = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 1.1, 8), stdMat({ color: 0x2a2a30, roughness: 0.9 }));
     p.position.set(-4.5 + i * 1.5, 0.55, 5.2); gPress.add(p);
@@ -1391,7 +1406,9 @@ function buildBridge() {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(90, 0.1, 0.08), stdMat({ map: trackRailSteel, metalness: 0.9, roughness: 0.25 }));
     rail.position.set(0, 1.78, rz); gBridge.add(rail);
   }
-  const tieWood = woodTex(1, 1, '#241a12', '#120c06');
+  // Sleepers: mid-brown wood, so the separate ties read against the dark
+  // ballast deck. The old near-black wood vanished into the deck.
+  const tieWood = woodTex(1, 1, '#4a3220', '#2c1e10');
   for (let sx = -44; sx <= 44; sx += 1.4) box(gBridge, 0.3, 0.08, 2.2, 0x1a1a1a, sx, 1.72, -30, null, { map: tieWood, roughness: 1 });
   const pillarConcrete = concreteTex(1, 2);
   for (const px of [-30, -10, 10, 30]) box(gBridge, 0.8, 4, 0.8, 0x3a3f42, px, -0.5, -30, null, { map: pillarConcrete, roughness: 0.95 });
