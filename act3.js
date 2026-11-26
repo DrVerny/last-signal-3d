@@ -55,7 +55,7 @@ const state = {
 const OBJ = {
   1: ['Reach the MTA Rail Control Center terminal: walk to the terminal and click it', 'Decide how to fix the EBS virus - and seal the choice: pick a choice', 'The choice stays sealed until the end'],
   2: ['Stand before Judge Ellsworth: walk to the judge', 'Hear the sentence - and what comes with it: watch the hearing'],
-  3: ['Ride the transport van to lockup: click the van doors when they come for you', 'When the doors open, run: move with WASD or the on-screen pad', 'Cross the rooftop - down the fire escape to the SUV: climb with press and hold, then run to the SUV'],
+  3: ['Step inside the police bus: walk to the rear doors - they slide open', 'When they come for you, click the van doors - then run: move with WASD or the on-screen pad', 'Cross the rooftop - down the fire escape to the SUV: climb with press and hold, then run to the SUV'],
   4: ['Meet Owen Marsh and the ex-city workers: click Owen Marsh', 'See the files, the witnesses, the evidence: click the evidence', 'Agree the plan: the Attorney General\u2019s press conference, 9 AM - pick a choice'],
   5: ['Step up to the podium: walk to the podium and click it', 'Tell the city the truth - and hand over the folder: pick a choice'],
   6: ['One month later: City Hall steps', 'Dawn on the Williamsburg Bridge - the ending is revealed']
@@ -692,6 +692,10 @@ let vanDoorL, vanDoorR, trainMesh;
 let policeLightL = null, policeLightR = null; // flashing roof bar on the police bus
 let militantVan = null; // the militants' van, animated in the chase
 let ramPuff = null; // dust at the spot where the van rammed the bus
+let busDoorsOpen = false; // the police bus rear doors slide open on walk-up, so the player can step inside
+let busDoorCollider = null; // the doorway plug: blocks the rear doorway while the doors are shut, removed when they open
+let busLight = null; // the single flickering ceiling light inside the bus
+let busLightMesh = null; // its emissive fixture, flickers in sync with the light
 const dustPuffs = []; // drifting dust sprites, reused
 // A real wheel: a dark tyre with a lighter steel hubcap and a sidewall
 // ring on both faces, so it reads as a wheel from the side instead of a
@@ -759,11 +763,28 @@ function buildEscape() {
   // Police transport bus: the offender rides in this. Navy body, white band,
   // POLICE lettering, barred windows, flashing roof bar, rear doors (the
   // click target, same name as the old van doors so the escape still works).
-  const bus = new THREE.Group(); bus.position.set(0, 0, 2); gEscape.add(bus);
-  const busBody = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6), stdMat({ map: metalTex(2, 1, '#22395e'), roughness: 0.45, metalness: 0.2 }));
-  busBody.position.set(0, 1.4, 0); busBody.castShadow = true; busBody.receiveShadow = true; bus.add(busBody);
+  const bus = new THREE.Group(); bus.position.set(0, 0, 2); bus.name = 'policeBus'; gEscape.add(bus);
+  // The bus is a real shell, not a solid box: the player steps inside
+  // through the rear doors. Floor, side walls, front wall, rear wall in
+  // two segments with a 1.4 m doorway, and the roof. DoubleSide so the
+  // inside reads as walls, not sky. Same navy outside as before.
+  const busShellMat = stdMat({ map: metalTex(2, 1, '#22395e'), roughness: 0.45, metalness: 0.2, side: THREE.DoubleSide });
+  const busFloor = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.1, 6), stdMat({ map: metalTex(2, 2, '#23262a'), roughness: 0.95, side: THREE.DoubleSide }));
+  busFloor.position.set(0, 0.05, 0); busFloor.receiveShadow = true; bus.add(busFloor);
+  for (const sx of [-1, 1]) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.6, 6), busShellMat);
+    wall.position.set(sx * 1.25, 1.4, 0); wall.castShadow = true; wall.receiveShadow = true; bus.add(wall);
+  }
+  const busFront = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 0.1), busShellMat);
+  busFront.position.set(0, 1.4, 2.95); busFront.castShadow = true; bus.add(busFront);
+  for (const sx of [-1, 1]) {
+    const rear = new THREE.Mesh(new THREE.BoxGeometry(0.6, 2.6, 0.1), busShellMat);
+    rear.position.set(sx * 1.0, 1.4, -2.95); rear.castShadow = true; bus.add(rear);
+  }
+  const busHeader = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.4, 0.1), busShellMat);
+  busHeader.position.set(0, 2.5, -2.95); bus.add(busHeader);
   // Roof cap and bumpers, so the body reads as a bus and not a plain box.
-  const busRoof = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.18, 5.9), stdMat({ color: 0x2c4a72, roughness: 0.5, metalness: 0.2 }));
+  const busRoof = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.18, 5.9), stdMat({ color: 0x2c4a72, roughness: 0.5, metalness: 0.2, side: THREE.DoubleSide }));
   busRoof.position.set(0, 2.78, 0); busRoof.castShadow = true; bus.add(busRoof);
   for (const bz of [3.02, -3.02]) {
     const bumper = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.25, 0.3), stdMat({ color: 0xc8ccd0, metalness: 0.8, roughness: 0.3 }));
@@ -775,10 +796,20 @@ function buildEscape() {
     const tl = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.18, 0.08), new THREE.MeshStandardMaterial({ color: 0xaa0000, emissive: 0xff2020, emissiveIntensity: 1.2 }));
     tl.position.set(hx, 0.75, -3.06); bus.add(tl);
   }
-  // The bus is solid: the player runs around it to the ladder, not
-  // through it. The ladder marker (-4, -2) sits well west of the bus,
-  // so the run path stays open.
-  addBoxCollider(ch3Colliders, -1.3, -1, 1.3, 5);
+  // The bus walls are solid; the rear doorway is the only way in.
+  // The doorway plug blocks it while the doors are shut and is removed
+  // when they slide open (see openBusDoors). The benches and the mesh
+  // partition are solid too, so the player cannot walk through them.
+  addBoxCollider(ch3Colliders, -1.45, -1, -1.15, 5); // west wall
+  addBoxCollider(ch3Colliders, 1.15, -1, 1.45, 5); // east wall
+  addBoxCollider(ch3Colliders, -1.3, 4.85, 1.3, 5.15); // front wall (south)
+  addBoxCollider(ch3Colliders, -1.3, -1.15, -0.7, -0.85); // rear wall, west of the doorway
+  addBoxCollider(ch3Colliders, 0.7, -1.15, 1.3, -0.85); // rear wall, east of the doorway
+  addBoxCollider(ch3Colliders, -1.2, 0, -0.7, 2.5); // west bench
+  addBoxCollider(ch3Colliders, 0.7, 0, 1.2, 2.5); // east bench
+  addBoxCollider(ch3Colliders, -1.2, 3.75, 1.2, 3.85); // wire mesh partition
+  busDoorCollider = { x0: -0.7, z0: -1.15, x1: 0.7, z1: -0.85 };
+  ch3Colliders.push(busDoorCollider);
   const busBand = new THREE.Mesh(new THREE.BoxGeometry(2.62, 0.55, 6.02), stdMat({ map: metalTex(2, 1, '#d8d8d8'), roughness: 0.5, metalness: 0.1 }));
   busBand.position.set(0, 1.55, 0); bus.add(busBand);
   for (const sx of [-1, 1]) {
@@ -814,12 +845,52 @@ function buildEscape() {
     const arch = makeFenderArch(0.67, 0x22395e);
     arch.position.set(wx > 0 ? 1.31 : -1.31, 0.55, wz); bus.add(arch);
   }
+  // Rear doors on real hinges: each panel hangs from a group at the
+  // doorway edge, so it swings open instead of sliding through the
+  // wall. DoubleSide so the closed doors read as a wall from inside
+  // the bus too. The panels are the click target that starts the
+  // escape, as before; walking up to them opens them (see openBusDoors).
   const doorMetal = metalTex(1, 1, '#c8c8c8');
-  const dl = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ map: doorMetal, roughness: 0.5, metalness: 0.2 }));
-  dl.position.set(-0.62, 1.2, -3.05); dl.name = 'vanDoors'; dl.userData.clickable = true; bus.add(dl);
-  const dr = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.1), stdMat({ map: doorMetal, roughness: 0.5, metalness: 0.2 }));
-  dr.position.set(0.62, 1.2, -3.05); dr.name = 'vanDoors'; dr.userData.clickable = true; bus.add(dr);
+  const doorMat = stdMat({ map: doorMetal, roughness: 0.5, metalness: 0.2, side: THREE.DoubleSide });
+  const dl = new THREE.Group(); dl.position.set(-0.7, 1.2, -3.05); bus.add(dl);
+  const dlPanel = new THREE.Mesh(new THREE.BoxGeometry(0.7, 2.2, 0.1), doorMat);
+  dlPanel.position.set(0.35, 0, 0); dlPanel.name = 'vanDoors'; dlPanel.userData.clickable = true; dl.add(dlPanel);
+  const dr = new THREE.Group(); dr.position.set(0.7, 1.2, -3.05); bus.add(dr);
+  const drPanel = new THREE.Mesh(new THREE.BoxGeometry(0.7, 2.2, 0.1), doorMat);
+  drPanel.position.set(-0.35, 0, 0); drPanel.name = 'vanDoors'; drPanel.userData.clickable = true; dr.add(drPanel);
   vanDoorL = dl; vanDoorR = dr;
+  // Inside the bus: what Jade describes - a metal bench along each
+  // side, a wire mesh partition, a single flickering light. Jade and
+  // Caleb already stand in here at the chapter start (reparented to
+  // (+-0.9, 3.5)), clear of the benches, just north of the partition.
+  const benchSteel = stdMat({ color: 0x8a9094, roughness: 0.4, metalness: 0.7 });
+  for (const sx of [-1, 1]) {
+    const bench = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, 2.5), benchSteel);
+    bench.position.set(sx * 0.95, 0.325, -0.75); bench.castShadow = true; bus.add(bench);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.5, 2.5), benchSteel);
+    back.position.set(sx * 1.18, 0.8, -0.75); bus.add(back);
+  }
+  const meshSteel = stdMat({ color: 0x55595e, roughness: 0.5, metalness: 0.8 });
+  for (const sx of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.5, 0.06), meshSteel);
+    post.position.set(sx * 1.2, 1.35, 1.8); bus.add(post);
+  }
+  for (const ry of [0.2, 2.5]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.06, 0.06), meshSteel);
+    rail.position.set(0, ry, 1.8); bus.add(rail);
+  }
+  for (let bx = -1.2; bx <= 1.21; bx += 0.2) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.02, 2.3, 0.02), meshSteel);
+    bar.position.set(bx, 1.35, 1.8); bus.add(bar);
+  }
+  for (let by = 0.4; by <= 2.31; by += 0.21) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.02, 0.02), meshSteel);
+    bar.position.set(0, by, 1.8); bus.add(bar);
+  }
+  busLightMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.06, 0.3), new THREE.MeshStandardMaterial({ color: 0x666666, emissive: 0xffe9a8, emissiveIntensity: 1.2 }));
+  busLightMesh.position.set(0, 2.62, 0); bus.add(busLightMesh);
+  busLight = new THREE.PointLight(0xffe9a8, 0.9, 7, 1.5);
+  busLight.position.set(0, 2.3, 0); busLight.visible = false; bus.add(busLight);
   vanDoorsHit = hitBox(gEscape, 2.8, 2.6, 0.8, 0, 1.3, -1.1, 'vanDoors');
   // The militants' van: a dark van rammed nose-first into the bus's left
   // flank. Its nose touches the bus side at (-1.3, 2.3), with a dust puff
@@ -949,6 +1020,22 @@ function buildEscape() {
   sign.scale.set(5, 1.25, 1); sign.position.set(0, 5.5, -8); gEscape.add(sign);
   blobShadow(gEscape, 0, 2, 2.6, 5, 0.5);
 }
+// The bus rear doors swing open when the player walks up to them, so
+// he can step inside the bus before the escape starts. Called from
+// animate; the escape still starts by clicking the doors (the ripped-
+// open doors swing further on their hinges, as before).
+function openBusDoors() {
+  if (busDoorsOpen || state.chapter !== 3 || state.escapeStep !== 0) return;
+  busDoorsOpen = true;
+  if (vanDoorL) vanDoorL.rotation.y = 1.9;
+  if (vanDoorR) vanDoorR.rotation.y = -1.9;
+  if (busDoorCollider) {
+    const i = ch3Colliders.indexOf(busDoorCollider);
+    if (i >= 0) ch3Colliders.splice(i, 1);
+  }
+  try { sfxDoor(); } catch (e) { /* ignore */ }
+  toast('The bus doors swing open - step inside.');
+}
 let escapeTimer = null;
 let escapeTimeLeft = 90; // shared so action hits can subtract backup time
 function escapePenalty(s) {
@@ -1003,7 +1090,16 @@ function escapeStep(from) {
   if (state.escapeStep === 2 && from !== 'fireEscape' && from !== 'suv') return;
   if (state.escapeStep === 0) {
     state.escapeStep = 1;
-    vanDoorL.position.x = -1.6; vanDoorR.position.x = 1.6; // doors ripped open
+    // Doors ripped open: flung wide on their hinges (they already stand
+    // open if the player walked up to them first). The doorway plug goes
+    // too, so the player can run out of the bus to the ladder.
+    if (vanDoorL) vanDoorL.rotation.y = 2.2;
+    if (vanDoorR) vanDoorR.rotation.y = -2.2;
+    if (busDoorCollider) {
+      const i = ch3Colliders.indexOf(busDoorCollider);
+      if (i >= 0) ch3Colliders.splice(i, 1);
+    }
+    busDoorsOpen = true;
     if (vanDoorsHit) vanDoorsHit.visible = false; // the big doors hitbox sits between the roof and the fire escape: left visible it swallows the later fire-escape click
     try { sfxDoor(); sfxBoom(); } catch (e) { /* ignore */ } // the doors tear off, the ram hits
     // Jade and Caleb step out of the back of the bus, by the leader.
@@ -1364,15 +1460,19 @@ function updateVanChase(dt, t) {
     if (k >= 1) { vanChase.phase = 'drift'; vanChase.z = militantVan.position.z; vanChase.spawnT = 0; }
     return;
   }
-  // Drift: the van runs down the road (toward -z) weaving across its lane,
-  // its nose pointed a slip angle away from its direction of travel so the
-  // rear reads as sliding out, with dust at the rear wheels. When it runs
-  // off the far end it loops back behind the camera, out of sight.
+  // Drift: the van runs down the road (toward -z) weaving across its
+  // lane, its nose pointed a slip angle away from its direction of
+  // travel so the rear reads as sliding out, with dust at the rear
+  // wheels. When it runs off the far end it loops back behind the
+  // camera, out of sight. It weaves across the east half of the road
+  // only: the old weave (x -3..-1) sat right on the ladder approach
+  // at (-4,-2), so the solid van could wall the player off the ladder.
+  // The ladder approach from the west stays open now.
   vanChase.z -= 4.5 * dt;
   if (vanChase.z < -16) vanChase.z = 10;
   const weave = Math.sin(vanChase.z * 0.25);
   militantVan.position.z = vanChase.z;
-  militantVan.position.x = -2.0 + weave * 1.0;
+  militantVan.position.x = -1.5 + weave * 0.8;
   const slip = 0.28 * Math.sin(vanChase.z * 0.25 + 0.8);
   militantVan.rotation.y = Math.PI + slip;
   updateVanCollider();
@@ -1673,8 +1773,9 @@ const chapterTargets = {};
 // Ch 1/2/4 back walls, the Ch 6 parapets), a click target the player must
 // reach (the SUV, whose arrival trigger is a 1.5 m radius around its
 // centre, and the fire escape), or a low rail the player steps over (the
-// press crowd barrier, and the Ch 3 militant van, which drives away). No
-// Act III scene has a doorway: exits are by click, dialogue or timer.
+// press crowd barrier, and the Ch 3 militant van, which drives away). The
+// bus rear doorway is the one real doorway in Act III: it has a plug
+// collider while the doors are shut, removed when they swing open.
 let ch1Colliders = [];
 let ch3Colliders = [];
 let ch5Colliders = [];
@@ -1759,6 +1860,9 @@ function animate() {
     camera.rotation.x = state.pitch + Math.sin(t * 0.9 + 1.3) * 0.003 * sway;
     camera.position.y = camY + Math.sin(t * 0.8) * 0.012 * sway;
   }
+  // The bus rear doors swing open when the player walks up to them
+  // (chapter 3, before the escape starts), so he can step inside.
+  if (state.chapter === 3 && state.escapeStep === 0 && !busDoorsOpen && dist2D(camera.position.x, camera.position.z, 0, -1) < 1.8) openBusDoors();
   // Press-conference camera flashes.
   for (const fl of flashSprites) {
     if (state.chapter === 5 && Math.random() > 0.97) {
@@ -1773,6 +1877,17 @@ function animate() {
     const on = Math.sin(t * 6) > 0;
     policeLightL.material.emissiveIntensity = on ? 2.2 : 0.15;
     policeLightR.material.emissiveIntensity = on ? 0.15 : 2.2;
+  }
+  // The single bus light is on only while the player is inside the
+  // bus, and it flickers - the holding-area light Jade describes.
+  if (state.chapter === 3 && busLight && busLightMesh) {
+    const inBus = camera.position.x > -1.3 && camera.position.x < 1.3 && camera.position.z > -1 && camera.position.z < 5;
+    busLight.visible = inBus;
+    if (inBus) {
+      const dip = Math.random() < 0.06 ? 0.25 : 1;
+      busLight.intensity = 0.9 * dip + Math.sin(t * 13) * 0.05;
+      busLightMesh.material.emissiveIntensity = 1.2 * dip;
+    }
   }
   // The 4 train crosses the distant bridge, over and over.
   if (trainMesh) {
@@ -1817,9 +1932,14 @@ function animate() {
   // Skipped during the bridge exterior shot, which has its own camera.
   if (!bridgeShot.active) {
     const mv2 = moveDelta(keys, state.yaw, 1);
-    // Raised floors: on the rooftop (phase 2) the slab top is 2.8, so
-    // the avatar stands on it instead of at y 0 under the slab.
-    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: camY, groundY: (state.chapter === 3 && escapePhase === 2) ? 2.8 : 0 });
+    // Inside the police bus the camera shortens to 2 m and clamps to
+    // the bus interior (the train does the same in its car), so the
+    // player sees himself in the bus instead of the camera clipping
+    // through the roof. Raised floors: on the rooftop (phase 2) the
+    // slab top is 2.8, so the avatar stands on it instead of at y 0
+    // under the slab.
+    const inBus = state.chapter === 3 && escapePhase !== 2 && camera.position.x > -1.3 && camera.position.x < 1.3 && camera.position.z > -1 && camera.position.z < 5;
+    applyPlayerPresence({ scene, camera, x: camera.position.x, z: camera.position.z, yaw: state.yaw, pitch: state.pitch, moving, moveDx: mv2.dx, moveDz: mv2.dz, dt, t, eyeY: inBus ? 1.6 : camY, groundY: (state.chapter === 3 && escapePhase === 2) ? 2.8 : 0, camBounds: inBus ? { x: [-1.0, 1.0], z: [-0.7, 4.7] } : undefined, camDist: inBus ? 2.0 : undefined });
   }
   renderer.render(scene, camera);
 }
